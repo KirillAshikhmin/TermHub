@@ -547,53 +547,16 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     composeInput.style.height = `${Math.min(composeInput.scrollHeight, 140)}px`;
   };
 
-  // ── Живой двусторонний sync compose ↔ терминал ──
-  // shadow — что, по нашим данным, сейчас в строке ввода терминала. Правки в
-  // compose тут же транслируются в терминал (посимвольно), поэтому работают
-  // подсказки Claude, Tab-дополнение и история ↑↓. Обратно — pull из буфера.
-  let shadow = '';
+  // ── Compose bar в простом режиме ──
+  // Живой двусторонний sync с терминалом отключён (работал плохо): текст живёт в
+  // поле локально и уходит в pty только по отправке. Автоопределение строки
+  // терминала и подстановка её обратно в поле убраны. Планируется переделать.
 
-  // Строка ввода терминала из буфера (эвристика: снимаем рамку/приглашение TUI).
-  const readTermLine = (): string => {
-    const buf = term.buffer.active;
-    const raw = buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true) ?? '';
-    const s = raw.replace(/^[\s│┃|>$#%❯➜~]+/u, '').replace(/[\s│┃|]+$/u, '');
-    return /[│┃─]/u.test(s) ? '' : s;
-  };
-
-  // compose → терминал: шлём дельту (стереть разошедшийся хвост shadow + дописать
-  // хвост val), курсор терминала всегда в конце. Перенос внутри → ESC+CR (не submit).
-  const syncToTerm = (): void => {
-    const val = composeInput.value;
-    if (val === shadow) return;
-    let p = 0;
-    while (p < shadow.length && p < val.length && shadow[p] === val[p]) p++;
-    let out = '\x7f'.repeat(shadow.length - p);
-    out += val.slice(p).replace(/\n/g, '\x1b\r');
-    if (out) sendData(encoder.encode(out));
-    shadow = val;
-  };
-
-  // терминал → compose: подтянуть строку из буфера (после Tab/истории/вывода Claude).
-  const pullFromTerm = (): void => {
-    const line = readTermLine();
-    if (line === composeInput.value && line === shadow) return;
-    composeInput.value = line;
-    shadow = line;
-    composeGrow();
-  };
-
-  // После Tab/истории/Esc терминал меняет ввод асинхронно — подтянуть на ближайших
-  // кадрах, даже если поле в фокусе.
-  let pullPending = 0;
-  const schedulePull = (): void => {
-    pullPending = 3;
-  };
-
+  // Отправка: переносы внутри черновика → ESC+CR (перенос в Claude, не submit),
+  // затем финальный CR — сама отправка.
   const doCompose = (): void => {
-    // Текст уже в терминале (живой sync) — просто submit; строка терминала очистится.
-    sendData(encoder.encode('\r'));
-    shadow = '';
+    const out = composeInput.value.replace(/\n/g, '\x1b\r') + '\r';
+    sendData(encoder.encode(out));
     composeInput.value = '';
     composeGrow();
     composeInput.focus();
@@ -601,42 +564,16 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
 
   composeSend.addEventListener('mousedown', (e) => e.preventDefault());
   composeSend.addEventListener('click', doCompose);
-  composeInput.addEventListener('input', () => {
-    syncToTerm();
-    composeGrow();
-  });
+  composeInput.addEventListener('input', composeGrow);
   composeInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       sendData(encoder.encode('\x1b')); // Esc — сразу в терминал
-      schedulePull();
-      return;
-    }
-    if (e.key === 'Tab') {
-      // Дополнение Claude: Tab уходит в терминал, результат подтягиваем обратно.
-      e.preventDefault();
-      sendData(encoder.encode('\t'));
-      schedulePull();
-      return;
-    }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      // Курсор-приоритет: если в многострочном черновике есть куда двигать курсор —
-      // двигаем (default); на границе — стрелка уходит в терминал (история запросов).
-      const v = composeInput.value;
-      const boundary =
-        e.key === 'ArrowUp'
-          ? !v.slice(0, composeInput.selectionStart).includes('\n')
-          : !v.slice(composeInput.selectionEnd).includes('\n');
-      if (boundary) {
-        e.preventDefault();
-        sendData(encoder.encode(e.key === 'ArrowUp' ? '\x1b[A' : '\x1b[B'));
-        schedulePull();
-      }
       return;
     }
     if (e.key === 'Enter') {
       // Тумблер «Отправлять по Enter»: submit при shiftKey === !enterSends; иначе —
-      // перенос строки (textarea вставит \n → input → syncToTerm пошлёт ESC+CR).
+      // перенос строки (textarea вставит \n, при отправке станет ESC+CR).
       if (e.shiftKey === !enterSends) {
         e.preventDefault();
         doCompose();
@@ -644,18 +581,6 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     }
   });
   compose.append(composeInput, composeSend);
-
-  // На каждом кадре: после Tab/истории — принудительный pull (даже в фокусе); иначе
-  // пассивное зеркало, только пока поле НЕ в фокусе (в фокусе источник — compose).
-  const mirrorDisp = term.onRender(() => {
-    if (compose.hidden) return;
-    if (pullPending > 0) {
-      pullPending--;
-      pullFromTerm();
-    } else if (document.activeElement !== composeInput) {
-      pullFromTerm();
-    }
-  });
 
   const panel = mountQuickKeys({
     // Фокус не трогаем: кнопки уже держат его через mousedown-preventDefault
@@ -684,10 +609,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     onComposeToggle: (enabled) => {
       composeOpen = enabled;
       compose.hidden = !enabled;
-      if (enabled) {
-        pullFromTerm(); // подтянуть текущую строку терминала (value + shadow)
-        composeInput.focus();
-      }
+      if (enabled) composeInput.focus();
     },
     t,
   });
@@ -753,7 +675,6 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     dataDisp.dispose();
     binaryDisp.dispose();
     resizeDisp.dispose();
-    mirrorDisp.dispose();
     stopTouchScroll?.();
     stopTouchSelect?.();
     tabs.teardown();
