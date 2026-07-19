@@ -29,5 +29,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      # web не типизируется vite-сборкой (vite build без tsc) — проверяем отдельно
+      - name: Typecheck web
+        run: npx tsc -p packages/web/tsconfig.json --noEmit
+
       - name: Test
         run: npx vitest run

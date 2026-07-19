@@ -750,7 +750,9 @@ export class RelayTransport implements Transport {
     while (offset < stat.size) {
       const chunk = await this.requestChunk(root, subpath, offset, Math.min(CHUNK, stat.size - offset));
       if (chunk.length === 0) break;
-      parts.push(chunk);
+      // TS 5.7 типизирует Uint8Array как Uint8Array<ArrayBufferLike>, а BlobPart ждёт
+      // ArrayBuffer; в рантайме Uint8Array — валидный BlobPart, каст точечный и безопасный.
+      parts.push(chunk as BlobPart);
       offset += chunk.length;
       onProgress?.(stat.size ? offset / stat.size : 1);
     }
