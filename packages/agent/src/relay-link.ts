@@ -193,8 +193,8 @@ export class RelayLink {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    this.settleReady(new Error('RelayLink остановлен'));
-    this.failPairing(new Error('RelayLink остановлен'));
+    this.settleReady(new Error('RelayLink stopped'));
+    this.failPairing(new Error('RelayLink stopped'));
     this.disposeAllClients();
     const ws = this.ws;
     this.ws = undefined;
@@ -227,7 +227,7 @@ export class RelayLink {
   ): Promise<{ code: string; expiresAt: number; done: Promise<AuthorizedDevice> }> {
     const { code, roomId, secret } = generatePairingCode();
     const key = pairKey(secret);
-    this.failPairing(new Error('заменён новым пейрингом'));
+    this.failPairing(new Error('replaced by a new pairing'));
 
     let resolveFn!: (d: AuthorizedDevice) => void;
     let rejectFn!: (e: Error) => void;
@@ -238,7 +238,7 @@ export class RelayLink {
     // Защита от unhandledRejection, если вызывающий не дождётся done (тайм-аут/stop).
     done.catch(() => {});
 
-    const timer = setTimeout(() => this.failPairing(new Error('Срок действия кода пейринга истёк')), PAIR_TTL_MS);
+    const timer = setTimeout(() => this.failPairing(new Error('Pairing code expired')), PAIR_TTL_MS);
     if (typeof timer.unref === 'function') timer.unref();
     const pairing: PairingState = { roomId, key, resolve: resolveFn, reject: rejectFn, timer, settled: false, scope };
     this.pairing = pairing;
@@ -274,7 +274,7 @@ export class RelayLink {
     this.ws = undefined;
     this.registered = false;
     this.disposeAllClients();
-    this.failPairing(new Error('Соединение с relay потеряно'));
+    this.failPairing(new Error('Connection to relay lost'));
     if (this.stopped) return;
     this.scheduleReconnect();
   }
@@ -320,7 +320,7 @@ export class RelayLink {
         case 'pair-msg':
           return this.onPairMsg(msg);
         case 'pair-closed':
-          return this.failPairing(new Error(`Пейринг закрыт relay: ${String(msg.reason ?? 'unknown')}`));
+          return this.failPairing(new Error(`Pairing closed by relay: ${String(msg.reason ?? 'unknown')}`));
         default:
           return; // pair-peer-left, error, connected и пр. — игнорируем
       }
@@ -642,7 +642,7 @@ export class RelayLink {
     }
     const id = typeof req.id === 'number' ? req.id : 0;
     try {
-      if (!this.vcs) throw new Error('репозиторий недоступен');
+      if (!this.vcs) throw new Error('repository unavailable');
       // commit/pull/push/переключение-создание-удаление веток меняют данные —
       // только с правом записи (для гостя со scope).
       if (
@@ -650,7 +650,7 @@ export class RelayLink {
         s.scope &&
         !s.scope.write
       )
-        throw new Error('нет прав на запись');
+        throw new Error('no write permission');
       const result = await runRepoAction(this.vcs, req);
       this.sendFrameBytes(s, jsonFrame(FrameType.RepoResult, 0, { id, result }));
     } catch (err) {
@@ -669,9 +669,9 @@ export class RelayLink {
     }
     const id = typeof req.id === 'number' ? req.id : 0;
     try {
-      if (!this.files) throw new Error('файловый браузер недоступен');
+      if (!this.files) throw new Error('file browser unavailable');
       if (String(req.action) !== 'stat-full' && s.scope && !s.scope.write) {
-        throw new Error('нет прав на запись');
+        throw new Error('no write permission');
       }
       const result = await runFileOp(this.files, req);
       this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
@@ -690,7 +690,7 @@ export class RelayLink {
       req = {};
     }
     try {
-      if (!this.files) throw new Error('файловый браузер недоступен');
+      if (!this.files) throw new Error('file browser unavailable');
       const entries = await this.files.listDir(req.root ?? '', req.path ?? '');
       this.sendFrameBytes(s, jsonFrame(FrameType.FilesListResult, 0, { entries }));
     } catch (err) {
@@ -707,7 +707,7 @@ export class RelayLink {
       req = {};
     }
     try {
-      if (!this.files) throw new Error('файловый браузер недоступен');
+      if (!this.files) throw new Error('file browser unavailable');
       const content = await this.files.readFile(req.root ?? '', req.path ?? '');
       this.sendFrameBytes(s, jsonFrame(FrameType.FileReadResult, 0, { content }));
     } catch (err) {
@@ -724,7 +724,7 @@ export class RelayLink {
       req = {};
     }
     try {
-      if (!this.files) throw new Error('файловый браузер недоступен');
+      if (!this.files) throw new Error('file browser unavailable');
       const stat = await this.files.statFile(req.root ?? '', req.path ?? '');
       this.sendFrameBytes(s, jsonFrame(FrameType.FileStatResult, 0, { stat }));
     } catch (err) {
@@ -741,7 +741,7 @@ export class RelayLink {
       req = {};
     }
     try {
-      if (!this.files) throw new Error('файловый браузер недоступен');
+      if (!this.files) throw new Error('file browser unavailable');
       const len = req.len ?? 0;
       const bytes = await this.files.readChunk(req.root ?? '', req.path ?? '', req.offset ?? 0, len);
       this.sendFrameBytes(
@@ -948,7 +948,7 @@ export class RelayLink {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.readyWaiters = this.readyWaiters.filter((w) => w.timer !== timer);
-        reject(new Error('Relay не подключён (тайм-аут ожидания регистрации)'));
+        reject(new Error('Relay not connected (timed out waiting for registration)'));
       }, READY_TIMEOUT_MS);
       if (typeof timer.unref === 'function') timer.unref();
       this.readyWaiters.push({ resolve, reject, timer });

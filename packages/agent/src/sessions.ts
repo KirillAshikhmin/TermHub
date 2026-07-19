@@ -144,12 +144,12 @@ export class SessionService {
 
   async create(req: { name: string; root: string; dir: string; preset: 'zsh' | 'claude' }): Promise<void> {
     if (!NAME_RE.test(req.name))
-      throw new Error(`Недопустимое имя сессии «${req.name}»: разрешены буквы, цифры, «_», «.», «-», 1–40 символов`);
-    if (!PRESETS.has(req.preset)) throw new Error(`Недопустимый пресет «${req.preset}»: ожидается «zsh» или «claude»`);
+      throw new Error(`Invalid session name «${req.name}»: letters, digits, «_», «-» allowed, 1–40 characters`);
+    if (!PRESETS.has(req.preset)) throw new Error(`Invalid preset «${req.preset}»: expected «zsh» or «claude»`);
     if (!this.roots.includes(req.root))
-      throw new Error(`Неизвестный корень каталогов «${req.root}»`);
+      throw new Error(`Unknown root «${req.root}»`);
     if (!DIR_RE.test(req.dir) || req.dir === '.' || req.dir === '..')
-      throw new Error(`Недопустимый каталог «${req.dir}»: ожидается одно имя подкаталога без «/» и «..»`);
+      throw new Error(`Invalid directory «${req.dir}»: expected a single subdirectory name without «/» or «..»`);
 
     const dirPath = path.join(req.root, req.dir);
     let isDir = false;
@@ -158,7 +158,7 @@ export class SessionService {
     } catch {
       isDir = false;
     }
-    if (!isDir) throw new Error(`Каталог «${req.dir}» не найден в корне ${req.root}`);
+    if (!isDir) throw new Error(`Directory «${req.dir}» not found in root ${req.root}`);
 
     const args = ['new-session', '-d', '-s', req.name, '-c', dirPath];
     if (req.preset === 'claude') args.push('claude');
@@ -167,7 +167,7 @@ export class SessionService {
 
   async kill(name: string): Promise<void> {
     if (!NAME_RE.test(name))
-      throw new Error(`Недопустимое имя сессии «${name}»: разрешены буквы, цифры, «_», «.», «-», 1–40 символов`);
+      throw new Error(`Invalid session name «${name}»: letters, digits, «_», «-» allowed, 1–40 characters`);
     // Префикс «=» отключает fuzzy-матчинг tmux (иначе -t матчит по префиксу).
     await this.tmux(['kill-session', '-t', `=${name}`]);
   }

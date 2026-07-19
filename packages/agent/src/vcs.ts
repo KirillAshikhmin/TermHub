@@ -53,14 +53,14 @@ function unxml(s: string): string {
 /** Ревизия из нашего же лога — но валидируем защитно: без ведущего «-» и мусора. */
 function checkRev(rev: string): void {
   if (!rev || rev.startsWith('-') || !/^[\w./~^@:+-]{1,120}$/.test(rev)) {
-    throw new Error('Некорректная ревизия');
+    throw new Error('Invalid revision');
   }
 }
 
 /** Имя ветки: без ведущего «-» (анти-опция), допустимый набор (в т.ч. «/» для feature/*). */
 function checkBranch(name: string): void {
   if (!name || name.startsWith('-') || !/^[\w./-]{1,200}$/.test(name)) {
-    throw new Error('Некорректное имя ветки');
+    throw new Error('Invalid branch name');
   }
 }
 
@@ -68,7 +68,7 @@ function checkBranch(name: string): void {
  *  равно ставим `--`, но проверим). */
 function checkFile(file: string): void {
   if (!file || file.startsWith('-') || file.includes('\0') || file.split('/').includes('..')) {
-    throw new Error('Некорректный путь файла');
+    throw new Error('Invalid file path');
   }
 }
 
@@ -90,11 +90,11 @@ export class VcsService {
 
   /** Резолв (root, subpath) в реальный путь внутри корня (+ сам realRoot). */
   private async resolve(root: string, subpath: string): Promise<{ dir: string; realRoot: string }> {
-    if (!this.roots.includes(root)) throw new Error('Неизвестный корень');
+    if (!this.roots.includes(root)) throw new Error('Unknown root');
     const realRoot = await fsp.realpath(root);
     const dir = await fsp.realpath(path.resolve(realRoot, subpath));
     if (dir !== realRoot && !dir.startsWith(realRoot + path.sep)) {
-      throw new Error('Путь вне корня');
+      throw new Error('Path outside root');
     }
     return { dir, realRoot };
   }
@@ -183,7 +183,7 @@ export class VcsService {
   /** Стянуть изменения из удалённого репозитория в рабочую копию (pull ↓). */
   async pull(root: string, subpath: string): Promise<void> {
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
+    if (!ctx) throw new Error('Not a repository');
     try {
       if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['pull', '--ff-only']);
       else if (ctx.vcs === 'hg') await this.run(ctx.top, 'hg', ['pull', '-u']);
@@ -196,8 +196,8 @@ export class VcsService {
   /** Отправить локальные коммиты в удалённый репозиторий (push ↑). */
   async push(root: string, subpath: string): Promise<void> {
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
-    if (ctx.vcs === 'svn') throw new Error('SVN: коммит сразу уходит на сервер — push не нужен');
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs === 'svn') throw new Error('SVN: commit goes to the server immediately — push not needed');
     try {
       await this.run(ctx.top, ctx.vcs === 'git' ? 'git' : 'hg', ['push']);
     } catch (e) {
@@ -226,7 +226,7 @@ export class VcsService {
   async checkout(root: string, subpath: string, branch: string): Promise<void> {
     checkBranch(branch);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
+    if (!ctx) throw new Error('Not a repository');
     try {
       if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['switch', branch]);
       else if (ctx.vcs === 'hg') await this.run(ctx.top, 'hg', ['update', branch]);
@@ -240,8 +240,8 @@ export class VcsService {
   async createBranch(root: string, subpath: string, name: string): Promise<void> {
     checkBranch(name);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
-    if (ctx.vcs === 'svn') throw new Error('SVN: ветка создаётся копированием на сервере');
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs === 'svn') throw new Error('SVN: branches are created by copying on the server');
     try {
       if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['switch', '-c', name]);
       else await this.run(ctx.top, 'hg', ['branch', name]);
@@ -254,8 +254,8 @@ export class VcsService {
   async deleteBranch(root: string, subpath: string, name: string): Promise<void> {
     checkBranch(name);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
-    if (ctx.vcs !== 'git') throw new Error('Удаление ветки поддерживается только для git');
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Branch deletion is only supported for git');
     try {
       await this.run(ctx.top, 'git', ['branch', '-d', name]);
     } catch (e) {
@@ -267,7 +267,7 @@ export class VcsService {
   async show(root: string, subpath: string, rev: string): Promise<RepoCommitDetail> {
     checkRev(rev);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
+    if (!ctx) throw new Error('Not a repository');
     return ctx.vcs === 'git'
       ? this.gitShow(ctx.top, rev)
       : ctx.vcs === 'hg'
@@ -293,7 +293,7 @@ export class VcsService {
     checkFile(file);
     if (rev) checkRev(rev);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
+    if (!ctx) throw new Error('Not a repository');
     if (ctx.vcs === 'git') return this.gitDiff(ctx.top, file, rev);
     if (ctx.vcs === 'hg') return this.hgDiff(ctx.top, file, rev);
     return this.svnDiff(ctx.top, file, rev);
@@ -301,11 +301,11 @@ export class VcsService {
 
   /** Закоммитить выбранные файлы с сообщением. */
   async commit(root: string, subpath: string, files: string[], message: string): Promise<void> {
-    if (!files.length) throw new Error('Не выбраны файлы');
-    if (!message.trim()) throw new Error('Пустое сообщение коммита');
+    if (!files.length) throw new Error('No files selected');
+    if (!message.trim()) throw new Error('Empty commit message');
     for (const f of files) checkFile(f);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
+    if (!ctx) throw new Error('Not a repository');
     if (ctx.vcs === 'git') return this.gitCommit(ctx.top, files, message);
     if (ctx.vcs === 'hg') return this.hgCommit(ctx.top, files, message);
     return this.svnCommit(ctx.top, files, message);
@@ -315,16 +315,16 @@ export class VcsService {
   async cat(root: string, subpath: string, file: string): Promise<string> {
     checkFile(file);
     const ctx = await this.ctx(root, subpath);
-    if (!ctx) throw new Error('Не репозиторий');
+    if (!ctx) throw new Error('Not a repository');
     const realTop = await fsp.realpath(ctx.top);
     const abs = path.resolve(realTop, file);
     const real = await fsp.realpath(abs).catch(() => abs);
-    if (real !== realTop && !real.startsWith(realTop + path.sep)) throw new Error('Файл вне репозитория');
+    if (real !== realTop && !real.startsWith(realTop + path.sep)) throw new Error('File outside repository');
     const stat = await fsp.stat(real);
-    if (!stat.isFile()) throw new Error('Не файл');
-    if (stat.size > 2 * 1024 * 1024) throw new Error('Файл слишком большой для просмотра');
+    if (!stat.isFile()) throw new Error('Not a file');
+    if (stat.size > 2 * 1024 * 1024) throw new Error('File too large to view');
     const buf = await fsp.readFile(real);
-    for (let i = 0; i < Math.min(buf.length, 8192); i += 1) if (buf[i] === 0) throw new Error('Бинарный файл');
+    for (let i = 0; i < Math.min(buf.length, 8192); i += 1) if (buf[i] === 0) throw new Error('Binary file');
     return buf.toString('utf8');
   }
 
@@ -586,7 +586,7 @@ export async function runRepoAction(vcs: VcsService, req: Record<string, unknown
         String(req.message ?? ''),
       );
     default:
-      throw new Error('Неизвестное действие репозитория');
+      throw new Error('Unknown repository action');
   }
 }
 
@@ -601,7 +601,7 @@ function svnToWc(repoPath: string, base: string): string {
 function cleanErr(e: unknown): Error {
   const err = e as { stderr?: string; message?: string };
   const raw = (err.stderr || err.message || '').toString().trim();
-  return new Error(raw.split('\n').slice(0, 3).join(' ') || 'ошибка команды');
+  return new Error(raw.split('\n').slice(0, 3).join(' ') || 'command failed');
 }
 
 /** git diff-tree --name-status → список изменений (R100\told\tnew → new, 'R'). */

@@ -66,11 +66,11 @@ export class PushService {
   }
 
   private validate(sub: unknown): PushSubscription {
-    if (typeof sub !== 'object' || sub === null) throw new Error('Некорректная подписка push: не объект');
+    if (typeof sub !== 'object' || sub === null) throw new Error('Invalid push subscription: not an object');
     const s = sub as { endpoint?: unknown; keys?: unknown };
     if (typeof s.endpoint !== 'string' || s.endpoint.length === 0)
-      throw new Error('Некорректная подписка push: нет endpoint');
-    if (typeof s.keys !== 'object' || s.keys === null) throw new Error('Некорректная подписка push: нет keys');
+      throw new Error('Invalid push subscription: no endpoint');
+    if (typeof s.keys !== 'object' || s.keys === null) throw new Error('Invalid push subscription: no keys');
     return sub as PushSubscription;
   }
 

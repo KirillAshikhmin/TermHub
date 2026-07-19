@@ -71,13 +71,13 @@ export class FileService {
   /** Резолвит (root, subpath) в реальный путь, проверяя, что он внутри корня.
    *  Бросает при неизвестном корне или побеге за его пределы. */
   private async resolveSafe(root: string, subpath: string): Promise<string> {
-    if (!this.roots.includes(root)) throw new Error('Неизвестный корень');
+    if (!this.roots.includes(root)) throw new Error('Unknown root');
     // subpath — относительный внутри корня; resolve схлопывает «..», realpath
     // резолвит symlink. Проверяем, что итог внутри реального корня.
     const realRoot = await fsp.realpath(root);
     const target = await fsp.realpath(path.resolve(realRoot, subpath));
     if (target !== realRoot && !target.startsWith(realRoot + path.sep)) {
-      throw new Error('Путь вне корня');
+      throw new Error('Path outside root');
     }
     return target;
   }
@@ -113,7 +113,7 @@ export class FileService {
   async readFile(root: string, subpath: string): Promise<FileContent> {
     const file = await this.resolveSafe(root, subpath);
     const stat = await fsp.stat(file);
-    if (!stat.isFile()) throw new Error('Не файл');
+    if (!stat.isFile()) throw new Error('Not a file');
     const ext = path.extname(file).toLowerCase();
     const imageMime = IMAGE_MIME[ext];
 
@@ -145,7 +145,7 @@ export class FileService {
   async statFile(root: string, subpath: string): Promise<{ size: number; mime: string; kind: FileKind }> {
     const file = await this.resolveSafe(root, subpath);
     const stat = await fsp.stat(file);
-    if (!stat.isFile()) throw new Error('Не файл');
+    if (!stat.isFile()) throw new Error('Not a file');
     const ext = path.extname(file).toLowerCase();
     return { size: stat.size, mime: mimeByExt(ext), kind: kindByExt(ext) };
   }
@@ -154,7 +154,7 @@ export class FileService {
   async resolveFile(root: string, subpath: string): Promise<{ path: string; size: number; mime: string }> {
     const file = await this.resolveSafe(root, subpath);
     const stat = await fsp.stat(file);
-    if (!stat.isFile()) throw new Error('Не файл');
+    if (!stat.isFile()) throw new Error('Not a file');
     return { path: file, size: stat.size, mime: mimeByExt(path.extname(file).toLowerCase()) };
   }
 
@@ -191,7 +191,7 @@ export class FileService {
   /** Удалить файл/папку (рекурсивно). Сам корень удалить нельзя. */
   async remove(root: string, subpath: string): Promise<void> {
     const file = await this.resolveSafe(root, subpath);
-    if (file === (await fsp.realpath(root))) throw new Error('Нельзя удалить корень');
+    if (file === (await fsp.realpath(root))) throw new Error('Cannot delete root');
     await fsp.rm(file, { recursive: true, force: false });
   }
 
@@ -221,18 +221,18 @@ export class FileService {
   async writeFile(root: string, subpath: string, content: string): Promise<void> {
     const file = await this.resolveSafe(root, subpath);
     const stat = await fsp.stat(file);
-    if (!stat.isFile()) throw new Error('Не файл');
+    if (!stat.isFile()) throw new Error('Not a file');
     await fsp.writeFile(file, content, 'utf8');
   }
 
   /** Резолв НЕсуществующего назначения: родитель обязан быть внутри корня (realpath). */
   private async resolveDest(root: string, subpath: string): Promise<string> {
-    if (!this.roots.includes(root)) throw new Error('Неизвестный корень');
+    if (!this.roots.includes(root)) throw new Error('Unknown root');
     const realRoot = await fsp.realpath(root);
     const target = path.resolve(realRoot, subpath);
     const realParent = await fsp.realpath(path.dirname(target));
     if (realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) {
-      throw new Error('Назначение вне корня');
+      throw new Error('Destination outside root');
     }
     return path.join(realParent, path.basename(target));
   }
@@ -271,6 +271,6 @@ export async function runFileOp(files: FileOpCtl, req: Record<string, unknown>):
     case 'write':
       return files.writeFile(root, sub, String(req.content ?? ''));
     default:
-      throw new Error('Неизвестная файловая операция');
+      throw new Error('Unknown file operation');
   }
 }

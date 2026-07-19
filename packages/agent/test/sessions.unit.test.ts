@@ -160,38 +160,38 @@ describe('SessionService.create — валидация', () => {
 
   it('отвергает недопустимое имя сессии', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'bad name!', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/имя/i);
+    await expect(svc.create({ name: 'bad name!', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/name/i);
   });
 
   it('отвергает точку/двоеточие в имени (tmux не адресует такую сессию)', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'VrnBus.StationScreen', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/имя/i);
-    await expect(svc.create({ name: 'a:b', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/имя/i);
+    await expect(svc.create({ name: 'VrnBus.StationScreen', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/name/i);
+    await expect(svc.create({ name: 'a:b', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/name/i);
   });
 
   it('отвергает слишком длинное имя (>40)', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'a'.repeat(41), root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/имя/i);
+    await expect(svc.create({ name: 'a'.repeat(41), root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/name/i);
   });
 
   it('отвергает root вне списка roots', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'main', root: '/etc', dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/корень/i);
+    await expect(svc.create({ name: 'main', root: '/etc', dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/root/i);
   });
 
   it('отвергает dir со слэшем', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'main', root, dir: 'sub/deep', preset: 'zsh' })).rejects.toThrow(/каталог/i);
+    await expect(svc.create({ name: 'main', root, dir: 'sub/deep', preset: 'zsh' })).rejects.toThrow(/directory/i);
   });
 
   it('отвергает dir = ..', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'main', root, dir: '..', preset: 'zsh' })).rejects.toThrow(/каталог/i);
+    await expect(svc.create({ name: 'main', root, dir: '..', preset: 'zsh' })).rejects.toThrow(/directory/i);
   });
 
   it('отвергает несуществующий каталог', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.create({ name: 'main', root, dir: 'nope', preset: 'zsh' })).rejects.toThrow(/каталог/i);
+    await expect(svc.create({ name: 'main', root, dir: 'nope', preset: 'zsh' })).rejects.toThrow(/directory/i);
   });
 
   it('preset zsh → new-session без команды; -c указывает на каталог', async () => {
@@ -215,7 +215,7 @@ describe('SessionService.create — валидация', () => {
     const svc = new SessionService({ roots: [root] });
     await expect(
       svc.create({ name: 'main', root, dir: 'projectA', preset: 'rm -rf' as unknown as 'zsh' }),
-    ).rejects.toThrow(/пресет/i);
+    ).rejects.toThrow(/preset/i);
   });
 });
 
@@ -231,7 +231,7 @@ describe('SessionService.kill', () => {
   it('отвергает недопустимое имя без вызова tmux', async () => {
     stubTmux(() => ({}));
     const svc = new SessionService({ roots: ['/tmp'] });
-    await expect(svc.kill('bad name!')).rejects.toThrow(/имя/i);
+    await expect(svc.kill('bad name!')).rejects.toThrow(/name/i);
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 });

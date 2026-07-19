@@ -50,7 +50,7 @@ describe('FileService — операции', () => {
   });
 
   it('нельзя удалить корень', async () => {
-    await expect(svc.remove(root, '')).rejects.toThrow(/корень/i);
+    await expect(svc.remove(root, '')).rejects.toThrow(/root/i);
   });
 
   it('анти-побег: назначение вне корня отклоняется', async () => {

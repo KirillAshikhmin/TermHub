@@ -61,12 +61,12 @@ const MIME: Record<string, string> = {
 };
 
 const PLACEHOLDER_HTML =
-  '<!doctype html>\n<html lang="ru"><head><meta charset="utf-8">' +
+  '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">' +
   '<meta name="viewport" content="width=device-width, initial-scale=1">' +
   '<title>TermHub</title></head>' +
   '<body style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem">' +
-  '<h1>TermHub: соберите web-пакет</h1>' +
-  '<p>Веб-интерфейс ещё не собран.</p></body></html>';
+  '<h1>TermHub: build the web bundle</h1>' +
+  '<p>The web interface has not been built yet.</p></body></html>';
 
 /** Тело запроса превысило лимит. */
 class PayloadTooLargeError extends Error {}
@@ -86,7 +86,7 @@ function readBody(req: IncomingMessage, res: ServerResponse, limit: number): Pro
       if (size > limit) {
         tooLarge = true;
         res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8', Connection: 'close' });
-        res.end(JSON.stringify({ error: 'тело запроса слишком велико' }));
+        res.end(JSON.stringify({ error: 'request body too large' }));
         req.destroy();
         reject(new PayloadTooLargeError());
         return;
@@ -189,7 +189,7 @@ export class AgentServer {
     try {
       return fs.readFileSync(file);
     } catch {
-      throw new Error(`Не удалось прочитать TLS-сертификат: ${file}`);
+      throw new Error(`Failed to read TLS certificate: ${file}`);
     }
   }
 
@@ -211,8 +211,8 @@ export class AgentServer {
     this.route(req, res).catch((err) => {
       // PayloadTooLargeError уже отвечает в readBody() до этой точки (res.writableEnded).
       if (res.writableEnded || res.headersSent) return;
-      if (err instanceof BadJsonError) this.sendJson(res, 400, { error: 'некорректный JSON' });
-      else this.sendJson(res, 500, { error: 'внутренняя ошибка' });
+      if (err instanceof BadJsonError) this.sendJson(res, 400, { error: 'invalid JSON' });
+      else this.sendJson(res, 500, { error: 'internal error' });
     });
   }
 
@@ -222,12 +222,12 @@ export class AgentServer {
     const method = req.method ?? 'GET';
 
     if (!pathname.startsWith('/api/')) {
-      if (method !== 'GET') return this.sendJson(res, 405, { error: 'метод не поддерживается' });
+      if (method !== 'GET') return this.sendJson(res, 405, { error: 'method not allowed' });
       let decoded: string;
       try {
         decoded = decodeURIComponent(pathname);
       } catch {
-        return this.sendJson(res, 400, { error: 'некорректный путь' });
+        return this.sendJson(res, 400, { error: 'invalid path' });
       }
       return this.serveStatic(res, decoded);
     }
@@ -237,12 +237,12 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/mode')
       return this.sendJson(res, 200, { mode: 'lan', host: os.hostname() });
     if (method === 'GET' && pathname === '/api/push/vapid-key') {
-      if (!this.push) return this.sendJson(res, 503, { error: 'push не настроен' });
+      if (!this.push) return this.sendJson(res, 503, { error: 'push not configured' });
       return this.sendJson(res, 200, { key: this.push.vapidPublicKey() });
     }
 
     // Ниже — только под cookie-auth.
-    if (!this.authed(req)) return this.sendJson(res, 401, { error: 'требуется авторизация' });
+    if (!this.authed(req)) return this.sendJson(res, 401, { error: 'authorization required' });
 
     if (method === 'GET' && pathname === '/api/sessions')
       return this.sendJson(res, 200, await this.sessions.list());
@@ -252,7 +252,7 @@ export class AgentServer {
       try {
         name = decodeURIComponent(pathname.slice('/api/sessions/'.length));
       } catch {
-        return this.sendJson(res, 400, { error: 'некорректный путь' });
+        return this.sendJson(res, 400, { error: 'invalid path' });
       }
       return this.killSession(res, name);
     }
@@ -274,29 +274,29 @@ export class AgentServer {
       try {
         fingerprint = decodeURIComponent(pathname.slice('/api/devices/'.length));
       } catch {
-        return this.sendJson(res, 400, { error: 'некорректный путь' });
+        return this.sendJson(res, 400, { error: 'invalid path' });
       }
       return this.removeDevice(res, fingerprint);
     }
     if (method === 'POST' && pathname === '/api/share') {
-      if (!this.onShare) return this.sendJson(res, 503, { error: 'relay не настроен' });
+      if (!this.onShare) return this.sendJson(res, 503, { error: 'relay not configured' });
       const body = await this.readJson(req, res);
       return this.sendJson(res, 200, await this.onShare(parseScope(body.scope)));
     }
     if (method === 'GET' && pathname === '/api/caffeinate') return this.sendJson(res, 200, this.caffeinateState());
     if (method === 'POST' && pathname === '/api/caffeinate') return this.setCaffeinate(req, res);
 
-    return this.sendJson(res, 404, { error: 'не найдено' });
+    return this.sendJson(res, 404, { error: 'not found' });
   }
 
   private async login(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const ip = req.socket.remoteAddress ?? 'unknown';
-    if (!this.rateLimit.allow(ip)) return this.sendJson(res, 429, { error: 'слишком много попыток входа' });
+    if (!this.rateLimit.allow(ip)) return this.sendJson(res, 429, { error: 'too many login attempts' });
     const body = await this.readJson(req, res);
     const password = typeof body.password === 'string' ? body.password : '';
     if (!verifyPassword(password, this.config.passwordHash)) {
       this.rateLimit.fail(ip);
-      return this.sendJson(res, 401, { error: 'неверный пароль' });
+      return this.sendJson(res, 401, { error: 'invalid password' });
     }
     res.setHeader('Set-Cookie', this.cookieHeader());
     this.sendJson(res, 200, { ok: true });
@@ -324,7 +324,7 @@ export class AgentServer {
   }
 
   private async repoApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.vcs) return this.sendJson(res, 503, { error: 'репозиторий недоступен' });
+    if (!this.vcs) return this.sendJson(res, 503, { error: 'repository unavailable' });
     const body = await this.readJson(req, res);
     try {
       const result = await runRepoAction(this.vcs, body);
@@ -359,7 +359,7 @@ export class AgentServer {
   }
 
   private async filesOp(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.files) return this.sendJson(res, 503, { error: 'файловый браузер недоступен' });
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
     const body = await this.readJson(req, res);
     try {
       const result = await runFileOp(this.files, body);
@@ -370,7 +370,7 @@ export class AgentServer {
   }
 
   private async filesList(res: ServerResponse, url: URL): Promise<void> {
-    if (!this.files) return this.sendJson(res, 503, { error: 'файловый браузер недоступен' });
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
     try {
       const entries = await this.files.listDir(url.searchParams.get('root') ?? '', url.searchParams.get('path') ?? '');
       return this.sendJson(res, 200, { entries });
@@ -380,7 +380,7 @@ export class AgentServer {
   }
 
   private async fileRead(res: ServerResponse, url: URL): Promise<void> {
-    if (!this.files) return this.sendJson(res, 503, { error: 'файловый браузер недоступен' });
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
     try {
       const content = await this.files.readFile(url.searchParams.get('root') ?? '', url.searchParams.get('path') ?? '');
       return this.sendJson(res, 200, { content });
@@ -390,7 +390,7 @@ export class AgentServer {
   }
 
   private async fileStatHttp(res: ServerResponse, url: URL): Promise<void> {
-    if (!this.files) return this.sendJson(res, 503, { error: 'файловый браузер недоступен' });
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
     try {
       const stat = await this.files.statFile(url.searchParams.get('root') ?? '', url.searchParams.get('path') ?? '');
       return this.sendJson(res, 200, { stat });
@@ -401,7 +401,7 @@ export class AgentServer {
 
   /** Стрим файла с поддержкой Range (нативное видео/скачивание, LAN). */
   private async fileDownload(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    if (!this.files) return this.sendJson(res, 503, { error: 'файловый браузер недоступен' });
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
     let info: { path: string; size: number; mime: string };
     try {
       info = await this.files.resolveFile(url.searchParams.get('root') ?? '', url.searchParams.get('path') ?? '');
@@ -443,7 +443,7 @@ export class AgentServer {
       const code = (err as { code?: unknown }).code;
       if (code === undefined) return this.sendJson(res, 422, { error: (err as Error).message });
       if (this.isSessionNotFound(err)) return this.sendJson(res, 404, { error: (err as Error).message });
-      this.sendJson(res, 500, { error: 'внутренняя ошибка' });
+      this.sendJson(res, 500, { error: 'internal error' });
     }
   }
 
@@ -460,7 +460,7 @@ export class AgentServer {
   }
 
   private async pushSubscribe(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.push) return this.sendJson(res, 503, { error: 'push не настроен' });
+    if (!this.push) return this.sendJson(res, 503, { error: 'push not configured' });
     const body = await this.readJson(req, res);
     try {
       await this.push.subscribe(body.subscription);
@@ -482,8 +482,8 @@ export class AgentServer {
 
   private async setCaffeinate(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await this.readJson(req, res);
-    if (typeof body.active !== 'boolean') return this.sendJson(res, 422, { error: 'ожидается { active: boolean }' });
-    if (!this.caffeinate?.supported) return this.sendJson(res, 503, { error: 'caffeinate недоступен' });
+    if (typeof body.active !== 'boolean') return this.sendJson(res, 422, { error: 'expected { active: boolean }' });
+    if (!this.caffeinate?.supported) return this.sendJson(res, 503, { error: 'caffeinate unavailable' });
     this.caffeinate.set(body.active);
     this.sendJson(res, 200, this.caffeinateState());
   }
@@ -536,7 +536,7 @@ export class AgentServer {
     const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
     const full = path.normalize(path.join(this.staticDir, rel));
     if (full !== this.staticDir && !full.startsWith(this.staticDir + path.sep)) {
-      this.sendJson(res, 403, { error: 'запрещено' });
+      this.sendJson(res, 403, { error: 'forbidden' });
       return;
     }
     if (this.isFile(full)) return this.sendFile(res, full);

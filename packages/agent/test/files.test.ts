@@ -113,7 +113,7 @@ describe('FileService — безопасность путей', () => {
   });
 
   it('неизвестный корень отклоняется', async () => {
-    await expect(svc.listDir(outside, '')).rejects.toThrow('Неизвестный корень');
+    await expect(svc.listDir(outside, '')).rejects.toThrow('Unknown root');
   });
 
   it('абсолютный подпуть не выводит за корень', async () => {

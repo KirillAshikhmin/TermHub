@@ -231,7 +231,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     s = await start({
       sessions: stubSessions({
         create: async () => {
-          throw new Error('Недопустимое имя сессии');
+          throw new Error('Invalid session name');
         },
       }),
     });
@@ -241,7 +241,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
       body: JSON.stringify({ name: '!', root: '/x', dir: 'a', preset: 'zsh' }),
     });
     expect(res.status).toBe(422);
-    expect((await res.json() as { error: string }).error).toContain('имя');
+    expect((await res.json() as { error: string }).error).toContain('name');
   });
 
   it('DELETE /api/sessions/:name несуществующей → 404 (tmux exit≠0)', async () => {
@@ -265,7 +265,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     s = await start({
       sessions: stubSessions({
         kill: async () => {
-          throw new Error('Недопустимое имя сессии');
+          throw new Error('Invalid session name');
         },
       }),
     });
@@ -442,7 +442,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
       push: {
         vapidPublicKey: () => 'PUB',
         subscribe: async () => {
-          throw new Error('Некорректная подписка push: нет endpoint');
+          throw new Error('Invalid push subscription: no endpoint');
         },
       },
     });
@@ -452,7 +452,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
       body: JSON.stringify({ subscription: { bad: true } }),
     });
     expect(res.status).toBe(400);
-    expect((await res.json() as { error: string }).error).toContain('подписк');
+    expect((await res.json() as { error: string }).error).toContain('subscription');
   });
 
   it('POST /api/share без onShare → 503, с onShare → код', async () => {
@@ -475,7 +475,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
       const res = await fetch(`${s.base}/`);
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toContain('text/html');
-      expect(await res.text()).toContain('соберите web-пакет');
+      expect(await res.text()).toContain('build the web bundle');
     } finally {
       fs.rmSync(emptyStatic, { recursive: true, force: true });
     }
@@ -483,12 +483,12 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
 });
 
 describe('AgentServer — TLS (config.tls хранит пути к файлам)', () => {
-  it('listen() с несуществующим путём сертификата → reject с понятным русским сообщением', async () => {
+  it('listen() с несуществующим путём сертификата → reject с понятным сообщением', async () => {
     const server = new AgentServer({
       config: fixtureConfig({ tls: { cert: '/no/such/dir/cert.pem', key: '/no/such/dir/key.pem' } }),
       sessions: stubSessions(),
     });
-    await expect(server.listen()).rejects.toThrow('Не удалось прочитать TLS-сертификат: /no/such/dir/cert.pem');
+    await expect(server.listen()).rejects.toThrow('Failed to read TLS certificate: /no/such/dir/cert.pem');
   });
 });
 
