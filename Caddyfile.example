@@ -1,0 +1,11 @@
+# Пример reverse-proxy для relay с автоматическим TLS (Let's Encrypt).
+# Замените relay.example.com на свой домен, укажите его A/AAAA-запись на этот
+# хост и откройте порты 80/443. Caddy сам получит и продлит сертификат.
+#
+# WebSocket-апгрейд (/relay) Caddy проксирует прозрачно — отдельная настройка
+# не нужна.
+
+relay.example.com {
+	encode zstd gzip
+	reverse_proxy relay:9720
+}

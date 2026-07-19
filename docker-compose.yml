@@ -1,0 +1,42 @@
+# TermHub relay. По умолчанию поднимается один сервис relay с проброшенным
+# портом 9720. Для публичного HTTPS есть профиль `tls` с Caddy (автоTLS):
+#
+#   docker compose up -d                 # только relay (за своим TLS/туннелем)
+#   docker compose --profile tls up -d   # relay + Caddy (домен из Caddyfile.example)
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: packages/relay/Dockerfile
+    image: termhub-relay
+    restart: unless-stopped
+    environment:
+      PORT: "9720"
+      # За доверенным TLS-прокси (профиль tls / Caddy) включите доверие
+      # X-Forwarded-For — иначе rate-limit увидит один IP прокси для всех клиентов.
+      # Раскомментируйте ТОЛЬКО когда relay действительно за прокси (иначе спуфинг XFF):
+      # RELAY_TRUST_PROXY: "1"
+    # При работе за Caddy (профиль tls) этот проброс можно убрать — наружу
+    # смотрит только Caddy на 80/443.
+    ports:
+      - "9720:9720"
+
+  # Опциональный reverse-proxy с автоматическим Let's Encrypt.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    depends_on:
+      - relay
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

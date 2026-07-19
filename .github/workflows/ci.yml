@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # tmux нужен tmux/e2e-тестам агента; git уже есть на runner'е (VCS-тесты)
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # postinstall делает chmod +x на spawn-helper node-pty (иначе pty не спавнится)
+      - run: npm ci
+
+      # tsc по всем пакетам + vite-сборка web → packages/agent/static
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npx vitest run

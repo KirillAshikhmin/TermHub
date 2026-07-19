@@ -1,0 +1,11 @@
+node_modules
+dist
+*.log
+.DS_Store
+
+# Собранный web-бандл (регенерируется `npm run build`, раздаётся агентом/relay)
+packages/agent/static
+packages/relay/static
+
+# Личные настройки Claude Code (проектный .claude/settings.json — общий)
+.claude/settings.local.json

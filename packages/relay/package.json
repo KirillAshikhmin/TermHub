@@ -1,0 +1,26 @@
+{
+  "name": "@termhub/relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "termhub-relay": "bin/termhub-relay.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@termhub/protocol": "*",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1"
+  }
+}

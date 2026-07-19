@@ -1,0 +1,22 @@
+{
+  "name": "@termhub/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./frames": {
+      "types": "./dist/frames.d.ts",
+      "default": "./dist/frames.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "^0.8.4"
+  }
+}

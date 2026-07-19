@@ -1,0 +1,42 @@
+{
+  "name": "termhub-monorepo",
+  "version": "0.1.0",
+  "description": "Access your Mac's tmux terminal sessions from your phone or browser — over LAN or a zero-knowledge end-to-end encrypted relay.",
+  "private": true,
+  "license": "MIT",
+  "author": "Kirill Ashikhmin",
+  "homepage": "https://github.com/KirillAshikhmin/TermHub#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KirillAshikhmin/TermHub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KirillAshikhmin/TermHub/issues"
+  },
+  "keywords": [
+    "tmux",
+    "terminal",
+    "pwa",
+    "remote-terminal",
+    "end-to-end-encryption",
+    "claude-code",
+    "mobile",
+    "self-hosted"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
+    "test": "vitest run",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

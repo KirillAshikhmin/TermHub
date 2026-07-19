@@ -1,0 +1,11 @@
+# Build-контекст: исходники + манифесты. Зависимости и артефакты пересобираются
+# внутри образа, поэтому исключаем их из контекста.
+**/node_modules
+**/dist
+packages/*/static
+.git
+.superpowers
+docs
+run
+*.log
+.DS_Store
