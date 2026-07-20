@@ -8,7 +8,7 @@ import type { Transport } from './transport';
 import { iconButton, toast } from './ui';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
-import { sessionManaged, sessionWorking } from './session-status';
+import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, markBellSeen, observeBells } from './bell-seen';
 
 const POLL_INTERVAL = 3000;
@@ -77,10 +77,12 @@ export function renderSessionTab(
   const main = document.createElement('button');
   main.type = 'button';
   main.className = 'th-tab__btn';
+  const label = document.createElement('span');
+  label.className = 'th-tab__label';
   const name = document.createElement('span');
   name.className = 'th-tab__name';
-  name.textContent = info.name;
-  main.append(name);
+  label.append(name);
+  main.append(label);
   main.addEventListener('click', () => onSwitch(info.name));
   const close = document.createElement('button');
   close.type = 'button';
@@ -105,6 +107,29 @@ function setTabActivityDot(main: HTMLElement | null, translate: TFn, show: boole
   }
 }
 
+/** Подпись таба: заголовок терминала (крупно) + tmux-имя (мелко, второй строкой),
+ *  если отличается. Индикатор активности из заголовка срезан (он — точкой).
+ *  Обновляется на месте — заголовок меняет Claude. */
+function setTabLabel(main: HTMLElement | null, info: TabInfo): void {
+  const label = main?.querySelector<HTMLElement>('.th-tab__label');
+  const nameEl = label?.querySelector<HTMLElement>('.th-tab__name');
+  if (!label || !nameEl) return;
+  const title = sessionTitleText(info.title);
+  const hasTitle = title !== '' && title !== info.name;
+  nameEl.textContent = hasTitle ? title : info.name;
+  let sub = label.querySelector<HTMLElement>('.th-tab__sub');
+  if (hasTitle) {
+    if (!sub) {
+      sub = document.createElement('span');
+      sub.className = 'th-tab__sub';
+      label.append(sub);
+    }
+    sub.textContent = info.name;
+  } else {
+    sub?.remove();
+  }
+}
+
 /** Обновляет таб НА МЕСТЕ: подсветка активного, значок звонка (только на
  *  неактивных — активная сессия и так звенит через свой канал). */
 export function updateSessionTab(
@@ -118,6 +143,7 @@ export function updateSessionTab(
   const main = tab.querySelector<HTMLElement>('.th-tab__btn');
   main?.setAttribute('aria-current', active ? 'true' : 'false');
   setTabActivityDot(main, translate, showActivity);
+  setTabLabel(main, info);
 
   const showBell = info.bell && !active;
   let bell = tab.querySelector<HTMLElement>('.th-tab__bell');

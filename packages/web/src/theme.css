@@ -1041,10 +1041,26 @@ select.th-input {
 .th-tab__close:hover {
   color: var(--danger);
 }
+.th-tab__label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  line-height: 1.15;
+}
 .th-tab__name {
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.th-tab__sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-faint);
 }
 .th-tab__bell {
   flex: none;

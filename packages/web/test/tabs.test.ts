@@ -95,6 +95,28 @@ describe('renderSessionTab / updateSessionTab', () => {
     updateSessionTab(tab, { name: 'a', bell: false, title: '' }, false, t, false);
     expect(tab.querySelector('.th-tab__activity')).toBeNull();
   });
+
+  it('таб: заголовок терминала крупно + tmux-имя второй строкой (индикатор срезан)', () => {
+    const tab = renderSessionTab({ name: 'main', bell: false, title: '⠋ Рефакторинг' }, true, t, noop, noop);
+    expect(tab.querySelector('.th-tab__name')?.textContent).toBe('Рефакторинг');
+    expect(tab.querySelector('.th-tab__sub')?.textContent).toBe('main');
+  });
+
+  it('таб: без заголовка (или он совпал с именем) — только tmux-имя, без второй строки', () => {
+    const tab = renderSessionTab({ name: 'main', bell: false, title: '' }, false, t, noop, noop);
+    expect(tab.querySelector('.th-tab__name')?.textContent).toBe('main');
+    expect(tab.querySelector('.th-tab__sub')).toBeNull();
+  });
+
+  it('updateSessionTab обновляет заголовок и вторую строку на месте', () => {
+    const tab = renderSessionTab({ name: 'main', bell: false, title: '' }, false, t, noop, noop);
+    updateSessionTab(tab, { name: 'main', bell: false, title: '⠋ Сборка' }, false, t);
+    expect(tab.querySelector('.th-tab__name')?.textContent).toBe('Сборка');
+    expect(tab.querySelector('.th-tab__sub')?.textContent).toBe('main');
+    updateSessionTab(tab, { name: 'main', bell: false, title: '' }, false, t);
+    expect(tab.querySelector('.th-tab__name')?.textContent).toBe('main');
+    expect(tab.querySelector('.th-tab__sub')).toBeNull();
+  });
 });
 
 describe('mountSessionTabs', () => {
@@ -134,7 +156,11 @@ describe('mountSessionTabs', () => {
     await vi.advanceTimersByTimeAsync(0);
     const dot = (name: string) =>
       [...tabs.el.querySelectorAll('.th-tab')]
-        .find((el) => el.querySelector('.th-tab__name')?.textContent === name)!
+        .find(
+          (el) =>
+            el.querySelector('.th-tab__name')?.textContent === name ||
+            el.querySelector('.th-tab__sub')?.textContent === name,
+        )!
         .querySelector('.th-tab__activity');
     expect(dot('a')).not.toBeNull(); // ⠂ → работает → точка
     expect(dot('b')).toBeNull(); // ✳ → ждёт (managed, не работает) → без точки
