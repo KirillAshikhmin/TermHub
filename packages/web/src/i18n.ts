@@ -58,6 +58,13 @@ const ru: Dict = {
     bell: 'Есть звонок',
     activity: 'Есть активность',
     killError: 'Не удалось завершить сессию',
+    rename: 'Переименовать',
+    renameError: 'Не удалось переименовать сессию',
+  },
+  rename: {
+    title: 'Переименовать сессию',
+    name: 'Новое имя',
+    submit: 'Переименовать',
   },
   create: {
     title: 'Новая сессия',
@@ -311,6 +318,13 @@ const en: Dict = {
     bell: 'Bell pending',
     activity: 'Activity',
     killError: 'Could not kill the session',
+    rename: 'Rename',
+    renameError: 'Could not rename the session',
+  },
+  rename: {
+    title: 'Rename session',
+    name: 'New name',
+    submit: 'Rename',
   },
   create: {
     title: 'New session',

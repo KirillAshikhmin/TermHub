@@ -24,6 +24,7 @@ function stubTransport(snapshots: SessionInfo[][]): { transport: Transport; list
     },
     create: async () => {},
     kill: async () => {},
+    rename: async () => {},
     dirs: async () => [],
     openTerm: () => ({ write() {}, resize() {}, close() {} }),
     close() {},

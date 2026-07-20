@@ -247,6 +247,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/sessions')
       return this.sendJson(res, 200, await this.sessions.list());
     if (method === 'POST' && pathname === '/api/sessions') return this.createSession(req, res);
+    if (method === 'POST' && pathname === '/api/sessions/rename') return this.renameSession(req, res);
     if (method === 'DELETE' && pathname.startsWith('/api/sessions/')) {
       let name: string;
       try {
@@ -317,6 +318,16 @@ export class AgentServer {
         dir: String(body.dir ?? ''),
         preset: body.preset as 'zsh' | 'claude',
       });
+      this.sendJson(res, 200, { ok: true });
+    } catch (err) {
+      this.sendJson(res, 422, { error: (err as Error).message });
+    }
+  }
+
+  private async renameSession(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.readJson(req, res);
+    try {
+      await this.sessions.rename(String(body.from ?? ''), String(body.to ?? ''));
       this.sendJson(res, 200, { ok: true });
     } catch (err) {
       this.sendJson(res, 422, { error: (err as Error).message });

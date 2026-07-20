@@ -47,6 +47,20 @@ describe('renderSessionCard', () => {
     expect(renderSessionCard(fixture({ bell: false }), t, { now: NOW }).querySelector('.th-bell')).toBeNull();
   });
 
+  it('меню карточки: «Переименовать» и «Завершить» вызывают колбэки', () => {
+    let renamed = false;
+    let killed = false;
+    const card = renderSessionCard(fixture(), t, {
+      now: NOW,
+      onRename: () => (renamed = true),
+      onKill: () => (killed = true),
+    });
+    card.querySelector<HTMLButtonElement>('.th-card__menu-item')!.click();
+    card.querySelector<HTMLButtonElement>('.th-card__kill')!.click();
+    expect(renamed).toBe(true);
+    expect(killed).toBe(true);
+  });
+
   it('точка активности рисуется перед именем при showActivity', () => {
     const card = renderSessionCard(fixture(), t, { now: NOW, showActivity: true });
     const name = card.querySelector<HTMLElement>('.th-card__name')!;

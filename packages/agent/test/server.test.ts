@@ -36,6 +36,7 @@ function stubSessions(over: Partial<SessionService> = {}): SessionService {
     list: async () => [] as SessionInfo[],
     create: async () => {},
     kill: async () => {},
+    rename: async () => {},
     dirs: async () => [],
     ...over,
   } as unknown as SessionService;
@@ -242,6 +243,24 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     });
     expect(res.status).toBe(422);
     expect((await res.json() as { error: string }).error).toContain('name');
+  });
+
+  it('POST /api/sessions/rename → sessions.rename(from, to), 200', async () => {
+    let seen = '';
+    s = await start({
+      sessions: stubSessions({
+        rename: async (from: string, to: string) => {
+          seen = `${from}->${to}`;
+        },
+      }),
+    });
+    const res = await fetch(`${s.base}/api/sessions/rename`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify({ from: 'old', to: 'new' }),
+    });
+    expect(res.status).toBe(200);
+    expect(seen).toBe('old->new');
   });
 
   it('DELETE /api/sessions/:name несуществующей → 404 (tmux exit≠0)', async () => {

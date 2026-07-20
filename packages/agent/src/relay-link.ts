@@ -490,6 +490,7 @@ export class RelayLink {
       switch (frame.type) {
         case FrameType.Create:
         case FrameType.Kill:
+        case FrameType.RenameSession:
         case FrameType.Dirs:
         case FrameType.Caffeinate:
         case FrameType.PushKey:
@@ -551,6 +552,9 @@ export class RelayLink {
         return;
       case FrameType.Kill:
         void this.doKill(s, frame);
+        return;
+      case FrameType.RenameSession:
+        void this.doRename(s, frame);
         return;
       case FrameType.Caffeinate:
         return this.doCaffeinate(s, frame);
@@ -885,6 +889,21 @@ export class RelayLink {
       await this.sessions.kill(req.session);
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'kill-failed', message: (err as Error).message }));
+    }
+  }
+
+  private async doRename(s: ClientSession, frame: Frame): Promise<void> {
+    let req: { from?: unknown; to?: unknown };
+    try {
+      req = frameJson<{ from?: unknown; to?: unknown }>(frame);
+    } catch {
+      return;
+    }
+    if (typeof req.from !== 'string' || typeof req.to !== 'string') return;
+    try {
+      await this.sessions.rename(req.from, req.to);
+    } catch (err) {
+      this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'rename-failed', message: (err as Error).message }));
     }
   }
 

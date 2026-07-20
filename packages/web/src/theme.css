@@ -455,6 +455,27 @@ button {
   width: 17px;
   height: 17px;
 }
+.th-card__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.th-card__menu-item:hover {
+  background: var(--bg-hover);
+}
+.th-card__menu-item .th-icon {
+  width: 17px;
+  height: 17px;
+}
 
 .th-card__dir {
   display: flex;

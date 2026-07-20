@@ -49,6 +49,10 @@ class ScriptedTransport implements Transport {
     return Promise.resolve();
   }
 
+  rename(_from: string, _to: string): Promise<void> {
+    return Promise.resolve();
+  }
+
   dirs(): Promise<DirGroup[]> {
     return Promise.resolve([]);
   }

@@ -172,6 +172,15 @@ export class SessionService {
     await this.tmux(['kill-session', '-t', `=${name}`]);
   }
 
+  async rename(oldName: string, newName: string): Promise<void> {
+    for (const n of [oldName, newName])
+      if (!NAME_RE.test(n))
+        throw new Error(`Invalid session name «${n}»: letters, digits, «_», «-» allowed, 1–40 characters`);
+    // Префикс «=» — точное совпадение старого имени (как в kill); tmux сохраняет
+    // сессию (pty/attach живут), меняется только имя.
+    await this.tmux(['rename-session', '-t', `=${oldName}`, newName]);
+  }
+
   async dirs(): Promise<{ root: string; dirs: string[] }[]> {
     const result: { root: string; dirs: string[] }[] = [];
     for (const root of this.roots) {

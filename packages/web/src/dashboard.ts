@@ -35,6 +35,7 @@ export interface CardOptions {
   showActivity?: boolean;
   onOpen?: () => void;
   onKill?: () => void;
+  onRename?: () => void;
 }
 
 /** Точка активности — первый элемент в .th-card__name (перед текстом имени). */
@@ -78,17 +79,29 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   menuBtn.append(svgIcon('dots'));
   const pop = document.createElement('div');
   pop.className = 'th-card__menupop';
+  const closeMenu = (): void => {
+    menuWrap.classList.remove('is-open');
+    menuBtn.setAttribute('aria-expanded', 'false');
+  };
+  const renameBtn = document.createElement('button');
+  renameBtn.type = 'button';
+  renameBtn.className = 'th-card__menu-item';
+  renameBtn.append(svgIcon('pencil'), document.createTextNode(translate('card.rename')));
+  renameBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeMenu();
+    opts.onRename?.();
+  });
   const killBtn = document.createElement('button');
   killBtn.type = 'button';
   killBtn.className = 'th-card__kill';
   killBtn.append(svgIcon('trash'), document.createTextNode(translate('card.kill')));
   killBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    menuWrap.classList.remove('is-open');
-    menuBtn.setAttribute('aria-expanded', 'false');
+    closeMenu();
     opts.onKill?.();
   });
-  pop.append(killBtn);
+  pop.append(renameBtn, killBtn);
   menuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const open = menuWrap.classList.toggle('is-open');
@@ -349,6 +362,7 @@ export function mountDashboard(
         location.hash = `#/term/${encodeURIComponent(session.name)}`;
       },
       onKill: () => void killSession(session.name),
+      onRename: () => openRenameModal(transport, session.name, () => void refresh()),
     });
 
   // Щадящее обновление: не перестраиваем всю сетку каждый поллинг (это сбрасывало
@@ -696,6 +710,76 @@ export function openCreateModal(transport: Transport, onCreated: (name: string) 
         create.disabled = false;
         create.textContent = t('create.submit');
         const message = err instanceof ApiError && err.status !== 401 && err.message ? err.message : t('create.error');
+        toast(message, 'error');
+      }
+    });
+
+    return form;
+  });
+}
+
+/** Модалка переименования сессии: поле с текущим именем → transport.rename.
+ *  Работает в обоих режимах (LAN/relay). onDone — рефреш дашборда. */
+export function openRenameModal(transport: Transport, current: string, onDone: () => void): void {
+  openModal((close) => {
+    const form = document.createElement('form');
+    form.className = 'th-create';
+    form.noValidate = true;
+
+    const head = document.createElement('div');
+    head.className = 'th-modal__head';
+    const title = document.createElement('h2');
+    title.textContent = t('rename.title');
+    head.append(title, iconButton('close', t('common.close'), close));
+
+    const body = document.createElement('div');
+    body.className = 'th-create__body';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'th-input';
+    input.autocomplete = 'off';
+    input.value = current;
+    body.append(field(t('rename.name'), input));
+
+    const foot = document.createElement('div');
+    foot.className = 'th-modal__foot';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'th-btn';
+    cancel.textContent = t('common.cancel');
+    cancel.addEventListener('click', close);
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.className = 'th-btn th-btn--primary';
+    submit.textContent = t('rename.submit');
+    foot.append(cancel, submit);
+
+    form.append(head, body, foot);
+    // Фокус в поле (после того как openModal смонтирует форму), курсор — в конец.
+    setTimeout(() => {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }, 0);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      // Имя нормализуем как при создании (только [A-Za-z0-9_-], ≤40).
+      const next = sanitizeSessionName(input.value.trim());
+      if (!next || next === current) {
+        close();
+        return;
+      }
+      submit.disabled = true;
+      submit.replaceChildren(spinner());
+      try {
+        await transport.rename(current, next);
+        close();
+        onDone();
+      } catch (err) {
+        submit.disabled = false;
+        submit.textContent = t('rename.submit');
+        const message =
+          err instanceof ApiError && err.status !== 401 && err.message ? err.message : t('card.renameError');
         toast(message, 'error');
       }
     });

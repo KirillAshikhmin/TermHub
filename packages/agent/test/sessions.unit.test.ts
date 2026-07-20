@@ -217,6 +217,19 @@ describe('SessionService.create — валидация', () => {
       svc.create({ name: 'main', root, dir: 'projectA', preset: 'rm -rf' as unknown as 'zsh' }),
     ).rejects.toThrow(/preset/i);
   });
+
+  it('rename → rename-session с точным (=) старым именем', async () => {
+    const svc = new SessionService({ roots: [root] });
+    await svc.rename('old', 'new');
+    const args = mockExecFile.mock.calls.at(-1)![1] as string[];
+    expect(args).toEqual(['rename-session', '-t', '=old', 'new']);
+  });
+
+  it('rename отвергает недопустимое имя (старое или новое)', async () => {
+    const svc = new SessionService({ roots: [root] });
+    await expect(svc.rename('bad name!', 'ok')).rejects.toThrow(/name/i);
+    await expect(svc.rename('ok', 'a.b')).rejects.toThrow(/name/i);
+  });
 });
 
 describe('SessionService.kill', () => {

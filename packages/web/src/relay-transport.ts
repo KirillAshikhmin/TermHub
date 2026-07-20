@@ -660,6 +660,13 @@ export class RelayTransport implements Transport {
     return Promise.resolve();
   }
 
+  rename(from: string, to: string): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error('relay closed'));
+    // Агент не подтверждает RENAME — отправляем и полагаемся на последующий poll.
+    this.sendFrame(jsonFrame(FrameType.RenameSession, CONTROL_CHANNEL, { from, to }));
+    return Promise.resolve();
+  }
+
   dirs(): Promise<DirGroup[]> {
     // Каталоги под корнями — через E2E-канал агента (как LIST), чтобы модалка
     // создания давала выбор из списка и в relay-режиме, а не ручной ввод.

@@ -57,6 +57,8 @@ export interface Transport {
   list(): Promise<SessionInfo[]>;
   create(req: CreateSessionInput): Promise<void>;
   kill(name: string): Promise<void>;
+  /** Переименование сессии (tmux rename-session). Оба режима: LAN — REST, relay — E2E. */
+  rename(from: string, to: string): Promise<void>;
   /** Каталоги для модалки создания; в relay-режиме — пустой список (ручной ввод). */
   dirs(): Promise<DirGroup[]>;
   /** Текущее состояние caffeinate (доступно в обоих режимах: LAN — REST, relay — E2E). */
@@ -223,6 +225,10 @@ export class LanTransport implements Transport {
 
   kill(name: string): Promise<void> {
     return api.killSession(name);
+  }
+
+  rename(from: string, to: string): Promise<void> {
+    return api.renameSession(from, to);
   }
 
   dirs(): Promise<DirGroup[]> {
