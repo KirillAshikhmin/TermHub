@@ -47,6 +47,19 @@ describe('renderSessionCard', () => {
     expect(renderSessionCard(fixture({ bell: false }), t, { now: NOW }).querySelector('.th-bell')).toBeNull();
   });
 
+  const nameText = (s: Partial<SessionInfo>): string | undefined =>
+    renderSessionCard(fixture(s), t, { now: NOW }).querySelector('.th-card__name-text')?.textContent ?? undefined;
+
+  it('имя: заголовок терминала + tmux-имя в скобках, индикатор срезан', () => {
+    expect(nameText({ name: 'main', title: '⠋ Рефакторинг' })).toBe('Рефакторинг (main)');
+  });
+
+  it('имя: только tmux-имя, если заголовок пуст или совпадает с именем', () => {
+    expect(nameText({ name: 'main', title: '' })).toBe('main');
+    expect(nameText({ name: 'main', title: 'main' })).toBe('main');
+    expect(nameText({ name: 'main', title: '⠋' })).toBe('main');
+  });
+
   it('меню карточки: «Переименовать» и «Завершить» вызывают колбэки', () => {
     let renamed = false;
     let killed = false;

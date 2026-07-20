@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionManaged, sessionWorking } from '../src/session-status';
+import { sessionManaged, sessionTitleText, sessionWorking } from '../src/session-status';
 
 describe('sessionWorking', () => {
   it('брайлевый спиннер в начале = работает', () => {
@@ -25,5 +25,19 @@ describe('sessionManaged', () => {
     expect(sessionManaged('vim file.txt')).toBe(false);
     expect(sessionManaged('bash')).toBe(false);
     expect(sessionManaged('')).toBe(false);
+  });
+});
+
+describe('sessionTitleText', () => {
+  it('срезает ведущий индикатор (брайль/✳) и пробелы', () => {
+    expect(sessionTitleText('⠂ Сборка проекта')).toBe('Сборка проекта');
+    expect(sessionTitleText('✳ Жду ответа')).toBe('Жду ответа');
+    expect(sessionTitleText('  ⣿  задача')).toBe('задача');
+  });
+
+  it('обычный заголовок — как есть; только индикатор или пусто → пустая строка', () => {
+    expect(sessionTitleText('vim file.txt')).toBe('vim file.txt');
+    expect(sessionTitleText('⠂')).toBe('');
+    expect(sessionTitleText('')).toBe('');
   });
 });

@@ -13,7 +13,7 @@ import { formatRelativeTime } from './time';
 import type { Transport } from './transport';
 import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
-import { sessionManaged, sessionWorking } from './session-status';
+import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells } from './bell-seen';
 import { iconButton, openModal, renderHeader, renderTabs, spinner, svgIcon, toast } from './ui';
 
@@ -28,6 +28,13 @@ function basename(path: string): string {
 /** true для команды claude (акцентный бейдж). */
 function isClaude(command: string): boolean {
   return command.trim().toLowerCase().startsWith('claude');
+}
+
+/** Имя карточки: заголовок терминала (Claude его меняет), а в скобках — tmux-имя
+ *  сессии, если отличается. Индикатор активности из заголовка срезан (он — точкой). */
+function sessionDisplayName(session: SessionInfo): string {
+  const term = sessionTitleText(session.title);
+  return term && term !== session.name ? `${term} (${session.name})` : session.name;
 }
 
 export interface CardOptions {
@@ -57,14 +64,17 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   card.className = 'th-card';
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
-  card.setAttribute('aria-label', `${translate('card.open')}: ${session.name}`);
+  card.setAttribute('aria-label', `${translate('card.open')}: ${sessionDisplayName(session)}`);
 
   const top = document.createElement('div');
   top.className = 'th-card__top';
 
   const name = document.createElement('h3');
   name.className = 'th-card__name';
-  name.textContent = session.name;
+  const nameText = document.createElement('span');
+  nameText.className = 'th-card__name-text';
+  nameText.textContent = sessionDisplayName(session);
+  name.append(nameText);
   setCardActivityDot(name, translate, opts.showActivity ?? false);
   top.append(name);
 
@@ -183,6 +193,10 @@ export function updateSessionCard(
   showActivity = false,
 ): void {
   setCardActivityDot(card.querySelector<HTMLElement>('.th-card__name'), translate, showActivity);
+
+  // Имя-текст меняется вслед за заголовком терминала (Claude его правит).
+  const nameText = card.querySelector<HTMLElement>('.th-card__name-text');
+  if (nameText) nameText.textContent = sessionDisplayName(session);
 
   const badge = card.querySelector<HTMLElement>('.th-badge');
   if (badge) {

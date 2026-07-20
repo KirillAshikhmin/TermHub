@@ -18,3 +18,10 @@ export function sessionWorking(title: string): boolean {
 export function sessionManaged(title: string): boolean {
   return MANAGED_RE.test(title);
 }
+
+/** Текст заголовка терминала без ведущего индикатора активности (брайль/✳): сам
+ *  индикатор показывается отдельной точкой активности, в имени его не дублируем.
+ *  Пустая строка, если заголовок — только индикатор либо его нет. */
+export function sessionTitleText(title: string): string {
+  return title.replace(/^\s*[⠀-⣿✳]+\s*/u, '').trim();
+}
