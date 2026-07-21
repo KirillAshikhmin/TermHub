@@ -748,14 +748,29 @@ export class RelayTransport implements Transport {
     return null;
   }
 
-  /** Собирает файл в Blob чанками через E2E-канал (blob-стриминг). */
+  /** Собирает файл в Blob чанками через E2E-канал (blob-стриминг). Транзиентный
+   *  таймаут/обрыв relay не рвёт всю загрузку: тот же offset докачивается с бэкоффом
+   *  (чанки адресуются по offset — естественная докачка). */
   async fileBlob(root: string, subpath: string, onProgress?: (frac: number) => void): Promise<Blob> {
     const stat = await this.fileStat(root, subpath);
-    const CHUNK = 1024 * 1024;
+    const CHUNK = 256 * 1024;
+    const CHUNK_TIMEOUT_MS = 20_000; // чанк крупнее LIST-запроса — таймаут щедрее
+    const RETRIES = 4;
     const parts: BlobPart[] = [];
     let offset = 0;
     while (offset < stat.size) {
-      const chunk = await this.requestChunk(root, subpath, offset, Math.min(CHUNK, stat.size - offset));
+      const len = Math.min(CHUNK, stat.size - offset);
+      let chunk: Uint8Array | undefined;
+      for (let attempt = 0; ; attempt++) {
+        if (this.stopped) throw new Error('relay closed');
+        try {
+          chunk = await this.requestChunk(root, subpath, offset, len, CHUNK_TIMEOUT_MS);
+          break;
+        } catch (err) {
+          if (attempt >= RETRIES) throw err; // исчерпали попытки — пробрасываем ошибку
+          await this.sleep(Math.min(1000 * (attempt + 1), 3000)); // бэкофф: ждём восстановления потока
+        }
+      }
       if (chunk.length === 0) break;
       // TS 5.7 типизирует Uint8Array как Uint8Array<ArrayBufferLike>, а BlobPart ждёт
       // ArrayBuffer; в рантайме Uint8Array — валидный BlobPart, каст точечный и безопасный.
@@ -766,13 +781,26 @@ export class RelayTransport implements Transport {
     return new Blob(parts, { type: stat.mime });
   }
 
-  private requestChunk(root: string, subpath: string, offset: number, len: number): Promise<Uint8Array> {
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+  }
+
+  private requestChunk(
+    root: string,
+    subpath: string,
+    offset: number,
+    len: number,
+    timeoutMs = LIST_TIMEOUT_MS,
+  ): Promise<Uint8Array> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingFileChunk = this.pendingFileChunk.filter((p) => p.timer !== timer);
         reject(new Error('file-chunk timeout'));
-      }, LIST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pendingFileChunk.push({ resolve, reject, timer });
       this.sendFrame(jsonFrame(FrameType.FileChunk, CONTROL_CHANNEL, { root, path: subpath, offset, len }));
     });

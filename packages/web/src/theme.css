@@ -942,7 +942,7 @@ select.th-input {
 .th-dlprog {
   position: fixed;
   left: 50%;
-  bottom: 16px;
+  top: calc(12px + env(safe-area-inset-top));
   transform: translateX(-50%);
   z-index: 60;
   width: min(92vw, 420px);
