@@ -938,6 +938,56 @@ select.th-input {
   animation: th-spin 0.7s linear infinite;
 }
 
+/* Прогресс скачивания (relay: blob тянется чанками) — плавающий индикатор снизу. */
+.th-dlprog {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: min(92vw, 420px);
+  padding: 10px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+}
+.th-dlprog__label {
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-dlprog__track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.th-dlprog__bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.15s;
+}
+
+/* Экран ошибки загрузки (проводник/репозиторий): сообщение + кнопка «Обновить». */
+.th-loaderror {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 32px 16px;
+  text-align: center;
+}
+.th-loaderror__msg {
+  max-width: 44ch;
+  color: var(--text-dim);
+}
+
 /* ── Терминал ──────────────────────────────────────────────────────── */
 /* Экран фиксирован к вьюпорту; height/transform уточняет JS из visualViewport,
    чтобы панель клавиш стояла над экранной клавиатурой телефона. */

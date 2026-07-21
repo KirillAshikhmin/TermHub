@@ -81,6 +81,22 @@ export function spinner(): HTMLSpanElement {
   return span;
 }
 
+/** Экран ошибки загрузки: сообщение + кнопка «Обновить» (retry). */
+export function errorScreen(message: string, onRetry: () => void): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'th-loaderror';
+  const p = document.createElement('p');
+  p.className = 'th-loaderror__msg';
+  p.textContent = message;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'th-btn';
+  btn.append(svgIcon('refresh'), document.createTextNode(t('common.retry')));
+  btn.addEventListener('click', onRetry);
+  box.append(p, btn);
+  return box;
+}
+
 // Открытые оверлеи (модалки) — держим их close() здесь, чтобы роутер мог снести
 // висящий overlay и его document-слушатель при смене экрана (см. dismissOverlays).
 const overlayDismissers = new Set<() => void>();

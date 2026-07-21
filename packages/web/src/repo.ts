@@ -8,7 +8,7 @@ import { t } from './i18n';
 import { parseSessionSub, repoHash, srepoHash } from './routes';
 import { resolveSessionPath } from './session-path';
 import { mountSessionBar } from './tabs';
-import { iconButton, openModal, renderHeader, renderHoloBar, renderTabs, spinner, toast, wireToolbar } from './ui';
+import { iconButton, openModal, renderHeader, renderHoloBar, renderTabs, spinner, toast, wireToolbar, errorScreen } from './ui';
 import type {
   RepoBranches,
   RepoCommitDetail,
@@ -457,6 +457,19 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
   content.className = 'th-repo__content';
   main.append(bar, content);
 
+  // Ошибка загрузки: экран с сообщением + «Обновить». retry — что именно перезапускать.
+  let loadFailed = false;
+  let retry: () => void = () => {};
+  const triggerReload = (): void => {
+    loadFailed = false;
+    retry();
+  };
+  const showError = (message: string, retryFn: () => void): void => {
+    loadFailed = true;
+    retry = retryFn;
+    content.replaceChildren(errorScreen(message, triggerReload));
+  };
+
   const navigate = (nextRoot: string, nextPath: string): void => {
     location.hash = session ? srepoHash(session, nextPath) : repoHash(nextRoot, nextPath);
   };
@@ -606,11 +619,7 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
       }
     } catch (err) {
       if (stopped) return;
-      content.replaceChildren();
-      const p = document.createElement('p');
-      p.className = 'th-repo__note';
-      p.textContent = err instanceof Error ? err.message : t('repo.error');
-      content.append(p);
+      showError(err instanceof Error ? err.message : t('repo.error'), () => void load());
     }
   };
 
@@ -641,41 +650,53 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
     void load();
   };
 
+  const startLoading = (): void => {
+    if (session) {
+      // Корень и подпуть — из пути сессии (без селектора).
+      void resolveSessionPath(transport, session)
+        .then((res) => {
+          if (stopped) return;
+          if (!res) {
+            showError(t('repo.error'), startLoading);
+            return;
+          }
+          curRoot = res.root;
+          if (sub === null) curPath = res.subpath; // по умолчанию — ровно путь сессии
+          void load();
+        })
+        .catch(() => {
+          if (!stopped) showError(t('repo.error'), startLoading);
+        });
+    } else if (rootsCache) {
+      start(rootsCache);
+    } else {
+      transport
+        .dirs()
+        .then((groups) => {
+          rootsCache = groups.map((g) => g.root);
+          start(rootsCache);
+        })
+        .catch(() => {
+          if (!stopped) showError(t('repo.error'), startLoading);
+        });
+    }
+  };
+
+  // Повторное открытие вкладки (session-режим, вид живёт в workspace): если прошлая
+  // загрузка провалилась — перезагружаем при показе (workspace ставит .is-active).
+  let obs: MutationObserver | null = null;
   if (session) {
-    // Корень и подпуть — из пути сессии (без селектора).
-    void resolveSessionPath(transport, session)
-      .then((res) => {
-        if (stopped) return;
-        if (!res) {
-          const p = document.createElement('p');
-          p.className = 'th-repo__note';
-          p.textContent = t('repo.error');
-          content.append(p);
-          return;
-        }
-        curRoot = res.root;
-        if (sub === null) curPath = res.subpath; // по умолчанию — ровно путь сессии
-        void load();
-      })
-      .catch(() => {
-        if (!stopped) toast(t('repo.error'), 'error');
-      });
-  } else if (rootsCache) {
-    start(rootsCache);
-  } else {
-    transport
-      .dirs()
-      .then((groups) => {
-        rootsCache = groups.map((g) => g.root);
-        start(rootsCache);
-      })
-      .catch(() => {
-        if (!stopped) toast(t('repo.error'), 'error');
-      });
+    obs = new MutationObserver(() => {
+      if (loadFailed && root.classList.contains('is-active')) triggerReload();
+    });
+    obs.observe(root, { attributes: true, attributeFilter: ['class'] });
   }
+
+  startLoading();
 
   return () => {
     stopped = true;
+    obs?.disconnect();
     teardownTop();
   };
 }

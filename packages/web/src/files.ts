@@ -5,9 +5,9 @@
 
 import { t } from './i18n';
 import { openModal } from './ui';
-import { renderHeader, renderHoloBar, renderTabs, iconButton, spinner, toast, wireToolbar } from './ui';
+import { renderHeader, renderHoloBar, renderTabs, iconButton, spinner, toast, wireToolbar, errorScreen } from './ui';
 import { openCreateModal } from './dashboard';
-import { openRowMenu, openTextInNotaText } from './file-ops';
+import { openRowMenu, openTextInNotaText, streamDownload } from './file-ops';
 import { formatDate, formatSize } from './format';
 import { mountSessionBar } from './tabs';
 import { filesHash, parseSessionSub } from './routes';
@@ -72,23 +72,7 @@ function parseFilesHash(): { root: string; path: string } {
 }
 
 // filesHash — в ./routes (общий формат с termlinks.ts).
-
-/** Скачивание файла: LAN — прямой линк с Range, relay — blob чанками. */
-function streamDownload(transport: Transport, root: string, filePath: string, name: string): void {
-  const direct = transport.downloadUrl(root, filePath);
-  const save = (href: string, revoke?: boolean): void => {
-    const a = document.createElement('a');
-    a.href = href;
-    a.download = name;
-    a.click();
-    if (revoke) setTimeout(() => URL.revokeObjectURL(href), 10_000);
-  };
-  if (direct) {
-    save(direct);
-    return;
-  }
-  void transport.fileBlob(root, filePath).then((blob) => save(URL.createObjectURL(blob), true));
-}
+// streamDownload — в ./file-ops (общий с пунктом «Скачать» в ⋮-меню строки).
 
 /** Модалка просмотра одного файла. */
 function openFileModal(transport: Transport, root: string, filePath: string, name: string): void {
@@ -287,6 +271,19 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
   bar.append(crumbs);
   main.append(bar, list);
 
+  // Ошибка загрузки: экран с сообщением + «Обновить». retry — что именно перезапускать.
+  let loadFailed = false;
+  let retry: () => void = () => {};
+  const triggerReload = (): void => {
+    loadFailed = false;
+    retry();
+  };
+  const showError = (message: string, retryFn: () => void): void => {
+    loadFailed = true;
+    retry = retryFn;
+    list.replaceChildren(errorScreen(message, triggerReload));
+  };
+
   // Навигация: dashboard — через hash (пере-монтирование роутером, работает «Назад»);
   // session-режим (живёт в workspace, не пере-монтируется) — внутренняя перерисовка.
   const navigate = (nextRoot: string, nextPath: string): void => {
@@ -398,11 +395,7 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
       if (!stopped) render(entries);
     } catch (err) {
       if (stopped) return;
-      list.replaceChildren();
-      const p = document.createElement('p');
-      p.className = 'th-files__empty';
-      p.textContent = err instanceof Error ? err.message : t('files.error');
-      list.append(p);
+      showError(err instanceof Error ? err.message : t('files.error'), () => void load());
     }
   };
 
@@ -437,42 +430,53 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
   };
 
   // Корни: session-режим — из пути сессии (без селектора); иначе кэш или dirs().
+  const startLoading = (): void => {
+    if (session) {
+      void resolveSessionPath(transport, session)
+        .then((res) => {
+          if (stopped) return;
+          if (!res) {
+            showError(t('files.error'), startLoading);
+            return;
+          }
+          curRoot = res.root;
+          floor = res.subpath; // папка сессии — корень навигации (не выше неё)
+          if (sub === null) curPath = res.subpath; // по умолчанию — ровно путь сессии
+          void load();
+        })
+        .catch(() => {
+          if (!stopped) showError(t('files.error'), startLoading);
+        });
+    } else if (rootsCache) {
+      start(rootsCache);
+    } else {
+      void transport
+        .dirs()
+        .then((groups) => {
+          rootsCache = groups.map((g) => g.root);
+          start(rootsCache);
+        })
+        .catch(() => {
+          if (!stopped) showError(t('files.error'), startLoading);
+        });
+    }
+  };
+
+  // Повторное открытие вкладки (session-режим, вид живёт в workspace): если прошлая
+  // загрузка провалилась — перезагружаем при показе (workspace ставит .is-active).
+  let obs: MutationObserver | null = null;
   if (session) {
-    void resolveSessionPath(transport, session)
-      .then((res) => {
-        if (stopped) return;
-        if (!res) {
-          list.replaceChildren();
-          const p = document.createElement('p');
-          p.className = 'th-files__empty';
-          p.textContent = t('files.error');
-          list.append(p);
-          return;
-        }
-        curRoot = res.root;
-        floor = res.subpath; // папка сессии — корень навигации (не выше неё)
-        if (sub === null) curPath = res.subpath; // по умолчанию — ровно путь сессии
-        void load();
-      })
-      .catch(() => {
-        if (!stopped) toast(t('files.error'), 'error');
-      });
-  } else if (rootsCache) {
-    start(rootsCache);
-  } else {
-    void transport
-      .dirs()
-      .then((groups) => {
-        rootsCache = groups.map((g) => g.root);
-        start(rootsCache);
-      })
-      .catch(() => {
-        if (!stopped) toast(t('files.error'), 'error');
-      });
+    obs = new MutationObserver(() => {
+      if (loadFailed && root.classList.contains('is-active')) triggerReload();
+    });
+    obs.observe(root, { attributes: true, attributeFilter: ['class'] });
   }
+
+  startLoading();
 
   return () => {
     stopped = true;
+    obs?.disconnect();
     teardownTop();
   };
 }

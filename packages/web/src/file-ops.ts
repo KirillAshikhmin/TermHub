@@ -16,6 +16,56 @@ function parentPath(p: string): string {
   return i < 0 ? '' : p.slice(0, i);
 }
 
+/** Скачивание файла: LAN — прямой линк (браузер сам качает, со своим прогрессом),
+ *  relay — blob чанками с прогресс-оверлеем (прямого URL у relay нет). */
+export function streamDownload(transport: Transport, root: string, filePath: string, name: string): void {
+  const save = (href: string, revoke?: boolean): void => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = name;
+    a.click();
+    if (revoke) setTimeout(() => URL.revokeObjectURL(href), 10_000);
+  };
+  const direct = transport.downloadUrl(root, filePath);
+  if (direct) {
+    save(direct);
+    return;
+  }
+  const prog = showDownloadProgress(name);
+  transport.fileBlob(root, filePath, (frac) => prog.set(frac)).then(
+    (blob) => {
+      prog.done();
+      save(URL.createObjectURL(blob), true);
+    },
+    (err) => {
+      prog.done();
+      toast(err instanceof Error ? err.message : t('files.error'), 'error');
+    },
+  );
+}
+
+/** Плавающий индикатор прогресса скачивания (relay-режим, где blob тянется чанками). */
+function showDownloadProgress(name: string): { set: (frac: number) => void; done: () => void } {
+  const box = document.createElement('div');
+  box.className = 'th-dlprog';
+  const label = document.createElement('div');
+  label.className = 'th-dlprog__label';
+  label.textContent = t('files.downloading', { name });
+  const track = document.createElement('div');
+  track.className = 'th-dlprog__track';
+  const bar = document.createElement('div');
+  bar.className = 'th-dlprog__bar';
+  track.append(bar);
+  box.append(label, track);
+  document.body.append(box);
+  return {
+    set: (frac: number) => {
+      bar.style.width = `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%`;
+    },
+    done: () => box.remove(),
+  };
+}
+
 // ── Открытие в NotAText (инлайн-ссылка: контент зашит в hash, без сервера) ──
 const NOTATEXT_ORIGIN = 'https://notatext.ru/';
 const NOTA_LANG: Record<string, string> = {
@@ -174,6 +224,12 @@ export function openRowMenu(opts: {
     );
     if (opts.entry.kind === 'file') {
       box.append(
+        sheetItem(t('files.download'), {
+          onClick: () => {
+            dismiss();
+            streamDownload(ctx.transport, ctx.root, ctx.path, ctx.name);
+          },
+        }),
         sheetItem(t('files.openNota'), {
           onClick: () => {
             dismiss();
