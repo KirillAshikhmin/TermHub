@@ -19,7 +19,9 @@ import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
 import { markBellSeen } from './bell-seen';
-import { detectPaths, filesTargetForPath } from './termlinks';
+import { detectPaths, filePathParts } from './termlinks';
+import { filesHash, sfilesHash } from './routes';
+import { resolveSessionPath } from './session-path';
 import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
@@ -245,23 +247,29 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   term.loadAddon(searchAddon);
   term.open(host);
 
-  // Кликабельные пути: абсолютные пути в выводе открывают файловый браузер на
-  // родительской папке пути. Корни грузим один раз; пока не загружены — ссылок нет.
+  // Кликабельные пути: путь в выводе открывает ПРОВОДНИК СЕССИИ (переключение вкладки,
+  // терминал жив), если он внутри корня сессии; иначе — обычный файловый браузер.
+  // Корни/корень сессии грузим с ретраем: relay-поток мог ещё не подняться → dirs()
+  // вернул бы [] и ссылки не появлялись бы.
   let fileRoots: string[] = [];
-  void transport
-    .dirs()
-    .then((g) => (fileRoots = g.map((x) => x.root)))
-    .catch(() => {});
-  // База CWD для относительных путей — стартовый каталог сессии; уточняется по
-  // OSC 7 (file://host/cwd), если оболочка его шлёт (после cd).
+  let sessionRoot = ''; // корень-whitelist сессии
+  // База CWD для относительных путей — стартовый каталог сессии; уточняется OSC 7 (после cd).
   let termCwd = '';
-  void transport
-    .list()
-    .then((s) => {
-      const me = s.find((x) => x.name === session);
-      if (me) termCwd = me.path;
-    })
-    .catch(() => {});
+  const loadRoots = (tries = 0): void => {
+    void Promise.all([transport.dirs(), resolveSessionPath(transport, session)])
+      .then(([g, res]) => {
+        if (g.length) fileRoots = g.map((x) => x.root);
+        if (res) {
+          sessionRoot = res.root;
+          if (!termCwd) termCwd = res.subpath ? `${res.root}/${res.subpath}` : res.root;
+        }
+        if (!fileRoots.length && tries < 10) setTimeout(() => loadRoots(tries + 1), 1500);
+      })
+      .catch(() => {
+        if (tries < 10) setTimeout(() => loadRoots(tries + 1), 1500);
+      });
+  };
+  loadRoots();
   term.parser.registerOscHandler(7, (data) => {
     const m = /^file:\/\/[^/]*(\/.*)$/.exec(data);
     if (m) {
@@ -278,8 +286,11 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
       const line = term.buffer.active.getLine(lineNo - 1)?.translateToString(true) ?? '';
       cb(
         detectPaths(line).flatMap((m) => {
-          const target = filesTargetForPath(m.path, fileRoots, termCwd || undefined);
-          if (!target) return [];
+          const p = filePathParts(m.path, fileRoots, termCwd || undefined);
+          if (!p) return [];
+          // Внутри корня этой сессии → её вкладка «Проводник» (переключение, терминал
+          // жив); иначе — обычный файловый браузер.
+          const target = p.root === sessionRoot ? sfilesHash(session, p.sub) : filesHash(p.root, p.sub);
           return [
             {
               range: { start: { x: m.index + 1, y: lineNo }, end: { x: m.index + m.length, y: lineNo } },

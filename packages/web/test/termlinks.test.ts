@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectPaths, filesTargetForPath } from '../src/termlinks';
+import { detectPaths, filePathParts, filesTargetForPath } from '../src/termlinks';
 
 describe('detectPaths', () => {
   it('находит абсолютный путь и его диапазон', () => {
@@ -75,5 +75,31 @@ describe('filesTargetForPath', () => {
 
   it('относительный путь без cwd → null', () => {
     expect(filesTargetForPath('docs/foo.md', roots)).toBeNull();
+  });
+});
+
+describe('filePathParts', () => {
+  const roots = ['/Users/me/projects', '/Users/me/projects/Sprut'];
+
+  it('файл под самым длинным корнем → {root, sub=родительская папка}', () => {
+    expect(filePathParts('/Users/me/projects/Sprut/app/main.ts', roots)).toEqual({
+      root: '/Users/me/projects/Sprut',
+      sub: 'app',
+    });
+  });
+
+  it('файл прямо в корне → sub пустой', () => {
+    expect(filePathParts('/Users/me/projects/readme.md', roots)).toEqual({ root: '/Users/me/projects', sub: '' });
+  });
+
+  it('путь вне корней → null', () => {
+    expect(filePathParts('/etc/hosts', roots)).toBeNull();
+  });
+
+  it('относительный резолвится от cwd', () => {
+    expect(filePathParts('docs/x.md', roots, '/Users/me/projects/TermHub')).toEqual({
+      root: '/Users/me/projects',
+      sub: 'TermHub/docs',
+    });
   });
 });

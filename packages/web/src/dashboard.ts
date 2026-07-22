@@ -355,7 +355,10 @@ export function mountDashboard(
   fab.setAttribute('aria-label', t('dashboard.newSession'));
   fab.title = t('dashboard.newSession');
   fab.append(svgIcon('plus'));
-  fab.addEventListener('click', () => openCreateModal(transport, () => void refresh()));
+  // Создали сессию → сразу открываем её терминал (а не просто обновляем список).
+  fab.addEventListener('click', () =>
+    openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
+  );
   root.append(fab);
 
   let stopped = false;

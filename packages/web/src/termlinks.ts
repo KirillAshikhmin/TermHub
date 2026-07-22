@@ -44,10 +44,14 @@ function resolveRelative(cwd: string, rel: string): string {
   return `/${stack.join('/')}`;
 }
 
-/** Хэш файлового браузера для пути: открываем РОДИТЕЛЬСКУЮ папку (листинг валиден
- *  и для файла, и для папки). Относительный путь резолвится от cwd (без cwd —
- *  null). null также если путь вне всех корней. Корень — самый длинный префикс. */
-export function filesTargetForPath(rawPath: string, roots: string[], cwd?: string): string | null {
+/** Путь → {корень (самый длинный префикс из roots), sub (РОДИТЕЛЬСКАЯ папка пути
+ *  относительно корня — листинг валиден и для файла, и для папки)}. Относительный
+ *  путь резолвится от cwd (без cwd — null). null также если путь вне всех корней. */
+export function filePathParts(
+  rawPath: string,
+  roots: string[],
+  cwd?: string,
+): { root: string; sub: string } | null {
   const absPath = rawPath.startsWith('/') ? rawPath : cwd ? resolveRelative(cwd, rawPath) : null;
   if (!absPath) return null;
   const root = roots
@@ -55,6 +59,12 @@ export function filesTargetForPath(rawPath: string, roots: string[], cwd?: strin
     .sort((a, b) => b.length - a.length)[0];
   if (!root) return null;
   const rel = absPath === root ? '' : absPath.slice(root.length).replace(/^\/+/, '');
-  const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
-  return filesHash(root, parent);
+  const sub = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+  return { root, sub };
+}
+
+/** Хэш обычного файлового браузера (#/files) для пути. null — путь вне корней/без cwd. */
+export function filesTargetForPath(rawPath: string, roots: string[], cwd?: string): string | null {
+  const p = filePathParts(rawPath, roots, cwd);
+  return p ? filesHash(p.root, p.sub) : null;
 }
