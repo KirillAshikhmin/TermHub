@@ -206,7 +206,23 @@ export class RelayTransport implements Transport {
     this.clientName = opts.clientName;
     this.onLink = opts.onLink;
     this.connect();
+    // Возврат PWA из фона (Android усыпляет WS) / вернулась сеть — реконнектим сразу.
+    document.addEventListener('visibilitychange', this.onVisible);
+    window.addEventListener('online', this.onVisible);
   }
+
+  private onVisible = (): void => {
+    if (document.visibilityState !== 'visible' || this.stopped) return;
+    this.backoff = BACKOFF_START_MS; // сброс — следующий цикл (если нужен) снова с 1с
+    const dead = !this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+      this.connect();
+    } else if (dead) {
+      this.connect();
+    }
+  };
 
   // ── Соединение и хендшейк ─────────────────────────────────────────────────
 
@@ -898,6 +914,8 @@ export class RelayTransport implements Transport {
 
   close(): void {
     this.stopped = true;
+    document.removeEventListener('visibilitychange', this.onVisible);
+    window.removeEventListener('online', this.onVisible);
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;

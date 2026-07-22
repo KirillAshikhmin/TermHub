@@ -118,7 +118,23 @@ class LanTermChannel implements TermChannel {
   ) {
     this.url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/term/${encodeURIComponent(session)}`;
     this.connect();
+    // Возврат PWA из фона (Android усыпляет WS) / вернулась сеть — реконнектим сразу.
+    document.addEventListener('visibilitychange', this.onVisible);
+    window.addEventListener('online', this.onVisible);
   }
+
+  private onVisible = (): void => {
+    if (document.visibilityState !== 'visible' || this.disposed || this.ended) return;
+    this.attempt = 0; // сброс backoff — следующий цикл (если нужен) снова с 1с
+    const dead = !this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+      this.connect();
+    } else if (dead) {
+      this.connect();
+    }
+  };
 
   private connect(): void {
     if (this.disposed) return;
@@ -196,6 +212,8 @@ class LanTermChannel implements TermChannel {
 
   close(): void {
     this.disposed = true;
+    document.removeEventListener('visibilitychange', this.onVisible);
+    window.removeEventListener('online', this.onVisible);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.stableTimer) clearTimeout(this.stableTimer);
     if (this.ws) {
