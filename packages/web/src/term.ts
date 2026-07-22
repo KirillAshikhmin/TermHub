@@ -19,7 +19,7 @@ import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
 import { markBellSeen } from './bell-seen';
-import { detectPaths, filePathParts } from './termlinks';
+import { detectPaths, filePathParts, parentRel } from './termlinks';
 import { filesHash, sfilesHash } from './routes';
 import { resolveSessionPath } from './session-path';
 import { enableTouchScroll } from './touch-scroll';
@@ -288,9 +288,10 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
         detectPaths(line).flatMap((m) => {
           const p = filePathParts(m.path, fileRoots, termCwd || undefined);
           if (!p) return [];
-          // Внутри корня этой сессии → её вкладка «Проводник» (переключение, терминал
-          // жив); иначе — обычный файловый браузер.
-          const target = p.root === sessionRoot ? sfilesHash(session, p.sub) : filesHash(p.root, p.sub);
+          // Внутри корня этой сессии → её вкладка «Проводник» (переключение вкладки,
+          // терминал жив; полный путь — чтобы открыть папку И превью файла). Иначе —
+          // обычный файловый браузер на родительской папке.
+          const target = p.root === sessionRoot ? sfilesHash(session, p.rel) : filesHash(p.root, parentRel(p.rel));
           return [
             {
               range: { start: { x: m.index + 1, y: lineNo }, end: { x: m.index + m.length, y: lineNo } },

@@ -255,6 +255,9 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
   let curPath = parsed.path;
   let floor = ''; // корень навигации: '' (дашборд) или путь сессии (session-режим)
   const canWrite = !transport.clientScope || transport.clientScope.write; // мутации файлов
+  let lastEntries: FileEntry[] = []; // последний листинг — чтобы у таргета ссылки понять файл/папка
+  let inited = false; // корень сессии резолвнут — можно реагировать на показ вкладки
+  let lastTarget: string | null = sub; // последний обработанный таргет ссылки (#/sfiles/…/<путь>)
 
   const rootSelect = document.createElement('select');
   rootSelect.className = 'th-input th-files__root';
@@ -271,17 +274,9 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
   bar.append(crumbs);
   main.append(bar, list);
 
-  // Ошибка загрузки: экран с сообщением + «Обновить». retry — что именно перезапускать.
-  let loadFailed = false;
-  let retry: () => void = () => {};
-  const triggerReload = (): void => {
-    loadFailed = false;
-    retry();
-  };
+  // Ошибка загрузки: экран с сообщением + «Обновить» (retryFn — что перезапустить).
   const showError = (message: string, retryFn: () => void): void => {
-    loadFailed = true;
-    retry = retryFn;
-    list.replaceChildren(errorScreen(message, triggerReload));
+    list.replaceChildren(errorScreen(message, retryFn));
   };
 
   // Навигация: dashboard — через hash (пере-монтирование роутером, работает «Назад»);
@@ -386,17 +381,31 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
     }
   };
 
-  const load = async (): Promise<void> => {
+  const load = async (opts?: { silent?: boolean }): Promise<void> => {
     if (!session) lastFilesLoc = { root: curRoot, path: curPath }; // запоминаем (вне session-режима)
     renderCrumbs();
-    list.replaceChildren(spinner());
+    if (!opts?.silent) list.replaceChildren(spinner()); // silent — тихий рефреш без спиннера (при показе вкладки)
     try {
       const entries = await transport.filesList(curRoot, curPath);
-      if (!stopped) render(entries);
+      if (stopped) return;
+      lastEntries = entries;
+      render(entries);
     } catch (err) {
       if (stopped) return;
       showError(err instanceof Error ? err.message : t('files.error'), () => void load());
     }
+  };
+
+  /** Открыть цель ссылки (полный путь rel к корню): показать РОДИТЕЛЬСКУЮ папку и,
+   *  если это файл (есть в листинге) — сразу открыть его превью. */
+  const openTarget = async (targetRel: string): Promise<void> => {
+    const slash = targetRel.lastIndexOf('/');
+    curPath = slash < 0 ? '' : targetRel.slice(0, slash);
+    const name = slash < 0 ? targetRel : targetRel.slice(slash + 1);
+    await load();
+    if (stopped) return;
+    const entry = lastEntries.find((e) => e.name === name);
+    if (entry?.kind === 'file') openFileModal(transport, curRoot, targetRel, name);
   };
 
   rootSelect.addEventListener('change', () => navigate(rootSelect.value, ''));
@@ -441,8 +450,15 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
           }
           curRoot = res.root;
           floor = res.subpath; // папка сессии — корень навигации (не выше неё)
-          if (sub === null) curPath = res.subpath; // по умолчанию — ровно путь сессии
-          void load();
+          inited = true;
+          const target = parseSessionSub('sfiles'); // актуальный таргет из hash
+          lastTarget = target;
+          if (target === null) {
+            curPath = res.subpath; // по умолчанию — ровно путь сессии
+            void load();
+          } else {
+            void openTarget(target); // ссылка: родительская папка + превью файла
+          }
         })
         .catch(() => {
           if (!stopped) showError(t('files.error'), startLoading);
@@ -462,12 +478,20 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
     }
   };
 
-  // Повторное открытие вкладки (session-режим, вид живёт в workspace): если прошлая
-  // загрузка провалилась — перезагружаем при показе (workspace ставит .is-active).
+  // Показ вкладки (session-режим, вид живёт в workspace, workspace ставит .is-active):
+  // другой таргет из hash (новая ссылка) → навигация + превью файла; иначе — тихо
+  // перечитать текущую папку (содержимое могло измениться, файл ссылки мог появиться).
   let obs: MutationObserver | null = null;
   if (session) {
     obs = new MutationObserver(() => {
-      if (loadFailed && root.classList.contains('is-active')) triggerReload();
+      if (!inited || !root.classList.contains('is-active')) return;
+      const hashSub = parseSessionSub('sfiles');
+      if (hashSub !== null && hashSub !== lastTarget) {
+        lastTarget = hashSub;
+        void openTarget(hashSub);
+      } else {
+        void load({ silent: true });
+      }
     });
     obs.observe(root, { attributes: true, attributeFilter: ['class'] });
   }

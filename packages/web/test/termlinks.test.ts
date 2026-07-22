@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectPaths, filePathParts, filesTargetForPath } from '../src/termlinks';
+import { detectPaths, filePathParts, filesTargetForPath, parentRel } from '../src/termlinks';
 
 describe('detectPaths', () => {
   it('находит абсолютный путь и его диапазон', () => {
@@ -78,28 +78,36 @@ describe('filesTargetForPath', () => {
   });
 });
 
-describe('filePathParts', () => {
+describe('filePathParts / parentRel', () => {
   const roots = ['/Users/me/projects', '/Users/me/projects/Sprut'];
 
-  it('файл под самым длинным корнем → {root, sub=родительская папка}', () => {
+  it('путь под самым длинным корнем → {root, rel=полный путь}', () => {
     expect(filePathParts('/Users/me/projects/Sprut/app/main.ts', roots)).toEqual({
       root: '/Users/me/projects/Sprut',
-      sub: 'app',
+      rel: 'app/main.ts',
     });
   });
 
-  it('файл прямо в корне → sub пустой', () => {
-    expect(filePathParts('/Users/me/projects/readme.md', roots)).toEqual({ root: '/Users/me/projects', sub: '' });
+  it('файл прямо в корне → rel = имя файла', () => {
+    expect(filePathParts('/Users/me/projects/readme.md', roots)).toEqual({
+      root: '/Users/me/projects',
+      rel: 'readme.md',
+    });
   });
 
   it('путь вне корней → null', () => {
     expect(filePathParts('/etc/hosts', roots)).toBeNull();
   });
 
-  it('относительный резолвится от cwd', () => {
+  it('относительный резолвится от cwd (rel полный)', () => {
     expect(filePathParts('docs/x.md', roots, '/Users/me/projects/TermHub')).toEqual({
       root: '/Users/me/projects',
-      sub: 'TermHub/docs',
+      rel: 'TermHub/docs/x.md',
     });
+  });
+
+  it('parentRel — родительская папка', () => {
+    expect(parentRel('app/main.ts')).toBe('app');
+    expect(parentRel('readme.md')).toBe('');
   });
 });
