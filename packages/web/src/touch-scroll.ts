@@ -1,38 +1,53 @@
-// Мобильный скролл терминала. xterm форвардит в приложение (tmux) только
-// mouse/wheel-события, но НЕ touch (см. bindMouse в @xterm/xterm) — поэтому на
-// телефоне драг пальцем не доходит до tmux, а нативный скролл вьюпорта (пустого
-// под alt-screen tmux) уводит жест в документ: прокрутка страницы и pull-to-
-// refresh. Транслируем вертикальный драг в синтетические wheel-события на корне
-// xterm — его штатный обработчик пробрасывает их в pane как скролл истории.
-// После отпускания — инерция (momentum): продолжаем слать wheel с затухающей
-// скоростью, как нативный тач-скролл.
+// Мобильный скролл терминала. Гибрид:
+//  • обычный экран (normal buffer) — листаем ЛОКАЛЬНЫЙ scrollback xterm (мгновенно,
+//    без relay): двигаем .xterm-viewport напрямую;
+//  • alt-screen (полноэкранный TUI: vim/less/…, и Claude Code, если он в full-screen) —
+//    у xterm истории нет, поэтому форвардим вертикальный драг в синтетические wheel на
+//    корень xterm; его обработчик (при tmux mouse on) шлёт их в приложение — скролл идёт
+//    через relay.
+// xterm форвардит в приложение только mouse/wheel (не touch), а нативный скролл вьюпорта
+// увёл бы жест в документ (прокрутка страницы / pull-to-refresh) — поэтому перехватываем.
+// После отпускания — инерция (momentum) с затуханием, как нативный тач-скролл.
+
+/** Минимум от xterm-терминала, нужный для скролла (для лёгкости и тестируемости). */
+interface ScrollTerm {
+  element?: HTMLElement;
+  buffer: { active: { readonly type: 'normal' | 'alternate' } };
+}
 
 const FRICTION = 0.95; // множитель скорости за кадр ~16мс (деселерация инерции)
 const MIN_VELOCITY = 0.05; // px/мс — ниже инерцию не запускаем и останавливаем
 const IDLE_STOP_MS = 90; // пауза перед отпусканием дольше этого → без инерции (не флик)
 
-/** Вешает трансляцию вертикального тач-драга в wheel + инерцию после отпускания.
- *  surface — где ловим касания (host терминала), target — куда шлём wheel (корень
- *  .xterm). Возвращает функцию снятия слушателей. */
-export function enableTouchScroll(surface: HTMLElement, target: HTMLElement): () => void {
+/** Вешает тач-скролл терминала (гибрид локальный/relay) + инерцию. surface — где ловим
+ *  касания (host терминала), term — экземпляр xterm. Возвращает функцию снятия. */
+export function enableTouchScroll(surface: HTMLElement, term: ScrollTerm): () => void {
   let active = false;
   let lastX = 0;
   let lastY = 0;
   let lastT = 0; // время последнего move (для скорости)
-  let velocity = 0; // px/мс, знак = направление wheel
+  let velocity = 0; // px/мс, знак = направление скролла
   let raf = 0;
+  let altAtStart = false; // режим фиксируем на старте жеста (весь драг + инерция единообразны)
 
-  const sendWheel = (dy: number): void => {
-    target.dispatchEvent(
-      new WheelEvent('wheel', {
-        deltaY: dy,
-        deltaMode: 0,
-        clientX: lastX,
-        clientY: lastY,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+  const scrollBy = (dy: number): void => {
+    if (altAtStart) {
+      // alt-screen: форвардим wheel в приложение (tmux/TUI) — локальной истории нет.
+      (term.element ?? surface).dispatchEvent(
+        new WheelEvent('wheel', {
+          deltaY: dy,
+          deltaMode: 0,
+          clientX: lastX,
+          clientY: lastY,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    } else {
+      // обычный экран: двигаем локальный scrollback xterm напрямую (без relay).
+      const vp = term.element?.querySelector('.xterm-viewport') as HTMLElement | null;
+      if (vp) vp.scrollTop += dy;
+    }
   };
 
   const stopMomentum = (): void => {
@@ -40,7 +55,7 @@ export function enableTouchScroll(surface: HTMLElement, target: HTMLElement): ()
     raf = 0;
   };
 
-  // Инерция: каждый кадр шлём wheel на velocity*dt и гасим velocity трением.
+  // Инерция: каждый кадр скроллим на velocity*dt и гасим velocity трением.
   const startMomentum = (): void => {
     let prev = 0;
     const step = (ts: number): void => {
@@ -50,7 +65,7 @@ export function enableTouchScroll(surface: HTMLElement, target: HTMLElement): ()
         raf = 0;
         return;
       }
-      sendWheel(velocity * dt);
+      scrollBy(velocity * dt);
       velocity *= Math.pow(FRICTION, dt / 16);
       raf = requestAnimationFrame(step);
     };
@@ -65,6 +80,7 @@ export function enableTouchScroll(surface: HTMLElement, target: HTMLElement): ()
       return;
     }
     active = true;
+    altAtStart = term.buffer.active.type === 'alternate';
     lastX = e.touches[0]!.clientX;
     lastY = e.touches[0]!.clientY;
     lastT = e.timeStamp;
@@ -74,8 +90,7 @@ export function enableTouchScroll(surface: HTMLElement, target: HTMLElement): ()
   const onMove = (e: TouchEvent): void => {
     if (!active || e.touches.length !== 1) return;
     const t = e.touches[0]!;
-    // Палец вниз (clientY растёт) → dy<0 → wheel вверх → tmux листает к истории
-    // (совпадает с нативным тач-скроллом: тянешь вниз — уезжаешь назад).
+    // Палец вниз (clientY растёт) → dy<0 → скролл к истории (совпадает с нативным).
     const dy = lastY - t.clientY;
     const dt = e.timeStamp - lastT;
     lastX = t.clientX;
@@ -86,7 +101,7 @@ export function enableTouchScroll(surface: HTMLElement, target: HTMLElement): ()
     // Нативный овербаунс/скролл страницы гасим всегда, даже при dy===0.
     if (e.cancelable) e.preventDefault();
     if (dy === 0) return;
-    sendWheel(dy);
+    scrollBy(dy);
   };
 
   const onEnd = (e: TouchEvent): void => {

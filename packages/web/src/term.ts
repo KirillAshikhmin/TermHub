@@ -321,7 +321,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   // страницу/pull-to-refresh). Цель — .xterm; если ещё не создан, host.
   // По умолчанию тач-драг скроллит историю; в режиме выделения (тумблер в панели)
   // тот же драг выделяет текст для копирования — активен ровно один из двух.
-  let stopTouchScroll: (() => void) | null = enableTouchScroll(host, term.element ?? host);
+  let stopTouchScroll: (() => void) | null = enableTouchScroll(host, term);
   let stopTouchSelect: (() => void) | null = null;
   const applySelectMode = (enabled: boolean): void => {
     if (enabled) {
@@ -333,7 +333,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     } else {
       stopTouchSelect?.();
       stopTouchSelect = null;
-      stopTouchScroll = enableTouchScroll(host, term.element ?? host);
+      stopTouchScroll = enableTouchScroll(host, term);
     }
   };
   // ── Экранная клавиатура (чекбокс в панели) ───────────────────────────
