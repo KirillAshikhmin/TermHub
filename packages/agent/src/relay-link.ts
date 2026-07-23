@@ -61,7 +61,7 @@ interface FilesCtl {
   copy(root: string, subpath: string, destRoot: string, dest: string): Promise<void>;
   writeFile(root: string, subpath: string, content: string): Promise<void>;
 }
-import { attachTerminal, type TerminalHandle } from './bridge.js';
+import { attachTerminal, restoreScrollback, type TerminalHandle } from './bridge.js';
 import { runRepoAction } from './vcs.js';
 import { runFileOp } from './files.js';
 import type { VcsService } from './vcs.js';
@@ -847,6 +847,7 @@ export class RelayLink {
       socketName: this.socketName,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
+      restore: restoreScrollback, // при (пере)подключении дотянуть историю (тот же путь, что LAN)
       onData: (b) => this.sendFrameBytes(s, encodeFrame({ type: FrameType.Data, channel, payload: b })),
       onBell: (sess) => this.sendFrameBytes(s, jsonFrame(FrameType.Bell, channel, { session: sess })),
       onExit: () => {

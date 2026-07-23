@@ -1,13 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawn } from 'node-pty';
 import { encodeFrame, jsonFrame, decodeFrame, FrameType } from '@termhub/protocol';
-import { attachTerminal, wireTerminalWs } from '../src/bridge.js';
+import { attachTerminal, wireTerminalWs, type RestoreFn } from '../src/bridge.js';
 
 // node-pty мокаем целиком: полный контроль над spawn, включая синхронный throw
 // (кейс «бинарь tmux отсутствует»), без реального tmux/pty.
 vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 const mockSpawn = vi.mocked(spawn);
+
+/** Заглушка восстановления истории: синхронно, без реального tmux и без hold-буфера
+ *  (иначе реальный attachTerminal дёрнул бы tmux, а вывод завис бы до async-колбэка). */
+const noRestore: RestoreFn = (_s, _sess, done) => done();
+/** wireTerminalWs с этой заглушкой (реальный restore проверяется в bridge.tmux.test). */
+const wire = (o: Parameters<typeof wireTerminalWs>[0] = {}): ReturnType<typeof wireTerminalWs> =>
+  wireTerminalWs({ restore: noRestore, ...o });
 
 /** Управляемый фейк IPty: перехватывает колбэки и запоминает write/resize/kill. */
 function makeFakePty() {
@@ -296,7 +303,7 @@ describe('wireTerminalWs', () => {
     };
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { ws, emit, getCloseCode } = makeFakeWs();
-    wireTerminalWs({ attach: throwingAttach as never })(ws as never, 'sess');
+    wire({ attach: throwingAttach as never })(ws as never, 'sess');
     expect(() => emit('message', resizeFrame(80, 24))).not.toThrow();
     expect(getCloseCode()).toBe(1011);
     expect(errSpy).toHaveBeenCalled();
@@ -306,7 +313,7 @@ describe('wireTerminalWs', () => {
   it('DATA до первого RESIZE игнорируется — pty не спавнится', () => {
     stubSpawn(() => makeFakePty().pty);
     const { ws, emit } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     emit('message', dataFrame('ls\r'));
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -315,7 +322,7 @@ describe('wireTerminalWs', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const { ws, emit } = makeFakeWs();
-    wireTerminalWs({ socketName: 'sock' })(ws as never, 'sess');
+    wire({ socketName: 'sock' })(ws as never, 'sess');
     emit('message', resizeFrame(80, 24));
     emit('message', resizeFrame(100, 30));
     expect(mockSpawn).toHaveBeenCalledTimes(1);
@@ -326,7 +333,7 @@ describe('wireTerminalWs', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const { ws, emit } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     emit('message', resizeFrame(80, 24));
     emit('message', dataFrame('echo hi\r'));
     expect(Buffer.concat(fake.writes).toString()).toBe('echo hi\r');
@@ -336,7 +343,7 @@ describe('wireTerminalWs', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const { ws, emit, sent } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     emit('message', resizeFrame(80, 24));
     fake.emitData(Buffer.from([0x41, 0x42, 0x07])); // "AB" + BEL
     const frames = sent.map((b) => decodeFrame(new Uint8Array(b)));
@@ -348,7 +355,7 @@ describe('wireTerminalWs', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const { ws, emit, sent, getCloseCode } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     emit('message', resizeFrame(80, 24));
     fake.emitExit();
     const frames = sent.map((b) => decodeFrame(new Uint8Array(b)));
@@ -360,7 +367,7 @@ describe('wireTerminalWs', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const { ws, emit } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     emit('message', resizeFrame(80, 24));
     emit('close');
     expect(fake.isKilled()).toBe(true);
@@ -372,7 +379,7 @@ describe('wireTerminalWs', () => {
       const fake = makeFakePty();
       stubSpawn(() => fake.pty);
       const { ws, emit } = makeFakeWs();
-      wireTerminalWs({})(ws as never, 'sess');
+      wire()(ws as never, 'sess');
       emit('message', resizeFrame(80, 24));
       // Симулируем переполнение WS: send оставит bufferedAmount выше порога паузы.
       ws.bufferedAmount = (1 << 20) + 1;
@@ -395,7 +402,7 @@ describe('wireTerminalWs', () => {
   it('текстовый (не бинарный) ws-фрейм игнорируется — pty не спавнится', () => {
     stubSpawn(() => makeFakePty().pty);
     const { ws, emit } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     emit('message', resizeFrame(80, 24), false); // isBinary=false → отказ
     expect(mockSpawn).not.toHaveBeenCalled();
   });
@@ -403,7 +410,7 @@ describe('wireTerminalWs', () => {
   it('битый/нефреймовый message игнорируется без падения', () => {
     stubSpawn(() => makeFakePty().pty);
     const { ws, emit } = makeFakeWs();
-    wireTerminalWs({})(ws as never, 'sess');
+    wire()(ws as never, 'sess');
     expect(() => emit('message', Buffer.from([0x00]))).not.toThrow(); // короче заголовка
     expect(mockSpawn).not.toHaveBeenCalled();
   });

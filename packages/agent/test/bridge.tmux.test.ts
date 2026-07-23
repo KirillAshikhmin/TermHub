@@ -138,4 +138,35 @@ describe.skipIf(!tmuxAvailable)('TerminalBridge — реальный tmux + WS (
     const list = tmux(['list-sessions', '-F', '#{session_name}']);
     expect(list).toContain('bridge');
   }, 25000);
+
+  it('подключение восстанавливает историю: строки выше текущего экрана + RESET', async () => {
+    const cookie = await login();
+
+    // Готовим историю: MARK-TOP уедет далеко за 24-строчный экран (плейн-attach его не
+    // покажет — только текущий экран у дна). Восстановление обязано дотянуть его из tmux.
+    tmux(['send-keys', '-t', 'bridge', 'echo MARK-TOP-UNIQUE; seq 1 300; echo MARK-BOTTOM', 'Enter']);
+    expect(await waitFor(() => capturePane().includes('MARK-BOTTOM'), 8000)).toBe(true);
+    await delay(300); // prompt вернулся, история зафиксирована
+
+    const wsUrl = `${base.replace('http', 'ws')}/ws/term/bridge`;
+    const ws = new WebSocket(wsUrl, { headers: { cookie } });
+    let output = '';
+    const decoder = new TextDecoder();
+    ws.on('message', (data: Buffer) => {
+      const frame = decodeFrame(new Uint8Array(data));
+      if (frame.type === FrameType.Data) output += decoder.decode(frame.payload, { stream: true });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    ws.send(jsonFrame(FrameType.Resize, CHANNEL, { cols: 80, rows: 24 }));
+
+    // MARK-TOP (за экраном) должен прийти клиенту, с RESET-префиксом (очистка перед перерисовкой).
+    expect(await waitFor(() => output.includes('MARK-TOP-UNIQUE'), 8000)).toBe(true);
+    expect(output).toContain('\x1b[3J');
+
+    ws.close();
+    await new Promise<void>((resolve) => ws.once('close', () => resolve()));
+  }, 30000);
 });

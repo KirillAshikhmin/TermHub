@@ -2,6 +2,8 @@
 // о WS: спавнит pty на `tmux attach`, отдаёт вывод байтами и сигналит о BEL/выходе.
 // wireTerminalWs строит из неё обработчик терминальных WS для AgentServer.
 
+import { execFile } from 'node:child_process';
+
 import { spawn } from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { WebSocket, RawData } from 'ws';
@@ -23,6 +25,22 @@ const WS_HIGH_WATER = 1 << 20; // 1 MiB — порог паузы pty
 const WS_LOW_WATER = 256 * 1024; // 256 KiB — порог возобновления
 const WS_DRAIN_INTERVAL_MS = 50; // период опроса bufferedAmount при паузе
 
+/** Восстановление истории при (пере)подключении. `tmux attach` рисует только текущий
+ *  экран — всё, что натекло, пока клиент был в оффлайне (частый мобильный паттерн:
+ *  свернул надолго, вернулся к результату), остаётся лишь в scrollback tmux. Поэтому на
+ *  attach дотягиваем последние RESTORE_LINES строк истории и перерисовываем клиент —
+ *  чтобы виден был весь вывод без пропусков. Значение = scrollback xterm на клиенте
+ *  (term.ts): тянуть больше бессмысленно — клиент столько не удержит; меньше — после
+ *  RESET у клиента осталось бы истории меньше, чем он способен показать. tmux
+ *  history-limit (50000) — верхняя граница того, что вообще доступно. */
+const RESTORE_LINES = 20000;
+const RESTORE_MAX_BUFFER = 32 * 1024 * 1024; // capture-pane 10k строк с ANSI — с запасом
+/** Перед дампом истории: очистить scrollback (3J) + экран (2J) + курсор в home —
+ *  иначе перерисовка легла бы поверх старого буфера (дубли/наложение). */
+const RESET_SEQ = '\x1b[3J\x1b[2J\x1b[H';
+/** Куски дампа истории: лимит WS-сообщения relay 16 МБ + плавность отдачи. */
+const RESTORE_CHUNK = 256 * 1024;
+
 /** Управление живым pty поверх tmux-сессии. */
 export interface TerminalHandle {
   write(b: Uint8Array): void;
@@ -40,6 +58,56 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.trunc(value)));
 }
 
+/** Восстановление истории при подключении: тянет scrollback сессии и отдаёт «дамп»
+ *  (RESET + строки) в done, либо done() без дампа. Инъектируется в тестах (по умолчанию —
+ *  restoreScrollback), чтобы юниты не дёргали реальный tmux. */
+export type RestoreFn = (
+  socketName: string | undefined,
+  session: string,
+  done: (dump?: Buffer) => void,
+) => void;
+
+/** Тянет последние RESTORE_LINES строк scrollback tmux (с ANSI-цветом) и отдаёт их как
+ *  «дамп» (RESET + история) для перерисовки клиента при подключении. На alt-screen
+ *  (полноэкранный TUI: vim/less/…) истории нет — возвращает undefined (перерисовывать
+ *  нечего, обычный attach сам покажет экран). execFile без shell (анти-RCE), сокет — тот
+ *  же, что у attach. Любая ошибка не фатальна: тогда просто без дампа (штатный attach). */
+export function restoreScrollback(
+  socketName: string | undefined,
+  session: string,
+  done: (dump?: Buffer) => void,
+): void {
+  const sock = socketName ? ['-L', socketName] : [];
+  // capture-pane/display-message — pane-команды: префикс «=» они НЕ парсят («can't find
+  // pane»), поэтому цель — plain-имя сессии. Безопасно: имя валидируется как [\w-] (без
+  // «:»/«.» — разделителей target у tmux), поэтому резолвится в активный пейн этой сессии.
+  const target = session;
+  // alt-screen? тогда scrollback неактуален — дамп пропускаем.
+  execFile('tmux', [...sock, 'display-message', '-p', '-t', target, '#{alternate_on}'], { encoding: 'utf8' }, (err, altOut) => {
+    if (err || String(altOut).trim() === '1') {
+      done();
+      return;
+    }
+    execFile(
+      'tmux',
+      [...sock, 'capture-pane', '-p', '-e', '-t', target, '-S', `-${RESTORE_LINES}`],
+      { encoding: 'utf8', maxBuffer: RESTORE_MAX_BUFFER },
+      (err2, capOut) => {
+        const text = typeof capOut === 'string' ? capOut : '';
+        if (err2 || !text) {
+          done();
+          return;
+        }
+        // capture-pane разделяет строки '\n'; xterm в raw-режиме без CR даёт «лесенку» —
+        // переводим в CRLF. Хвостовые пустые строки убираем: живой attach-repaint дорисует
+        // текущий экран поверх (абсолютное позиционирование), лишний перевод не нужен.
+        const body = text.replace(/\n+$/, '').replace(/\n/g, '\r\n');
+        done(Buffer.from(RESET_SEQ + body));
+      },
+    );
+  });
+}
+
 /** Спавнит pty на `tmux attach` к сессии и связывает её вывод с колбэками.
  *  Знанием о WS не обладает — обвязку строит wireTerminalWs. */
 export function attachTerminal(opts: {
@@ -50,6 +118,9 @@ export function attachTerminal(opts: {
   onData: (b: Uint8Array) => void;
   onExit: () => void;
   onBell: (session: string) => void;
+  /** Восстановление истории при подключении. Не задан → вывод не придерживаем и историю
+   *  не тянем (низкоуровневый режим). Прод-вызыватели передают restoreScrollback. */
+  restore?: RestoreFn;
 }): TerminalHandle {
   const args = [...(opts.socketName ? ['-L', opts.socketName] : []), 'attach', '-t', `=${opts.session}`];
   const child: IPty = spawn('tmux', args, {
@@ -64,18 +135,24 @@ export function attachTerminal(opts: {
 
   let disposed = false;
 
+  // Восстановление истории при (пере)подключении: если задан restore — пока не отдан дамп
+  // недавнего scrollback tmux, живой вывод pty (в т.ч. начальную перерисовку экрана от
+  // `tmux attach`) копим в held и отдаём ПОСЛЕ дампа. Иначе RESET в начале дампа затёр бы
+  // уже пришедшее (= потеря вывода после долгого оффлайна). Без restore — не придерживаем.
+  const restore = opts.restore;
+  let holding = restore !== undefined;
+  const held: Buffer[] = [];
+
   // Скан на «звонок» с переносом состояния между чанками: BEL (0x07) считается
   // звонком, только если он НЕ терминатор OSC-последовательности. Shell ставит
   // заголовок окна `ESC ] 0 ; … BEL` на каждом приглашении — наивный indexOf(BEL)
   // сигналил бы звонком почти на каждую команду. Стейт-машина: `ESC ]` → inOsc;
   // в OSC байт BEL или `ESC \` (ST) завершает OSC (это НЕ звонок); BEL вне OSC →
-  // настоящий звонок. inOsc/escPending живут вне onData — состояние тянется через
+  // настоящий звонок. inOsc/escPending живут вне scanBell — состояние тянется через
   // границу чанков (OSC может быть разорван между двумя onData).
   let inOsc = false;
   let escPending = false;
-
-  const onDataDisp = child.onData((chunk: string): void => {
-    const bytes = chunk as unknown as Buffer;
+  const scanBell = (bytes: Buffer): boolean => {
     let bell = false;
     for (let i = 0; i < bytes.length; i += 1) {
       const b = bytes[i];
@@ -96,13 +173,45 @@ export function attachTerminal(opts: {
       }
       if (b === BEL) bell = true; // настоящий звонок (эмитим один раз на чанк)
     }
-    if (bell) opts.onBell(opts.session);
+    return bell;
+  };
+
+  const emit = (bytes: Buffer): void => {
+    if (disposed) return;
+    if (scanBell(bytes)) opts.onBell(opts.session);
     opts.onData(bytes);
+  };
+
+  const onDataDisp = child.onData((chunk: string): void => {
+    const bytes = chunk as unknown as Buffer;
+    if (holding) {
+      held.push(bytes); // до готовности дампа — копим (звонки из истории не эмитим)
+      return;
+    }
+    emit(bytes);
   });
+
+  // Снимает hold: отдаёт дамп истории (если есть), затем весь накопленный живой вывод.
+  const release = (dump?: Buffer): void => {
+    if (!holding) return;
+    holding = false;
+    if (!disposed && dump) {
+      // Режем на куски (лимит WS-сообщения relay 16 МБ + плавность); порядок сохраняем.
+      for (let i = 0; i < dump.length && !disposed; i += RESTORE_CHUNK) {
+        opts.onData(dump.subarray(i, i + RESTORE_CHUNK));
+      }
+    }
+    for (const b of held) emit(b); // emit сам проверит disposed
+    held.length = 0;
+  };
+
+  // Тянем недавнюю историю tmux и снимаем hold. Ошибка/alt-screen → release() без дампа.
+  if (restore) restore(opts.socketName, opts.session, release);
 
   const onExitDisp = child.onExit((): void => {
     if (disposed) return;
     disposed = true;
+    release(); // выход до готовности дампа — снять hold, не подвесить held
     onDataDisp.dispose();
     onExitDisp.dispose();
     opts.onExit();
@@ -152,6 +261,8 @@ function toBuffer(data: RawData): Buffer {
 export function wireTerminalWs(opts: {
   socketName?: string;
   attach?: typeof attachTerminal;
+  /** Восстановление истории (проброс в attachTerminal; в тестах — заглушка). */
+  restore?: RestoreFn;
 }): (ws: WebSocket, session: string) => void {
   const attach = opts.attach ?? attachTerminal;
   return (ws: WebSocket, session: string): void => {
@@ -205,6 +316,7 @@ export function wireTerminalWs(opts: {
             socketName: opts.socketName,
             cols: dims.cols,
             rows: dims.rows,
+            restore: opts.restore ?? restoreScrollback,
             onData: (b) => send(encodeFrame({ type: FrameType.Data, channel: LAN_CHANNEL, payload: b })),
             onBell: (s) => send(jsonFrame(FrameType.Bell, LAN_CHANNEL, { session: s })),
             onExit: () => {
