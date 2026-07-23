@@ -40,6 +40,84 @@ ports 80/443 are open. Caddy will obtain and renew the certificate itself; it
 proxies the WebSocket upgrade (`/relay`) transparently — nothing extra needs to
 be configured.
 
+## Relay on a non-standard port (reusing an existing certificate)
+
+If ports 80/443 on the VPS are already taken by other services, the relay can
+live on any port (say, `5525`) and reuse a Let's Encrypt certificate that is
+already issued for this host. Since the service is distinguished by port rather
+than by name, the relay can use **the same domain name as the other services** —
+then the existing certificate fits as is. If you want a separate subdomain,
+make sure the certificate covers it (wildcard or a SAN entry).
+
+Open `5525/tcp` in the firewall and pick one of the two options.
+
+**Option A — TLS is terminated by the nginx already on the host** (simplest if
+the certificate is managed by nginx + certbot: renewal is already wired up).
+In `docker-compose.yml` uncomment `RELAY_TRUST_PROXY: "1"` for the `relay`
+service and bind its port to localhost only (`"127.0.0.1:9720:9720"`), start
+without the `tls` profile (`docker compose up -d`), and add an nginx server
+block. The WebSocket headers are mandatory and the timeouts must be long — the
+agent↔relay connection stays open permanently:
+
+```nginx
+server {
+    listen 5525 ssl;
+    server_name example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:9720;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}
+```
+
+Certificate renewal keeps working as before (certbot reloads nginx itself).
+
+**Option B — the bundled Caddy with the certificate files mounted in.**
+Rewrite `Caddyfile.example`: a site on port 5525, TLS from files rather than
+ACME (an explicit `tls <cert> <key>` disables automatic issuance — Caddy won't
+touch the occupied ports 80/443):
+
+```
+example.com:5525 {
+	tls /certs/live/example.com/fullchain.pem /certs/live/example.com/privkey.pem
+	encode zstd gzip
+	reverse_proxy relay:9720
+}
+```
+
+In `docker-compose.yml`: for `relay` uncomment `RELAY_TRUST_PROXY: "1"` and
+remove the `9720:9720` publish; for `caddy` replace the ports with
+`"5525:5525"` and add a volume `/etc/letsencrypt:/certs:ro`. Mount the whole
+`/etc/letsencrypt`, not just `live/` — it contains symlinks into
+`../../archive/` that break without the parent directory. Start with
+`docker compose --profile tls up -d`.
+
+Renewal: certbot updates the files, but Caddy with an explicit `tls` directive
+won't re-read them by itself. Add a deploy hook
+`/etc/letsencrypt/renewal-hooks/deploy/termhub-caddy.sh` (`chmod +x`):
+
+```bash
+#!/bin/sh
+docker compose -f /path/to/TermHub/docker-compose.yml --profile tls restart caddy
+```
+
+Verify (either option): `curl https://example.com:5525/healthz`, and in the
+browser `https://example.com:5525` shows the TermHub web UI with a valid
+certificate. Everywhere below, addresses then include the port: `relayUrl` =
+`wss://example.com:5525/relay`, pairing at `https://example.com:5525`. A
+non-standard port is no obstacle to installing the PWA or to Web Push — only a
+valid HTTPS certificate matters.
+
 ## Configuring the agent for the relay
 
 `~/.termhub/config.json` must specify `relayUrl` — **the full ws(s) address,
