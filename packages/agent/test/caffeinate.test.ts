@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { Caffeinate } from '../src/caffeinate.js';
+import { Caffeinate, sleepInhibitorCmd, sleepInhibitSupported } from '../src/caffeinate.js';
 
 /** Фейковый дочерний процесс: копит слушатели, умеет «умереть» и посчитать kill. */
 function fakeProc() {
@@ -68,5 +68,39 @@ describe('Caffeinate', () => {
     const caf = new Caffeinate({ spawn: () => fakeProc(), supported: true });
     expect(() => caf.set(false)).not.toThrow();
     expect(caf.isActive()).toBe(false);
+  });
+});
+
+describe('sleepInhibitorCmd', () => {
+  it('macOS → caffeinate -ims', () => {
+    expect(sleepInhibitorCmd('darwin')).toEqual({ cmd: 'caffeinate', args: ['-ims'] });
+  });
+
+  it('Linux → systemd-inhibit … sleep infinity (блокирует sleep/idle)', () => {
+    const c = sleepInhibitorCmd('linux');
+    expect(c?.cmd).toBe('systemd-inhibit');
+    expect(c?.args).toContain('--what=sleep:idle');
+    expect(c?.args).toContain('--mode=block');
+    expect(c?.args.slice(-2)).toEqual(['sleep', 'infinity']);
+  });
+
+  it('прочие платформы → null (не поддерживается)', () => {
+    expect(sleepInhibitorCmd('win32')).toBeNull();
+  });
+});
+
+describe('sleepInhibitSupported', () => {
+  it('macOS всегда поддерживается', () => {
+    expect(sleepInhibitSupported('darwin')).toBe(true);
+  });
+
+  it('прочие (не Linux/не macOS) — нет', () => {
+    expect(sleepInhibitSupported('win32')).toBe(false);
+  });
+
+  // Linux зависит от наличия /run/systemd/system — проверяем, что возвращается boolean
+  // без падения (реальное значение зависит от среды запуска теста).
+  it('Linux → boolean (по наличию работающего systemd)', () => {
+    expect(typeof sleepInhibitSupported('linux')).toBe('boolean');
   });
 });

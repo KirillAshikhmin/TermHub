@@ -13,6 +13,9 @@ import {
   logPath,
   parseStatus,
   isNotFoundError,
+  buildUnit,
+  systemdUnitPath,
+  parseSystemdStatus,
 } from '../src/service.js';
 
 const OPTS = {
@@ -127,6 +130,65 @@ describe('parseStatus', () => {
 
   it('reports loaded (but not running) when exit is 0 without a running state', () => {
     expect(parseStatus(0, 'state = waiting\n')).toBe('loaded');
+  });
+});
+
+describe('buildUnit (systemd --user)', () => {
+  const U = {
+    execPath: '/usr/bin/node',
+    binPath: '/home/alice/TermHub/packages/agent/bin/termhub.js',
+    home: '/home/alice',
+    path: '/usr/local/bin:/usr/bin:/bin',
+    lang: 'C.UTF-8',
+  };
+  const unit = buildUnit(U);
+
+  it('has [Unit], [Service] and [Install] sections', () => {
+    expect(unit).toContain('[Unit]');
+    expect(unit).toContain('[Service]');
+    expect(unit).toContain('[Install]');
+  });
+
+  it('ExecStart runs node + termhub.js start (quoted paths)', () => {
+    expect(unit).toContain(`ExecStart="${U.execPath}" "${U.binPath}" start`);
+  });
+
+  it('restarts on failure and is wanted by default.target', () => {
+    expect(unit).toContain('Restart=on-failure');
+    expect(unit).toContain('WantedBy=default.target');
+  });
+
+  it('passes install-time PATH and a UTF-8 LANG via Environment', () => {
+    expect(unit).toContain(`Environment="PATH=${U.path}"`);
+    expect(unit).toContain(`Environment="LANG=${U.lang}"`);
+  });
+
+  it('escapes the systemd specifier «%» in values', () => {
+    const u = buildUnit({ ...U, home: '/home/a%b' });
+    expect(u).toContain('WorkingDirectory="/home/a%%b"');
+  });
+});
+
+describe('systemdUnitPath', () => {
+  it('is absolute, under ~/.config/systemd/user, named after the label', () => {
+    const p = systemdUnitPath();
+    expect(path.isAbsolute(p)).toBe(true);
+    expect(p).toBe(path.join(os.homedir(), '.config', 'systemd', 'user', `${SERVICE_LABEL}.service`));
+  });
+});
+
+describe('parseSystemdStatus', () => {
+  it('not-installed when the unit file is absent', () => {
+    expect(parseSystemdStatus(false, 'inactive')).toBe('not-installed');
+  });
+
+  it('running when the unit exists and is-active reports active', () => {
+    expect(parseSystemdStatus(true, 'active\n')).toBe('running');
+  });
+
+  it('loaded when the unit exists but is not active', () => {
+    expect(parseSystemdStatus(true, 'inactive\n')).toBe('loaded');
+    expect(parseSystemdStatus(true, 'failed\n')).toBe('loaded');
   });
 });
 

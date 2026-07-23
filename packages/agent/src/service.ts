@@ -1,7 +1,9 @@
-// Команда `termhub service install|uninstall|status`: LaunchAgent для автозапуска
-// агента на macOS. install пишет plist в ~/Library/LaunchAgents и регистрирует его
-// через `launchctl bootstrap` (актуальный launchd API); uninstall снимает через
-// `launchctl bootout` и удаляет plist; status спрашивает `launchctl print`.
+// Команда `termhub service install|uninstall|status`: автозапуск агента.
+//  • macOS: LaunchAgent — plist в ~/Library/LaunchAgents, регистрация через
+//    `launchctl bootstrap` (uninstall — `bootout`, status — `launchctl print`).
+//  • Linux: systemd user-юнит в ~/.config/systemd/user, `systemctl --user enable --now`
+//    (uninstall — `disable --now`, status — `is-active`); enable-linger для старта на
+//    загрузке без активной сессии. Диспетчеризация по process.platform.
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -95,9 +97,9 @@ ${argsXml}
 `;
 }
 
-// ── launchctl ────────────────────────────────────────────────────────────────
+// ── launchctl (macOS) ──────────────────────────────────────────────────────────
 
-interface LaunchctlResult {
+interface CmdResult {
   code: number;
   stdout: string;
   stderr: string;
@@ -105,7 +107,7 @@ interface LaunchctlResult {
 
 /** Запускает launchctl (execFile — без shell) и нормализует результат: код возврата
  *  всегда число (0 при успехе), даже если сам процесс упал. */
-async function launchctl(args: string[]): Promise<LaunchctlResult> {
+async function launchctl(args: string[]): Promise<CmdResult> {
   try {
     const { stdout, stderr } = await execFileAsync('launchctl', args);
     return { code: 0, stdout, stderr };
@@ -133,9 +135,9 @@ export function parseStatus(exitCode: number, stdout: string): ServiceStatus {
   return /state = running/.test(stdout) ? 'running' : 'loaded';
 }
 
-// ── Подкоманды ───────────────────────────────────────────────────────────────
+// ── Подкоманды (macOS / launchd) ─────────────────────────────────────────────
 
-async function installCommand(): Promise<number> {
+async function macInstallCommand(): Promise<number> {
   const plist = plistPath();
   const log = logPath();
   const content = buildPlist({
@@ -182,7 +184,7 @@ export function isNotFoundError(stderr: string): boolean {
   return /No such process|Could not find|not found/i.test(stderr);
 }
 
-async function uninstallCommand(): Promise<number> {
+async function macUninstallCommand(): Promise<number> {
   const result = await launchctl(['bootout', `gui/${currentUid()}/${SERVICE_LABEL}`]);
   if (result.code !== 0 && !isNotFoundError(result.stderr)) {
     console.error(`launchctl bootout failed: ${result.stderr.trim() || `code ${result.code}`}`);
@@ -196,7 +198,7 @@ async function uninstallCommand(): Promise<number> {
   return 0;
 }
 
-async function statusCommand(): Promise<number> {
+async function macStatusCommand(): Promise<number> {
   const result = await launchctl(['print', `gui/${currentUid()}/${SERVICE_LABEL}`]);
   const status = parseStatus(result.code, result.stdout);
   if (status === 'running') {
@@ -211,16 +213,165 @@ async function statusCommand(): Promise<number> {
   return 1;
 }
 
-/** Точка входа команды `termhub service install|uninstall|status`. */
+// ── systemd --user (Linux) ─────────────────────────────────────────────────────
+
+/** Путь к user-юниту systemd (~/.config/systemd/user/<label>.service). */
+export function systemdUnitPath(): string {
+  return path.join(os.homedir(), '.config', 'systemd', 'user', `${SERVICE_LABEL}.service`);
+}
+
+/** Экранирует значение для unit-файла: спецификатор systemd «%», кавычка, бэкслеш; берёт в кавычки
+ *  (пути/PATH со спецсимволами не должны ломать ExecStart/Environment). */
+function sdQuote(v: string): string {
+  return '"' + v.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+/** Входные данные генерации unit (чистая функция — без ФС). */
+export interface BuildUnitOpts {
+  /** Путь к node (process.execPath). */
+  execPath: string;
+  /** Абсолютный путь к bin/termhub.js. */
+  binPath: string;
+  /** Домашний каталог — WorkingDirectory. */
+  home: string;
+  /** PATH на момент установки: у systemd user-сервиса свой скудный PATH без tmux/claude. */
+  path: string;
+  /** UTF-8 локаль: без неё tmux портит табы-разделители в format-выводе (парсер списка ломается). */
+  lang: string;
+}
+
+/** Генерирует содержимое systemd user-юнита. Логи — в journald (journalctl --user). */
+export function buildUnit(opts: BuildUnitOpts): string {
+  return `[Unit]
+Description=TermHub agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${sdQuote(opts.execPath)} ${sdQuote(opts.binPath)} start
+Restart=on-failure
+RestartSec=2
+WorkingDirectory=${sdQuote(opts.home)}
+Environment=${sdQuote(`PATH=${opts.path}`)}
+Environment=${sdQuote(`LANG=${opts.lang}`)}
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+/** Запускает systemctl --user (execFile — без shell), нормализует результат. */
+async function systemctl(args: string[]): Promise<CmdResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync('systemctl', args);
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+    const code = typeof e.code === 'number' ? e.code : 1;
+    return { code, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+  }
+}
+
+/** Статус по наличию unit-файла и выводу `systemctl --user is-active`. */
+export function parseSystemdStatus(unitExists: boolean, isActiveOut: string): ServiceStatus {
+  if (!unitExists) return 'not-installed';
+  return isActiveOut.trim() === 'active' ? 'running' : 'loaded';
+}
+
+async function linuxInstallCommand(): Promise<number> {
+  const unit = systemdUnitPath();
+  const content = buildUnit({
+    execPath: process.execPath,
+    binPath: binPath(),
+    home: os.homedir(),
+    path: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    lang: process.env.LANG ?? 'C.UTF-8', // на Linux C.UTF-8 гарантированно доступна и UTF-8
+  });
+
+  try {
+    fs.mkdirSync(path.dirname(unit), { recursive: true });
+    fs.writeFileSync(unit, content);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Failed to write systemd unit (${unit}): ${message}`);
+    return 1;
+  }
+
+  await systemctl(['--user', 'daemon-reload']);
+  const enable = await systemctl(['--user', 'enable', '--now', SERVICE_LABEL]);
+  if (enable.code !== 0) {
+    console.error(`systemctl --user enable failed: ${enable.stderr.trim() || `code ${enable.code}`}`);
+    console.error('  A user systemd instance is required (logind session / XDG_RUNTIME_DIR set).');
+    return 1;
+  }
+
+  // enable-linger: агент стартует на загрузке и живёт без активной сессии (headless-сервер).
+  const user = os.userInfo().username;
+  const linger = await execFileAsync('loginctl', ['enable-linger', user]).then(
+    () => true,
+    () => false,
+  );
+
+  console.log(`✓ systemd user service installed: ${unit}`);
+  console.log(`  Logs: journalctl --user -u ${SERVICE_LABEL} -f`);
+  console.log('  The agent starts at boot and restarts on crash (Restart=on-failure).');
+  if (!linger) {
+    console.log('  ⚠ Could not enable lingering (needed to autostart at boot without login).');
+    console.log(`    Run manually: sudo loginctl enable-linger ${user}`);
+  }
+  console.log('  Stop and disable autostart: termhub service uninstall');
+  return 0;
+}
+
+async function linuxUninstallCommand(): Promise<number> {
+  const disable = await systemctl(['--user', 'disable', '--now', SERVICE_LABEL]);
+  const unit = systemdUnitPath();
+  if (fs.existsSync(unit)) fs.rmSync(unit);
+  await systemctl(['--user', 'daemon-reload']);
+  // «не загружен/не найден» — не ошибка (нечего снимать); иное просто сообщаем.
+  if (disable.code !== 0 && !/not loaded|not found|No such file|does not exist/i.test(disable.stderr)) {
+    console.error(`systemctl --user disable reported: ${disable.stderr.trim() || `code ${disable.code}`}`);
+  }
+  console.log(`✓ systemd user service removed: ${unit}`);
+  console.log(`  Note: user lingering (if enabled) left as-is — disable with: sudo loginctl disable-linger ${os.userInfo().username}`);
+  return 0;
+}
+
+async function linuxStatusCommand(): Promise<number> {
+  const unitExists = fs.existsSync(systemdUnitPath());
+  const active = await systemctl(['--user', 'is-active', SERVICE_LABEL]);
+  const status = parseSystemdStatus(unitExists, active.stdout);
+  if (status === 'running') {
+    console.log(`Service is running (${SERVICE_LABEL}).`);
+    return 0;
+  }
+  if (status === 'loaded') {
+    console.log(`Service is installed but not running (${SERVICE_LABEL}). Logs: journalctl --user -u ${SERVICE_LABEL}`);
+    return 0;
+  }
+  console.log('Service is not installed. Install with: termhub service install');
+  return 1;
+}
+
+// ── Диспетчер ──────────────────────────────────────────────────────────────────
+
+/** Точка входа команды `termhub service install|uninstall|status` (macOS + Linux). */
 export async function serviceCommand(args: string[]): Promise<number> {
-  if (process.platform !== 'darwin') {
-    console.error('The `termhub service` command is supported only on macOS (launchd).');
+  const impl =
+    process.platform === 'darwin'
+      ? { install: macInstallCommand, uninstall: macUninstallCommand, status: macStatusCommand }
+      : process.platform === 'linux'
+        ? { install: linuxInstallCommand, uninstall: linuxUninstallCommand, status: linuxStatusCommand }
+        : null;
+  if (!impl) {
+    console.error('The `termhub service` command is supported on macOS (launchd) and Linux (systemd --user).');
     return 1;
   }
   const sub = args[0];
-  if (sub === 'install') return installCommand();
-  if (sub === 'uninstall') return uninstallCommand();
-  if (sub === 'status') return statusCommand();
+  if (sub === 'install') return impl.install();
+  if (sub === 'uninstall') return impl.uninstall();
+  if (sub === 'status') return impl.status();
   console.error('Usage: termhub service install|uninstall|status');
   return 1;
 }

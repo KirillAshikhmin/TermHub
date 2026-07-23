@@ -12,7 +12,7 @@ and other TUI agents running in tmux (answer the agent's questions from your pho
 approve edits, top up prompts), but it is a plain remote terminal — good for any
 console work.
 
-> Status: `0.1.0`, alpha. The agent runs on macOS.
+> Status: `0.1.0`, alpha. The agent runs on macOS and Linux.
 
 ---
 
@@ -83,7 +83,7 @@ npm workspaces, `packages/*`:
 | Package | What's inside |
 |---|---|
 | **`@termhub/protocol`** | Foundation: frame codec, E2E crypto on libsodium, base64. |
-| **`@termhub/agent`** | Node process on the Mac + the `termhub` CLI: HTTP/WS server, tmux wrapper, pty↔tmux↔WS bridge, web-push, LaunchAgent, relay side, CLI client, VCS browser. |
+| **`@termhub/agent`** | Node process on the host (macOS/Linux) + the `termhub` CLI: HTTP/WS server, tmux wrapper, pty↔tmux↔WS bridge, web-push, auto-start service (LaunchAgent/systemd), relay side, CLI client, VCS browser. |
 | **`@termhub/relay`** | Zero-knowledge switch (VPS, Docker): WS switch + static serving. |
 | **`@termhub/web`** | PWA (vite + vanilla TS, xterm.js): transport abstraction (LAN REST / relay E2E), dashboard/terminal/files/repository screens, in-browser crypto. Built into `packages/agent/static`. |
 
@@ -103,7 +103,8 @@ npx termhub setup    # password, port (7710), session roots, optional relay, VAP
 npx termhub start    # bring up the agent (LAN + relay, if configured)
 ```
 
-Requirements: **macOS**, **Node.js ≥ 22**, **tmux** (`brew install tmux`).
+Requirements: **macOS or Linux**, **Node.js ≥ 22**, **tmux** (`brew install tmux` / `apt install tmux`).
+On Linux, `npm install` may build node-pty from source — if so, install `build-essential` and `python3` first.
 
 `setup` asks for a web-login password, a port, root directories (where sessions/files may
 be opened from), optionally a relay address for remote access, and offers to create a
@@ -112,19 +113,26 @@ tmux config and the `tm`/`tml` aliases.
 Open it from your phone on the same Wi-Fi network:
 
 ```
-https://<mac-name>.local:7710
+https://<host-name>.local:7710
 ```
 
-(`<mac-name>` — System Settings → General → Sharing → Local hostname; with a self-signed
-certificate, accept the warning once). Enter the password — you're on the dashboard.
+(`<host-name>` — on macOS: System Settings → General → Sharing → Local hostname; on Linux
+`.local` needs Avahi, otherwise use the machine's LAN IP; with a self-signed certificate,
+accept the warning once). Enter the password — you're on the dashboard.
 
-Auto-start as a service (LaunchAgent, log — `~/Library/Logs/termhub.log`):
+Auto-start as a service — `install` picks the backend for your OS (a **LaunchAgent** on
+macOS, a **systemd `--user`** unit on Linux):
 
 ```bash
-npx termhub service install
+npx termhub service install     # macOS: ~/Library/LaunchAgents · Linux: ~/.config/systemd/user
 npx termhub service status
 npx termhub service uninstall
 ```
+
+Logs: macOS — `~/Library/Logs/termhub.log`; Linux — `journalctl --user -u dev.termhub.agent -f`.
+On a headless Linux server `install` also enables lingering (`loginctl enable-linger`) so the
+agent starts at boot without an active login; if that step lacks privileges, run
+`sudo loginctl enable-linger <user>` once.
 
 ### The habit: `tm` in the IDE terminal
 
@@ -140,7 +148,7 @@ or `tmux -L termhub new -s <name>`.
 ```bash
 npx termhub setup          # interactive setup
 npx termhub start          # start the agent (LAN + relay)
-npx termhub service …      # install | uninstall | status (LaunchAgent)
+npx termhub service …      # install | uninstall | status (LaunchAgent / systemd --user)
 npx termhub share          # one-time pairing code (+ QR) for a new device
 npx termhub pair|connect   # CLI client: pairing and "ssh over relay"
 npx termhub devices|revoke # list/revoke authorized devices

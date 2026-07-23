@@ -1,8 +1,12 @@
-// Управление системным сном macOS через `caffeinate`. Пока процесс жив — система
-// не засыпает по простою; `set(false)` (или выход процесса) снимает удержание.
-// Флаги -ims: idle + disk + system sleep (без -d, чтобы дисплей мог гаснуть).
+// Управление системным сном хоста. Пока дочерний процесс жив — система не засыпает по
+// простою; `set(false)` (или выход процесса) снимает удержание.
+//  • macOS: `caffeinate -ims` (idle + disk + system sleep; без -d — дисплей может гаснуть);
+//  • Linux (systemd): `systemd-inhibit … sleep infinity` — блокирует sleep/idle, пока
+//    жив дочерний `sleep`.
+// Кросс-платформенно: команду и «поддерживается ли» выбираем по process.platform.
 
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 
 /** Минимум, который нам нужен от дочернего процесса (для инъекции в тестах). */
 export interface CaffeinateProc {
@@ -12,14 +16,35 @@ export interface CaffeinateProc {
 
 export type SpawnCaffeinate = () => CaffeinateProc;
 
+/** Команда удержания сна для платформы (null — платформа не поддерживается). */
+export function sleepInhibitorCmd(platform: NodeJS.Platform): { cmd: string; args: string[] } | null {
+  if (platform === 'darwin') return { cmd: 'caffeinate', args: ['-ims'] };
+  if (platform === 'linux') {
+    return {
+      cmd: 'systemd-inhibit',
+      args: ['--what=sleep:idle', '--who=TermHub', '--why=Remote terminal session active', '--mode=block', 'sleep', 'infinity'],
+    };
+  }
+  return null;
+}
+
+/** Поддерживается ли удержание сна: macOS — всегда; Linux — только при работающем systemd
+ *  (наличие /run/systemd/system → есть systemd-inhibit). Иначе тумблер скрыт. */
+export function sleepInhibitSupported(platform: NodeJS.Platform): boolean {
+  if (platform === 'darwin') return true;
+  if (platform === 'linux') return fs.existsSync('/run/systemd/system');
+  return false;
+}
+
 function defaultSpawn(): CaffeinateProc {
-  return spawn('caffeinate', ['-ims'], { stdio: 'ignore' });
+  const c = sleepInhibitorCmd(process.platform) ?? { cmd: 'caffeinate', args: ['-ims'] };
+  return spawn(c.cmd, c.args, { stdio: 'ignore' });
 }
 
 export interface CaffeinateOpts {
   /** Фабрика процесса (тесты подменяют реальный spawn). */
   spawn?: SpawnCaffeinate;
-  /** Поддержка платформы; по умолчанию — только macOS (`caffeinate`). */
+  /** Поддержка платформы; по умолчанию — sleepInhibitSupported (macOS / Linux+systemd). */
   supported?: boolean;
 }
 
@@ -31,7 +56,7 @@ export class Caffeinate {
 
   constructor(opts: CaffeinateOpts = {}) {
     this.spawnFn = opts.spawn ?? defaultSpawn;
-    this.supported = opts.supported ?? process.platform === 'darwin';
+    this.supported = opts.supported ?? sleepInhibitSupported(process.platform);
   }
 
   isActive(): boolean {

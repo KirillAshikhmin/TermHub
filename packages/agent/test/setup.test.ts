@@ -7,6 +7,7 @@ import {
   ZSH_MARKER,
   zshAliasBlock,
   hasZshMarker,
+  shellRcFile,
   expandHome,
   parseSessionRoots,
   relativeRoots,
@@ -69,6 +70,15 @@ describe('setup pure helpers', () => {
     // tml — список сессий на том же выделенном сокете, что и агент.
     expect(block.includes(`alias tml='tmux -L ${TMUX_SOCKET} ls'`)).toBe(true);
     expect(hasZshMarker(block)).toBe(true);
+  });
+
+  it('shellRcFile выбирает rc по шеллу: zsh → ~/.zshrc, bash/прочее → ~/.bashrc', () => {
+    expect(shellRcFile('/bin/zsh', '/home/u')).toEqual({ path: '/home/u/.zshrc', label: '~/.zshrc' });
+    expect(shellRcFile('/usr/bin/zsh', '/home/u')).toEqual({ path: '/home/u/.zshrc', label: '~/.zshrc' });
+    expect(shellRcFile('/bin/bash', '/home/u')).toEqual({ path: '/home/u/.bashrc', label: '~/.bashrc' });
+    // Неизвестный/пустой шелл → безопасный дефолт ~/.bashrc (наиболее совместимо на Linux).
+    expect(shellRcFile('/usr/bin/fish', '/home/u').path).toBe('/home/u/.bashrc');
+    expect(shellRcFile(undefined, '/home/u').path).toBe('/home/u/.bashrc');
   });
 
   it('expandHome expands a leading tilde', () => {

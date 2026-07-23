@@ -1,5 +1,5 @@
 // Интерактивная команда `termhub setup`: собирает конфиг, генерирует секреты,
-// по желанию дописывает ~/.tmux.conf и `tm`/`tml` в ~/.zshrc.
+// по желанию дописывает ~/.tmux.conf и `tm`/`tml` в rc текущего шелла (~/.zshrc | ~/.bashrc).
 // Побочные эффекты вынесены в runSetup; чистая логика (строки конфигов, парсинг)
 // экспортируется отдельно и покрыта тестами.
 
@@ -77,9 +77,17 @@ export function zshAliasBlock(): string {
   return `${ZSH_MARKER}\n${TM_FUNCTION}\n${TML_ALIAS}\n`;
 }
 
-/** Есть ли уже блок termhub в ~/.zshrc. */
+/** Есть ли уже блок termhub в rc-файле. */
 export function hasZshMarker(existing: string): boolean {
   return existing.split('\n').some((l) => l.trim() === ZSH_MARKER);
+}
+
+/** rc-файл для алиасов по текущему шеллу ($SHELL). zsh → ~/.zshrc; bash и прочее → ~/.bashrc.
+ *  Синтаксис блока (функция tm + alias tml) POSIX-совместим — годится и для bash, и для zsh. */
+export function shellRcFile(shell: string | undefined, home: string): { path: string; label: string } {
+  const name = (shell ?? '').split('/').pop() ?? '';
+  if (name === 'zsh') return { path: path.join(home, '.zshrc'), label: '~/.zshrc' };
+  return { path: path.join(home, '.bashrc'), label: '~/.bashrc' };
 }
 
 /** Разворачивает ведущий ~ в домашний каталог. */
@@ -148,17 +156,17 @@ async function maybePatchTmux(rl: readline.Interface): Promise<void> {
   console.log('✓ ~/.tmux.conf updated.');
 }
 
-async function maybePatchZsh(rl: readline.Interface): Promise<void> {
-  const file = path.join(os.homedir(), '.zshrc');
+async function maybePatchShellRc(rl: readline.Interface): Promise<void> {
+  const { path: file, label } = shellRcFile(process.env.SHELL, os.homedir());
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   if (hasZshMarker(existing)) {
-    console.log('~/.zshrc: tm alias already configured (marker # termhub).');
+    console.log(`${label}: tm alias already configured (marker # termhub).`);
     return;
   }
-  console.log(`\nSuggested additions to ~/.zshrc:\n  ${TM_FUNCTION}\n  ${TML_ALIAS}`);
+  console.log(`\nSuggested additions to ${label}:\n  ${TM_FUNCTION}\n  ${TML_ALIAS}`);
   if (!(await askYesNo(rl, 'Add?', true))) return;
   appendToFile(file, zshAliasBlock());
-  console.log('✓ ~/.zshrc updated (restart your shell or run `source ~/.zshrc`).');
+  console.log(`✓ ${label} updated (restart your shell or run \`source ${label}\`).`);
 }
 
 /** Предупреждает, что агент слушает HTTP без шифрования: пароль и cookie идут по
@@ -215,7 +223,7 @@ export async function runSetup(): Promise<void> {
     if (!config.tls) warnCleartextHttp(config.host, config.port);
 
     await maybePatchTmux(rl);
-    await maybePatchZsh(rl);
+    await maybePatchShellRc(rl);
 
     console.log('\nDone. Start the agent: termhub start');
   } finally {

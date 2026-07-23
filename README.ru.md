@@ -12,7 +12,7 @@
 подтверждать правки, дописывать промпты), но это обычный удалённый терминал — подойдёт
 для любой работы в консоли.
 
-> Статус: `0.1.0`, alpha. Агент работает на macOS.
+> Статус: `0.1.0`, alpha. Агент работает на macOS и Linux.
 
 ---
 
@@ -83,7 +83,7 @@ npm workspaces, `packages/*`:
 | Пакет | Что внутри |
 |---|---|
 | **`@termhub/protocol`** | Фундамент: фрейм-кодек, E2E-крипта на libsodium, base64. |
-| **`@termhub/agent`** | Node-процесс на Mac + CLI `termhub`: HTTP/WS-сервер, обёртка tmux, мост pty↔tmux↔WS, web-push, LaunchAgent, relay-сторона, CLI-клиент, VCS-браузер. |
+| **`@termhub/agent`** | Node-процесс на хосте (macOS/Linux) + CLI `termhub`: HTTP/WS-сервер, обёртка tmux, мост pty↔tmux↔WS, web-push, сервис автозапуска (LaunchAgent/systemd), relay-сторона, CLI-клиент, VCS-браузер. |
 | **`@termhub/relay`** | Zero-knowledge коммутатор (VPS, Docker): WS-switch + раздача статики. |
 | **`@termhub/web`** | PWA (vite + vanilla TS, xterm.js): транспорт-абстракция (LAN REST / relay E2E), экраны дашборда/терминала/проводника/репозитория, крипта в браузере. Собирается в `packages/agent/static`. |
 
@@ -103,7 +103,8 @@ npx termhub setup    # пароль, порт (7710), корни сессий, �
 npx termhub start    # поднять агента (LAN + relay, если задан)
 ```
 
-Требования: **macOS**, **Node.js ≥ 22**, **tmux** (`brew install tmux`).
+Требования: **macOS или Linux**, **Node.js ≥ 22**, **tmux** (`brew install tmux` / `apt install tmux`).
+На Linux `npm install` может собирать node-pty из исходников — тогда сначала поставьте `build-essential` и `python3`.
 
 `setup` спросит пароль для веб-входа, порт, каталоги-корни (откуда можно открывать
 сессии/файлы), при желании — адрес relay для удалённого доступа, и предложит завести
@@ -112,19 +113,26 @@ tmux-конфиг и алиасы `tm`/`tml`.
 Откройте с телефона в той же Wi-Fi-сети:
 
 ```
-https://<имя-mac>.local:7710
+https://<имя-хоста>.local:7710
 ```
 
-(`<имя-mac>` — System Settings → General → Sharing → Local hostname; при самоподписанном
-сертификате примите предупреждение один раз). Введите пароль — вы на дашборде.
+(`<имя-хоста>` — на macOS: System Settings → General → Sharing → Local hostname; на Linux
+`.local` требует Avahi, иначе используйте LAN-IP машины; при самоподписанном сертификате
+примите предупреждение один раз). Введите пароль — вы на дашборде.
 
-Автозапуск как сервис (LaunchAgent, лог — `~/Library/Logs/termhub.log`):
+Автозапуск как сервис — `install` сам выбирает бэкенд под ОС (**LaunchAgent** на macOS,
+юнит **systemd `--user`** на Linux):
 
 ```bash
-npx termhub service install
+npx termhub service install     # macOS: ~/Library/LaunchAgents · Linux: ~/.config/systemd/user
 npx termhub service status
 npx termhub service uninstall
 ```
+
+Логи: macOS — `~/Library/Logs/termhub.log`; Linux — `journalctl --user -u dev.termhub.agent -f`.
+На headless-сервере Linux `install` также включает lingering (`loginctl enable-linger`), чтобы
+агент стартовал на загрузке без активного входа; если на это не хватает прав, выполните один
+раз `sudo loginctl enable-linger <user>`.
 
 ### Привычка: `tm` в терминале IDE
 
@@ -140,7 +148,7 @@ npx termhub service uninstall
 ```bash
 npx termhub setup          # интерактивная настройка
 npx termhub start          # запустить агента (LAN + relay)
-npx termhub service …      # install | uninstall | status (LaunchAgent)
+npx termhub service …      # install | uninstall | status (LaunchAgent / systemd --user)
 npx termhub share          # одноразовый код пейринга (+ QR) для нового устройства
 npx termhub pair|connect   # CLI-клиент: сопряжение и «ssh через relay»
 npx termhub devices|revoke # список/отзыв допущенных устройств
