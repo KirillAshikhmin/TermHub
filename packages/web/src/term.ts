@@ -218,7 +218,10 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     fontSize,
     theme: xtermTheme(),
     cursorBlink: true,
-    scrollback: 5000,
+    // Локальный буфер прокрутки xterm: только то, что натекло ПОСЛЕ подключения.
+    // 20k (при tmux history-limit 50k) — большое окно быстрой локальной прокрутки на
+    // обычном экране, без дотягивания истории через relay. Память браузера ~десятки МБ.
+    scrollback: 20000,
     macOptionIsMeta: true,
     // Нужен для proposed API: unicode11 (unicode.activeVersion) и search-декорации.
     allowProposedApi: true,
