@@ -219,12 +219,33 @@ describe('mountSessionTabs', () => {
     tabs.teardown();
   });
 
-  it('кнопка «+» вызывает onCreate', async () => {
+  it('стрелка разворачивает панель; «Создать сессию» в панели вызывает onCreate', async () => {
     const onCreate = vi.fn();
     const { transport } = stubTransport([[]]);
     const tabs = mountSessionTabs({ ...baseOpts, transport, onCreate });
-    tabs.el.querySelector<HTMLButtonElement>('.th-iconbtn')!.click();
+    const expand = tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!;
+    const panel = tabs.el.querySelector<HTMLElement>('.th-spanel')!;
+    expand.click();
+    expect(panel.classList.contains('is-open')).toBe(true);
+    expect(expand.classList.contains('is-open')).toBe(true); // стрелка повёрнута
+    tabs.el.querySelector<HTMLButtonElement>('.th-spanel__create')!.click();
     expect(onCreate).toHaveBeenCalled();
+    expect(panel.classList.contains('is-open')).toBe(false); // создание закрывает панель
+    tabs.teardown();
+  });
+
+  it('клик по строке панели вызывает onSwitch и закрывает панель', async () => {
+    const onSwitch = vi.fn();
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'a', onSwitch });
+    await vi.advanceTimersByTimeAsync(0); // дать поллингу наполнить список
+    const expand = tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!;
+    expand.click();
+    const rows = tabs.el.querySelectorAll<HTMLButtonElement>('.th-spanel__row');
+    const bRow = [...rows].find((r) => r.textContent?.includes('b'))!;
+    bRow.click();
+    expect(onSwitch).toHaveBeenCalledWith('b');
+    expect(tabs.el.querySelector('.th-spanel')!.classList.contains('is-open')).toBe(false);
     tabs.teardown();
   });
 });

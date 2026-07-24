@@ -5,7 +5,7 @@
 import type { TFn } from './i18n';
 import { t } from './i18n';
 import type { Transport } from './transport';
-import { iconButton, toast } from './ui';
+import { iconButton, svgIcon, toast } from './ui';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
@@ -183,8 +183,97 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   const strip = document.createElement('div');
   strip.className = 'th-tabs';
   strip.setAttribute('aria-label', t('term.tabs'));
-  const plus = iconButton('plus', t('dashboard.newSession'), opts.onCreate);
-  wrap.append(strip, plus);
+
+  // ── Полноэкранная панель быстрого переключения сессий ──────────────────────
+  // Кнопка-стрелка разворачивает список ВСЕХ сессий на весь экран (крупные цели для
+  // тапа с телефона), снизу — «Создать сессию». Стрелка поворачивается на 180°,
+  // оставаясь на месте, и повторным нажатием закрывает панель.
+  let latest: TabInfo[] = [{ name: opts.current, bell: false, title: '' }];
+  let panelOpen = false;
+
+  const panel = document.createElement('div');
+  panel.className = 'th-spanel';
+  const sheet = document.createElement('div');
+  sheet.className = 'th-spanel__sheet';
+  const list = document.createElement('div');
+  list.className = 'th-spanel__list';
+  const createBtn = document.createElement('button');
+  createBtn.type = 'button';
+  createBtn.className = 'th-btn th-btn--primary th-spanel__create';
+  createBtn.append(svgIcon('plus'), document.createTextNode(t('dashboard.newSession')));
+  createBtn.addEventListener('click', () => {
+    closePanel();
+    opts.onCreate();
+  });
+  sheet.append(list, createBtn);
+  panel.append(sheet);
+  panel.addEventListener('click', (e) => {
+    if (e.target === panel) closePanel(); // тап по затемнённому фону закрывает
+  });
+
+  const expandBtn = iconButton('down', t('term.sessionsPanel'), () => (panelOpen ? closePanel() : openPanel()));
+  expandBtn.classList.add('th-tabs-expand');
+  expandBtn.setAttribute('aria-haspopup', 'true');
+  expandBtn.setAttribute('aria-expanded', 'false');
+
+  // Строит строки панели из последнего известного списка (снимок на момент открытия).
+  const buildPanelRows = (): void => {
+    list.replaceChildren();
+    // Текущая сессия присутствует всегда (как и в полосе), даже если её нет в списке.
+    const rows = latest.some((s) => s.name === opts.current)
+      ? latest
+      : [{ name: opts.current, bell: false, title: '' } as TabInfo, ...latest];
+    for (const s of rows) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'th-spanel__row';
+      if (s.name === opts.current) row.classList.add('is-current');
+      const hot = sessionWorking(s.title) || (!sessionManaged(s.title) && activity.isHot(s.name));
+      if (hot) row.append(makeActivityDot('th-spanel__activity', t('card.activity')));
+      const lbl = document.createElement('span');
+      lbl.className = 'th-spanel__label';
+      const title = sessionTitleText(s.title);
+      const hasTitle = title !== '' && title !== s.name;
+      const nm = document.createElement('span');
+      nm.className = 'th-spanel__name';
+      nm.textContent = hasTitle ? title : s.name;
+      lbl.append(nm);
+      if (hasTitle) {
+        const sub = document.createElement('span');
+        sub.className = 'th-spanel__sub';
+        sub.textContent = s.name;
+        lbl.append(sub);
+      }
+      row.append(lbl);
+      if (bellUnseen(s.name) && s.name !== opts.current) {
+        const bell = document.createElement('span');
+        bell.className = 'th-spanel__bell';
+        bell.setAttribute('aria-label', t('card.bell'));
+        bell.textContent = '🔔';
+        row.append(bell);
+      }
+      row.addEventListener('click', () => {
+        closePanel();
+        opts.onSwitch(s.name);
+      });
+      list.append(row);
+    }
+  };
+  function closePanel(): void {
+    panelOpen = false;
+    panel.classList.remove('is-open');
+    expandBtn.classList.remove('is-open');
+    expandBtn.setAttribute('aria-expanded', 'false');
+  }
+  function openPanel(): void {
+    panelOpen = true;
+    buildPanelRows();
+    panel.classList.add('is-open');
+    expandBtn.classList.add('is-open');
+    expandBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  wrap.append(strip, expandBtn, panel);
 
   const tabs = new Map<string, HTMLElement>();
   const currentTab = renderSessionTab(
@@ -200,6 +289,8 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // Точечное обновление, как в дашборде: не пересоздаём узлы, чтобы не сбрасывать
   // горизонтальный скролл полосы и фокус.
   const render = (sessions: TabInfo[]): void => {
+    latest = sessions; // снимок для панели быстрого переключения
+    if (panelOpen) buildPanelRows(); // панель открыта во время поллинга — держим свежей
     const wanted = new Set(sessions.map((s) => s.name));
     wanted.add(opts.current);
     for (const [name, el] of [...tabs]) {

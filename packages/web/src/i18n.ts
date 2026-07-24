@@ -114,6 +114,7 @@ const ru: Dict = {
   term: {
     back: 'Назад',
     tabs: 'Сессии',
+    sessionsPanel: 'Сессии — развернуть',
     reconnecting: 'Переподключение…',
     sessionEnded: 'Сессия завершена',
     sessionError: 'Ошибка сессии: {message}',
@@ -375,6 +376,7 @@ const en: Dict = {
   term: {
     back: 'Back',
     tabs: 'Sessions',
+    sessionsPanel: 'Sessions — expand',
     reconnecting: 'Reconnecting…',
     sessionEnded: 'Session ended',
     sessionError: 'Session error: {message}',
