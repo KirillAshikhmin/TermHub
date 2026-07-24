@@ -10,7 +10,6 @@ import { api } from './api';
 import { mountDashboard, mountLogin } from './dashboard';
 import { mountDiag } from './diag';
 import { mountFiles } from './files';
-import { mountRepo } from './repo';
 import { getLang, onLangChange } from './i18n';
 import type { RemoteController, RemoteRoute } from './remote';
 import { initAudioUnlock } from './sound';
@@ -40,7 +39,6 @@ function parseRoute(): RemoteRoute {
   if (hash.startsWith('#/login')) return { name: 'login' };
   if (hash.startsWith('#/pair')) return { name: 'pair' };
   if (hash.startsWith('#/files')) return { name: 'files' };
-  if (hash.startsWith('#/repo')) return { name: 'repo' };
   if (hash.startsWith('#/diag')) return { name: 'diag' };
   const sfiles = /^#\/sfiles\/([^/]*)/.exec(hash);
   if (sfiles) {
@@ -110,7 +108,6 @@ function render(): void {
   const t = lanTransport!;
   if (route.name === 'login') cleanup = mountLogin(root);
   else if (route.name === 'files') cleanup = mountFiles(root, t);
-  else if (route.name === 'repo') cleanup = mountRepo(root, t);
   else cleanup = mountDashboard(root, t);
 }
 

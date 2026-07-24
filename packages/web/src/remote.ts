@@ -25,7 +25,6 @@ export type RemoteRoute =
   | { name: 'dashboard' }
   | { name: 'term'; session: string }
   | { name: 'files' }
-  | { name: 'repo' }
   | { name: 'sfiles'; session: string }
   | { name: 'srepo'; session: string }
   | { name: 'diag' }
@@ -232,11 +231,6 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
       }
       if (route.name === 'files') {
         if (transport) return mountFiles(root, transport);
-        location.hash = '#/';
-        return mountAgentPicker(root);
-      }
-      if (route.name === 'repo') {
-        if (transport) return mountRepo(root, transport);
         location.hash = '#/';
         return mountAgentPicker(root);
       }

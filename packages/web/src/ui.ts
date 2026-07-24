@@ -249,7 +249,8 @@ export function renderTabs(active: 'sessions' | 'files' | 'repo', transport?: Tr
   // Гость получает scope; владелец (LAN-пароль / полный relay-доступ) — clientScope=null.
   const scope = transport?.clientScope;
   if (!scope || scope.files) nav.append(mkTab('files', t('nav.files'), '#/files'));
-  if (!scope || scope.files) nav.append(mkTab('repo', t('nav.repo'), '#/repo'));
+  // Репозиторий доступен только внутри сессии (вкладка на экране терминала) — глобальной
+  // вкладки на дашборде нет: смотрим текущий репозиторий сессии, а не абстрактный список.
   return nav;
 }
 
