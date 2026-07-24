@@ -866,13 +866,17 @@ export class RelayLink {
     } catch {
       return;
     }
+    const name = String(req.name ?? '');
     try {
       await this.sessions.create({
-        name: String(req.name ?? ''),
+        name,
         root: String(req.root ?? ''),
         dir: String(req.dir ?? ''),
         preset: req.preset as 'zsh' | 'claude',
       });
+      // Подтверждаем создание (сессия уже существует) — клиент дожидается, чтобы
+      // навигация ушла на готовую сессию, а не на ещё несуществующую.
+      this.sendFrameBytes(s, jsonFrame(FrameType.CreateOk, frame.channel, { session: name }));
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'create-failed', message: (err as Error).message }));
     }

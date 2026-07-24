@@ -317,6 +317,44 @@ describe('RelayLink — обслуживание клиента', () => {
     },
     25000,
   );
+
+  it.skipIf(!tmuxAvailable)(
+    'CREATE создаёт сессию и подтверждается кадром CreateOk',
+    async () => {
+      const clientId = generateIdentity();
+      const device: AuthorizedDevice = {
+        name: 'creator',
+        edPub: b64(clientId.edPub),
+        fingerprint: fingerprint(clientId.edPub),
+        addedAt: Date.now(),
+      };
+      saveAuthorized([device]);
+
+      const { ws, col } = await connectClient(relayHandle.port, agentId);
+      ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+      const okMsg = await col.next();
+      const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
+        header: string;
+      };
+      const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
+      const clientDec = makeDecryptor(rx, unb64(ok.header));
+      const clientEnc = makeEncryptor(tx);
+      ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+
+      // CREATE валидной сессии (root известен, подкаталог work существует).
+      ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, { name: 'created-x', root, dir: 'work', preset: 'zsh' })), {
+        binary: true,
+      });
+
+      const createMsg = await col.next();
+      const createFrame = decodeFrame(clientDec.pull(new Uint8Array(createMsg.binary as Buffer)));
+      expect(createFrame.type).toBe(FrameType.CreateOk);
+      expect(frameJson<{ session: string }>(createFrame).session).toBe('created-x');
+      // Сессия реально создана на изолированном сокете.
+      expect(tmux(['list-sessions', '-F', '#{session_name}'])).toContain('created-x');
+    },
+    25000,
+  );
 });
 
 describe('RelayLink — мультиплекс каналов и idle-таймаут', () => {

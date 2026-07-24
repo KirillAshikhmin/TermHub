@@ -39,6 +39,7 @@ export enum FrameType {
   FileOp = 35,
   FileOpResult = 36,
   RenameSession = 37,
+  CreateOk = 38,
 }
 
 export interface Frame {

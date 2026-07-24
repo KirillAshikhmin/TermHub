@@ -235,3 +235,40 @@ describe('RelayTransport — list() пока поток не установле�
     expect(transport.isStreaming).toBe(true);
   });
 });
+
+describe('RelayTransport — create() дожидается подтверждения агента', () => {
+  /** Доводит до streaming и возвращает encryptor «агента» (для ответных кадров клиенту). */
+  function driveToStreaming(): { transport: RelayTransport; ws: FakeWebSocket; agentEnc: ReturnType<typeof makeEncryptor> } {
+    const clientIdentity = generateIdentity();
+    const agentIdentity = generateIdentity();
+    const transport = makeTransport(clientIdentity, agentIdentity);
+    const ws = sockets[0]!;
+    const clientEdPub = driveToHelloSent(ws);
+    const { tx } = sessionKeys('server', agentIdentity, clientEdPub);
+    const agentEnc = makeEncryptor(tx);
+    ws.deliverBinary(jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header) }));
+    expect(transport.isStreaming).toBe(true);
+    return { transport, ws, agentEnc };
+  }
+
+  it('резолвится по CreateOk (навигация уходит на уже созданную сессию)', async () => {
+    const { transport, ws, agentEnc } = driveToStreaming();
+    const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh' });
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CreateOk, 0, { session: 'x' })));
+    await expect(p).resolves.toBeUndefined();
+  });
+
+  it('отклоняется по Error(create-failed) с сообщением агента', async () => {
+    const { transport, ws, agentEnc } = driveToStreaming();
+    const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh' });
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.Error, 0, { code: 'create-failed', message: 'boom' })));
+    await expect(p).rejects.toThrow('boom');
+  });
+
+  it('обрыв соединения отклоняет ожидающий create()', async () => {
+    const { transport, ws } = driveToStreaming();
+    const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh' });
+    ws.close();
+    await expect(p).rejects.toThrow(/disconnected/);
+  });
+});

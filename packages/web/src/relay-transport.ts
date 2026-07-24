@@ -66,6 +66,13 @@ interface PendingList {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** Ожидающий CREATE_OK / Error(create-failed) (FIFO — создания сериализованы модалкой). */
+interface PendingCreate {
+  resolve: () => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /** Ожидающий CAFFEINATE_RESULT (FIFO). */
 interface PendingCaffeinate {
   resolve: (state: CaffeinateState) => void;
@@ -173,6 +180,7 @@ export class RelayTransport implements Transport {
   private readonly terminals = new Map<number, TermEntry>();
   private nextChannel = FIRST_TERM_CHANNEL;
   private pendingList: PendingList[] = [];
+  private pendingCreate: PendingCreate[] = [];
   private pendingCaffeinate: PendingCaffeinate[] = [];
   private pendingPushKey: PendingPushKey[] = [];
   private pendingDirs: PendingDirs[] = [];
@@ -362,6 +370,13 @@ export class RelayTransport implements Transport {
         pending.resolve(sessions);
         return;
       }
+      case FrameType.CreateOk: {
+        const pending = this.pendingCreate.shift();
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        pending.resolve();
+        return;
+      }
       case FrameType.CaffeinateResult: {
         const pending = this.pendingCaffeinate.shift();
         if (!pending) return;
@@ -535,7 +550,24 @@ export class RelayTransport implements Transport {
       }
       case FrameType.Error: {
         const entry = this.terminals.get(frame.channel);
-        if (!entry) return; // ошибка контрольного канала (CREATE/KILL) — молча
+        if (!entry) {
+          // Ошибка control-канала. Неудачу CREATE отклоняем в ожидающего create()
+          // (модалка покажет сообщение); прочие (KILL/RENAME) — молча.
+          let err: { code?: string; message?: string } = {};
+          try {
+            err = frameJson<{ code?: string; message?: string }>(frame);
+          } catch {
+            /* битый payload — молча */
+          }
+          if (err.code === 'create-failed') {
+            const pending = this.pendingCreate.shift();
+            if (pending) {
+              clearTimeout(pending.timer);
+              pending.reject(new Error(err.message ?? 'create failed'));
+            }
+          }
+          return;
+        }
         let message: string | undefined;
         try {
           const err = frameJson<{ code?: string; message?: string }>(frame);
@@ -561,6 +593,7 @@ export class RelayTransport implements Transport {
     this.decryptor = undefined;
     for (const pending of [
       ...this.pendingList,
+      ...this.pendingCreate,
       ...this.pendingCaffeinate,
       ...this.pendingPushKey,
       ...this.pendingDirs,
@@ -575,6 +608,7 @@ export class RelayTransport implements Transport {
       pending.reject(new Error('relay disconnected'));
     }
     this.pendingList = [];
+    this.pendingCreate = [];
     this.pendingCaffeinate = [];
     this.pendingPushKey = [];
     this.pendingDirs = [];
@@ -665,9 +699,17 @@ export class RelayTransport implements Transport {
 
   create(req: CreateSessionInput): Promise<void> {
     if (this.stopped) return Promise.reject(new Error('relay closed'));
-    // Агент не подтверждает CREATE — отправляем и полагаемся на последующий poll.
-    this.sendFrame(jsonFrame(FrameType.Create, CONTROL_CHANNEL, req));
-    return Promise.resolve();
+    // Дожидаемся CreateOk (или Error(create-failed)) от агента: создание не мгновенно,
+    // а навигация модалки должна уйти на уже существующую сессию (паритет с LAN, где
+    // POST ждёт реального tmux new-session).
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingCreate = this.pendingCreate.filter((p) => p.timer !== timer);
+        reject(new Error('create timeout'));
+      }, LIST_TIMEOUT_MS);
+      this.pendingCreate.push({ resolve, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.Create, CONTROL_CHANNEL, req));
+    });
   }
 
   kill(name: string): Promise<void> {
