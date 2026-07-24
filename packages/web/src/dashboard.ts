@@ -331,6 +331,11 @@ export function mountLogin(root: HTMLElement): () => void {
 // проигрывать бип повторно для уже известного звонка.
 let knownBells = new Set<string>();
 
+// Кэш последнего списка сессий по транспорту (переживает уход с дашборда и возврат):
+// при повторном заходе рендерим сразу известный список, а refresh() обновит в фоне —
+// без скелетонов и ожидания. Ключ — транспорт (у каждого агента relay свой инстанс).
+const sessionCache = new WeakMap<Transport, SessionInfo[]>();
+
 /** Дашборд сессий с поллингом и реакцией на новые звонки (через транспорт). */
 export function mountDashboard(
   root: HTMLElement,
@@ -459,6 +464,7 @@ export function mountDashboard(
       observeBells(sessions);
       reactToBells(sessions);
       render(sessions);
+      sessionCache.set(transport, sessions); // кэш для мгновенного показа при возврате
       loadedOnce = true;
     } catch (err) {
       if (stopped || (err instanceof ApiError && err.status === 401)) return;
@@ -492,6 +498,13 @@ export function mountDashboard(
       toast(t('card.killError'), 'error');
     }
   };
+
+  // Мгновенный показ из кэша (без скелетонов) при возврате на дашборд; refresh() обновит в фоне.
+  const cached = sessionCache.get(transport);
+  if (cached) {
+    loadedOnce = true;
+    render(cached);
+  }
 
   const tick = (): void => {
     if (document.visibilityState === 'visible') void refresh();
