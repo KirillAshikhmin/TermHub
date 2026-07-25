@@ -143,7 +143,20 @@ async function boot(): Promise<void> {
 // без единого сигнала. Пишем предупреждение в консоль.
 if (shouldRegisterSw({ isSecureContext: window.isSecureContext, hasServiceWorker: 'serviceWorker' in navigator })) {
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('sw.js').catch((err: unknown) => console.warn('SW registration failed:', err));
+    navigator.serviceWorker.register('sw.js').then(
+      (reg) => {
+        // Явно спрашиваем обновление при запуске и при каждом возврате в приложение.
+        // Установленная PWA может месяцами не перезагружаться, а протокол агент↔клиент
+        // меняется вместе с бандлом: залипший старый клиент просто перестаёт
+        // подключаться. Новая версия активируется сама (skipWaiting + clients.claim).
+        const checkUpdate = (): void => {
+          if (document.visibilityState === 'visible') void reg.update().catch(() => undefined);
+        };
+        checkUpdate();
+        document.addEventListener('visibilitychange', checkUpdate);
+      },
+      (err: unknown) => console.warn('SW registration failed:', err),
+    );
   });
 }
 
