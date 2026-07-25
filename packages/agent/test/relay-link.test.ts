@@ -370,6 +370,40 @@ describe('RelayLink — обслуживание клиента', () => {
     25000,
   );
 
+  it('гость со scope: CREATE отклоняется кадром Error(create-failed), а не тишиной', async () => {
+    const clientId = generateIdentity();
+    const device: AuthorizedDevice = {
+      name: 'scoped-guest',
+      edPub: b64(clientId.edPub),
+      fingerprint: fingerprint(clientId.edPub),
+      addedAt: Date.now(),
+      scope: { session: 'sess-1', write: true, files: false },
+    };
+    saveAuthorized([device]);
+
+    const { ws, col } = await connectClient(relayHandle.port, agentId);
+    ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+    const okMsg = await col.next();
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
+    const clientDec = makeDecryptor(rx, unb64(ok.header));
+    const clientEnc = makeEncryptor(tx);
+    ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
+
+    // Гостю создание запрещено: агент шлёт Error(create-failed), а не молчит — иначе
+    // клиент, ждущий CreateOk, крутит спиннер до тайм-аута.
+    ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, { name: 'nope', root, dir: 'work', preset: 'zsh' })), {
+      binary: true,
+    });
+    const msg = await col.next();
+    const frame = decodeFrame(clientDec.pull(new Uint8Array(msg.binary as Buffer)));
+    expect(frame.type).toBe(FrameType.Error);
+    expect(frameJson<{ code: string }>(frame).code).toBe('create-failed');
+  }, 25000);
+
   it('replay: записанный хендшейк + поток НЕ проигрываются повторно (свежесть челленджа)', async () => {
     const clientId = generateIdentity();
     const device: AuthorizedDevice = {

@@ -78,47 +78,59 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   setCardActivityDot(name, translate, opts.showActivity ?? false);
   top.append(name);
 
-  const menuWrap = document.createElement('div');
-  menuWrap.className = 'th-card__menu-wrap';
-  const menuBtn = document.createElement('button');
-  menuBtn.type = 'button';
-  menuBtn.className = 'th-card__menu';
-  menuBtn.setAttribute('aria-label', translate('card.menu'));
-  menuBtn.setAttribute('aria-haspopup', 'true');
-  menuBtn.setAttribute('aria-expanded', 'false');
-  menuBtn.append(svgIcon('dots'));
-  const pop = document.createElement('div');
-  pop.className = 'th-card__menupop';
-  const closeMenu = (): void => {
-    menuWrap.classList.remove('is-open');
+  // Меню управления (rename/kill) — только владельцу. Гость (scope) колбэков не
+  // получает (dashboard их не передаёт) → меню не рисуем вовсе.
+  let closeOpenMenu: (() => boolean) | null = null;
+  if (opts.onRename || opts.onKill) {
+    const menuWrap = document.createElement('div');
+    menuWrap.className = 'th-card__menu-wrap';
+    const menuBtn = document.createElement('button');
+    menuBtn.type = 'button';
+    menuBtn.className = 'th-card__menu';
+    menuBtn.setAttribute('aria-label', translate('card.menu'));
+    menuBtn.setAttribute('aria-haspopup', 'true');
     menuBtn.setAttribute('aria-expanded', 'false');
-  };
-  const renameBtn = document.createElement('button');
-  renameBtn.type = 'button';
-  renameBtn.className = 'th-card__menu-item';
-  renameBtn.append(svgIcon('pencil'), document.createTextNode(translate('card.rename')));
-  renameBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeMenu();
-    opts.onRename?.();
-  });
-  const killBtn = document.createElement('button');
-  killBtn.type = 'button';
-  killBtn.className = 'th-card__kill';
-  killBtn.append(svgIcon('trash'), document.createTextNode(translate('card.kill')));
-  killBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeMenu();
-    opts.onKill?.();
-  });
-  pop.append(renameBtn, killBtn);
-  menuBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const open = menuWrap.classList.toggle('is-open');
-    menuBtn.setAttribute('aria-expanded', String(open));
-  });
-  menuWrap.append(menuBtn, pop);
-  top.append(menuWrap);
+    menuBtn.append(svgIcon('dots'));
+    const pop = document.createElement('div');
+    pop.className = 'th-card__menupop';
+    const closeMenu = (): void => {
+      menuWrap.classList.remove('is-open');
+      menuBtn.setAttribute('aria-expanded', 'false');
+    };
+    const renameBtn = document.createElement('button');
+    renameBtn.type = 'button';
+    renameBtn.className = 'th-card__menu-item';
+    renameBtn.append(svgIcon('pencil'), document.createTextNode(translate('card.rename')));
+    renameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeMenu();
+      opts.onRename?.();
+    });
+    const killBtn = document.createElement('button');
+    killBtn.type = 'button';
+    killBtn.className = 'th-card__kill';
+    killBtn.append(svgIcon('trash'), document.createTextNode(translate('card.kill')));
+    killBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeMenu();
+      opts.onKill?.();
+    });
+    pop.append(renameBtn, killBtn);
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = menuWrap.classList.toggle('is-open');
+      menuBtn.setAttribute('aria-expanded', String(open));
+    });
+    menuWrap.append(menuBtn, pop);
+    top.append(menuWrap);
+    closeOpenMenu = () => {
+      if (menuWrap.classList.contains('is-open')) {
+        closeMenu();
+        return true;
+      }
+      return false;
+    };
+  }
   card.append(top);
 
   const dir = document.createElement('div');
@@ -162,11 +174,7 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   card.append(foot);
 
   const activate = (): void => {
-    if (menuWrap.classList.contains('is-open')) {
-      menuWrap.classList.remove('is-open');
-      menuBtn.setAttribute('aria-expanded', 'false');
-      return;
-    }
+    if (closeOpenMenu?.()) return;
     opts.onOpen?.();
   };
   card.addEventListener('click', activate);
@@ -360,6 +368,10 @@ export function mountDashboard(
   fab.setAttribute('aria-label', t('dashboard.newSession'));
   fab.title = t('dashboard.newSession');
   fab.append(svgIcon('plus'));
+  // Создание сессий — только владельцу. Для relay scope известен лишь после первого
+  // list(), поэтому до него прячем «+» (иначе он мигнул бы гостю); render() ниже
+  // выставит финальное состояние по transport.clientScope.
+  fab.hidden = transport.mode === 'relay';
   // Создали сессию → сразу открываем её терминал (а не просто обновляем список).
   fab.addEventListener('click', () =>
     openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
@@ -383,14 +395,17 @@ export function mountDashboard(
       onOpen: () => {
         location.hash = `#/term/${encodeURIComponent(session.name)}`;
       },
-      onKill: () => void killSession(session.name),
-      onRename: () => openRenameModal(transport, session.name, () => void refresh()),
+      // Управление сессиями — только владельцу; гость (scope) получает карту без меню.
+      onKill: transport.clientScope ? undefined : () => void killSession(session.name),
+      onRename: transport.clientScope ? undefined : () => openRenameModal(transport, session.name, () => void refresh()),
     });
 
   // Щадящее обновление: не перестраиваем всю сетку каждый поллинг (это сбрасывало
   // бы фокус и закрывало открытое ⋯-меню). Карточки создаём/удаляем/обновляем
   // точечно, «занятые» пользователем (меню/фокус) не трогаем.
   const render = (sessions: SessionInfo[]): void => {
+    // Гость (scope задан после первого list) не создаёт сессий — «+» скрыт.
+    fab.hidden = transport.clientScope != null;
     if (sessions.length === 0) {
       if (!showingEmpty) {
         cards.clear();

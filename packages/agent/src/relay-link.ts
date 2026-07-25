@@ -648,6 +648,17 @@ export class RelayLink {
     if (scope) {
       switch (frame.type) {
         case FrameType.Create:
+          // Гостю создание запрещено. Отвечаем явной ошибкой, а не молчаливым drop:
+          // клиент ждёт CreateOk и иначе крутит спиннер до тайм-аута. code
+          // create-failed уже понимает relay-transport (отклоняет ожидающий create).
+          this.sendFrameBytes(
+            s,
+            jsonFrame(FrameType.Error, frame.channel, {
+              code: 'create-failed',
+              message: 'Guest access: creating sessions is not allowed',
+            }),
+          );
+          return;
         case FrameType.Kill:
         case FrameType.RenameSession:
         case FrameType.Dirs:
@@ -657,6 +668,10 @@ export class RelayLink {
         case FrameType.Share:
         case FrameType.Devices:
         case FrameType.Revoke:
+          this.sendFrameBytes(
+            s,
+            jsonFrame(FrameType.Error, frame.channel, { code: 'forbidden', message: 'Guest access: operation not allowed' }),
+          );
           return;
         case FrameType.Data:
           if (!scope.write) return;
