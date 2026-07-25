@@ -218,10 +218,11 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     fontSize,
     theme: xtermTheme(),
     cursorBlink: true,
-    // Локальный буфер прокрутки xterm: только то, что натекло ПОСЛЕ подключения.
-    // 20k (при tmux history-limit 50k) — большое окно быстрой локальной прокрутки на
-    // обычном экране, без дотягивания истории через relay. Память браузера ~десятки МБ.
-    scrollback: 20000,
+    // Локальный scrollback почти не задействован: `tmux attach` держит терминал в
+    // alt-screen (ESC[?1049h) всё время сессии, а у alt-буфера истории нет — прокрутка
+    // идёт через copy-mode самого tmux. Держим умеренное значение для случаев, когда
+    // терминал всё же в обычном буфере (до attach, после detach).
+    scrollback: 5000,
     macOptionIsMeta: true,
     // Нужен для proposed API: unicode11 (unicode.activeVersion) и search-декорации.
     allowProposedApi: true,

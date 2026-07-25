@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawn } from 'node-pty';
 import { encodeFrame, jsonFrame, decodeFrame, FrameType } from '@termhub/protocol';
-import { attachTerminal, wireTerminalWs, type RestoreFn } from '../src/bridge.js';
+import { attachTerminal, wireTerminalWs } from '../src/bridge.js';
 
 // node-pty мокаем целиком: полный контроль над spawn, включая синхронный throw
 // (кейс «бинарь tmux отсутствует»), без реального tmux/pty.
@@ -9,12 +9,9 @@ vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 const mockSpawn = vi.mocked(spawn);
 
-/** Заглушка восстановления истории: синхронно, без реального tmux и без hold-буфера
- *  (иначе реальный attachTerminal дёрнул бы tmux, а вывод завис бы до async-колбэка). */
-const noRestore: RestoreFn = (_s, _sess, done) => done();
-/** wireTerminalWs с этой заглушкой (реальный restore проверяется в bridge.tmux.test). */
+/** Короткая обёртка над wireTerminalWs (опции по умолчанию — пустые). */
 const wire = (o: Parameters<typeof wireTerminalWs>[0] = {}): ReturnType<typeof wireTerminalWs> =>
-  wireTerminalWs({ restore: noRestore, ...o });
+  wireTerminalWs(o);
 
 /** Управляемый фейк IPty: перехватывает колбэки и запоминает write/resize/kill. */
 function makeFakePty() {
