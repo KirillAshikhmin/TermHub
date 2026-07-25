@@ -54,16 +54,22 @@ transmitted to the agent only inside the encrypted pairing channel.
   signature.
 - **A normal session:** X25519 key exchange (`crypto_kx`) → a pair of session
   keys → all traffic in both directions goes through
-  `crypto_secretstream_xchacha20poly1305`.
+  `crypto_secretstream_xchacha20poly1305`. The agent additionally sends a fresh
+  32-byte challenge, and the client signs the handshake transcript
+  (challenge ‖ client stream header ‖ agent stream header) with its long-term
+  Ed25519 key. Without a valid signature the agent never enters the streaming
+  state, so a recorded session **cannot be replayed** — otherwise an untrusted
+  relay could replay everything you once typed.
 - **Trust follows the TOFU principle** (trust on first use): once successfully
   paired, a device stays trusted until it is explicitly revoked. There is no
   certificate authority — only keys and the fact of pairing.
 - **Revoking a device:** `termhub devices` / `termhub revoke <fingerprint|name>`
-  on the Mac. After revocation, the device does not pass a new E2E handshake
-  and cannot open new terminals even over an already established connection.
-  Terminals already open at that moment continue to live until the connection
-  is dropped — to terminate them immediately, restart the agent
-  (`termhub start`).
+  on the host. Revocation applies **immediately, including to a live
+  connection**: the agent re-checks the device against `authorized.json` on
+  every frame, and a revoked but silent connection is evicted by a sweep within
+  a few seconds. Privileged frames (opening a terminal, device management, any
+  mutation) are checked without caching, so they are rejected the moment the
+  device is revoked.
 
 **About forward secrecy.** Session keys are derived from the devices'
 long-term keys (static Diffie–Hellman); there are no ephemeral per-session
@@ -71,9 +77,26 @@ keys. The practical implication: if someone's long-term private key is
 compromised, an attacker who recorded the encrypted traffic in advance (for
 example, on the relay itself) will be able to decrypt it after the fact. This
 is a deliberate trade-off: the relay by design does not store traffic, and the
-live channel remains confidential and protected against tampering. If your
-threat model requires perfect forward secrecy, that is a direction for a
-future version (ephemeral X25519 on top of identity-based authentication).
+live channel remains confidential, protected against tampering and against
+replay (see the handshake signature above). If your threat model requires
+perfect forward secrecy, that is a direction for a future version (ephemeral
+X25519 on top of identity-based authentication).
+
+**Guest access (scope).** «Share» can issue a pairing code limited to a single
+session: the guest sees only that session in the list, and the flags «allow
+input» and «allow files» are enforced **by the agent**, not just hidden in the
+UI. File and VCS operations for such a device are additionally confined to the
+working directory of the shared session. If the scope is malformed, the agent
+refuses to issue a code at all rather than silently granting full access.
+
+**Where the relay is in the trust boundary.** Terminal traffic is end-to-end
+encrypted and the relay cannot read it. But when you open the PWA *from the
+relay*, the relay also serves the JavaScript that performs that encryption — so
+for the browser client the relay is part of the trusted computing base. Someone
+who controls the relay could serve modified code. The CLI client
+(`termhub connect`) does not have this property: it runs code from your own
+machine. If this matters to you, use the CLI or serve the PWA from the agent
+over the LAN.
 
 ## Protection against arbitrary commands (anti-RCE)
 

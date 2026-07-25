@@ -35,3 +35,35 @@ jobs:
 
       - name: Test
         run: npx vitest run
+
+      # Инвариант: libsodium (крипта relay-режима) НЕ должен попадать в LAN-бандл —
+      # он грузится ленивым import('./remote') только в remote-режиме.
+      - name: Check libsodium is not in the LAN bundle
+        run: |
+          if grep -l -E 'libsodium|crypto_kx|crypto_secretstream' packages/agent/static/assets/main-*.js; then
+            echo "::error::libsodium leaked into the LAN bundle"
+            exit 1
+          fi
+          echo "OK: LAN bundle is free of libsodium"
+
+      # Известные уязвимости в зависимостях, которые реально уезжают в рантайм.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  # Агент кросс-платформенный (macOS + Linux) — держим сборку и тесты зелёными на обеих.
+  build-test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tmux
+        run: brew install tmux
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Typecheck web
+        run: npx tsc -p packages/web/tsconfig.json --noEmit
+      - name: Test
+        run: npx vitest run

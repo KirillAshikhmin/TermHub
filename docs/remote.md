@@ -149,9 +149,9 @@ with the same `termhub share`.
 `https://relay.example.com`), tap "Add by code" and enter the code (or scan the
 QR).
 
-> The LAN dashboard menu has a similar "Share access" item, but for now it is
-> marked "soon" — at the moment the code is generated only by the
-> `termhub share` command on the Mac.
+> The same can be done from the web UI: the "Share access" item in the dashboard
+> menu issues a code and can optionally limit the guest to a single session
+> (view-only / file access) — see "Guest access" in `security.md`.
 
 **From another computer (CLI):**
 

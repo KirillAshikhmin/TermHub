@@ -18,7 +18,7 @@ CLI-клиент «ssh через relay».
 | Пакет            | Что внутри |
 |------------------|------------|
 | `@termhub/protocol` | Фундамент: фрейм-кодек (`frames.ts`), E2E-крипта на libsodium (`crypto.ts`), base64 (`b64.ts`). Зависимость всех остальных. |
-| `@termhub/agent` | Node-процесс на Mac + CLI `termhub`. HTTP/WS-сервер (`server.ts`+`auth.ts`), обёртка tmux (`sessions.ts`), мост pty↔tmux↔WS (`bridge.ts`), web-push (`push.ts`), LaunchAgent (`service.ts`), конфиг/setup (`config.ts`/`setup.ts`/`paths.ts`), remote-сторона (`relay-link.ts`/`share.ts`), CLI-клиент (`connect-cmd.ts`/`pair-cmd.ts`/`client-store.ts`/`devices-cmd.ts`), роутер команд (`cli.ts`). |
+| `@termhub/agent` | Node-процесс на хосте (macOS/Linux) + CLI `termhub`. HTTP/WS-сервер (`server.ts`+`auth.ts`), обёртка tmux (`sessions.ts`), мост pty↔tmux↔WS (`bridge.ts`), web-push (`push.ts`), автозапуск LaunchAgent/systemd (`service.ts`), конфиг/setup (`config.ts`/`setup.ts`/`paths.ts`), remote-сторона (`relay-link.ts`/`share.ts`), CLI-клиент (`connect-cmd.ts`/`pair-cmd.ts`/`client-store.ts`/`devices-cmd.ts`), роутер команд (`cli.ts`). |
 | `@termhub/relay` | Zero-knowledge коммутатор (VPS, Docker): `index.ts`+`rooms.ts`, раздача статики `static.ts`, точка входа `main.ts`. |
 | `@termhub/web`   | PWA (vite + vanilla TS, xterm.js). Транспорт-абстракция `transport.ts`/`relay-transport.ts`, экраны `dashboard.ts`/`term.ts`/`pairing.ts`, SW `sw.ts`, крипта-в-браузере `keys.ts`/`remote.ts`. Собирается в `packages/agent/static` (раздаётся агентом). |
 
@@ -30,7 +30,7 @@ CLI-клиент «ssh через relay».
 ```bash
 npm install            # + postinstall: chmod +x на spawn-helper node-pty (иначе pty не спавнится)
 npm run build          # tsc по всем пакетам + vite-сборка web → packages/agent/static
-npx vitest run         # все тесты (240 шт.)
+npx vitest run         # все тесты (401 шт.)
 npx vitest run packages/agent/test/sessions.unit.test.ts   # один файл
 npm run build -w @termhub/web        # только web-бандл
 node packages/agent/bin/termhub.js <команда>   # запуск CLI из исходников после build
@@ -57,9 +57,12 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
 
 3. **Крипто-роли фиксированы:** агент = `server`, клиенты (web/CLI) = `client`
    в `sessionKeys`. Хендшейк: plaintext `hello{edPub}` → проверка fingerprint ∈
-   authorized → `hello-ok{header}` → `hello-fin{header}` → secretstream. Роли
-   web/CLI/agent должны оставаться зеркальными — при правке хендшейка меняй все
-   три стороны согласованно и гоняй `e2e.full.test.ts`.
+   authorized → `hello-ok{header, nonce}` → `hello-fin{header, sig}` → secretstream.
+   `sig` — подпись транскрипта (`handshakeTranscript` в protocol/crypto.ts) свежего
+   челленджа обоими header'ами: без неё агент в streaming НЕ пускает, и это
+   единственное, что защищает от переигрывания записанной сессии недоверенным relay.
+   Роли и подпись web/CLI/agent должны оставаться зеркальными — при правке хендшейка
+   меняй все три стороны согласованно и гоняй `e2e.full.test.ts`.
 
 4. **tmux в тестах — только изолированный сокет** `-L termhub-test-<uniq>` +
    `kill-server` в teardown. Никогда не трогай дефолтный tmux-сервер. Все вызовы
