@@ -33,7 +33,7 @@
   "scripts": {
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true",
     "test": "vitest run",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build -w @termhub/protocol && npm run build -w @termhub/agent && npm run build -w @termhub/relay && npm run build -w @termhub/web"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
