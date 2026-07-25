@@ -73,6 +73,39 @@ export function toast(message: string, kind: 'info' | 'error' = 'info'): void {
   }, 3200);
 }
 
+/** Копирует текст в буфер. В secure context (HTTPS/localhost) — Clipboard API; иначе
+ *  (LAN по HTTP, где `navigator.clipboard` не определён и обращение к нему бросает
+ *  исключение) — фолбэк через временный textarea + execCommand. Возвращает успех —
+ *  вызывающий сам показывает toast. */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // недоступно/запрещено — пробуем legacy-фолбэк ниже
+    }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    document.body.append(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Крутящийся индикатор. */
 export function spinner(): HTMLSpanElement {
   const span = document.createElement('span');

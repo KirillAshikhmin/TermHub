@@ -4,7 +4,7 @@
 
 import { t } from './i18n';
 import type { DeviceInfo, DeviceScope, Transport } from './transport';
-import { iconButton, openModal, spinner, toast } from './ui';
+import { copyToClipboard, iconButton, openModal, spinner, toast } from './ui';
 
 /** Короткий отпечаток для отображения. */
 function shortFp(fp: string): string {
@@ -34,9 +34,8 @@ function showCode(body: HTMLElement, code: string): void {
   copy.className = 'th-btn';
   copy.textContent = t('share.copy');
   copy.addEventListener('click', () => {
-    void navigator.clipboard.writeText(code).then(
-      () => toast(t('share.copied'), 'info'),
-      () => toast(t('files.error'), 'error'),
+    void copyToClipboard(code).then((ok) =>
+      toast(ok ? t('share.copied') : t('files.error'), ok ? 'info' : 'error'),
     );
   });
   body.append(codeEl, hint, copy);
