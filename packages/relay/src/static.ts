@@ -13,7 +13,7 @@ const NO_CACHE = 'no-cache';
 const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy':
     "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; " +
-    "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; " +
+    "style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; " +
     "font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
