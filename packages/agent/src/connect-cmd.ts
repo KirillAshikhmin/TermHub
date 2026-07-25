@@ -22,6 +22,8 @@ import {
   makeDecryptor,
   makeEncryptor,
   sessionKeys,
+  sign,
+  handshakeTranscript,
   toB64,
   type Decryptor,
   type Encryptor,
@@ -217,18 +219,27 @@ class RemoteConn implements RemoteAgent {
       return;
     }
     if (frame.type !== FrameType.Data) return;
-    let msg: { t?: unknown; header?: unknown };
+    let msg: { t?: unknown; header?: unknown; nonce?: unknown };
     try {
-      msg = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown };
+      msg = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown; nonce?: unknown };
     } catch {
       return;
     }
     if (msg.t !== 'hello-ok' || typeof msg.header !== 'string') return;
+    // Челлендж свежести обязателен (см. handshakeTranscript): без него не начинаем.
+    if (typeof msg.nonce !== 'string') return;
 
     const { rx, tx } = sessionKeys('client', this.identity, this.agentEdPub);
     this.encryptor = makeEncryptor(tx);
-    this.decryptor = makeDecryptor(rx, fromB64(msg.header));
-    this.sendRaw(jsonFrame(FrameType.Data, 0, { t: 'hello-fin', header: toB64(this.encryptor.header) }));
+    const serverHeader = fromB64(msg.header);
+    this.decryptor = makeDecryptor(rx, serverHeader);
+    const sig = sign(
+      this.identity.edSec,
+      handshakeTranscript(fromB64(msg.nonce), this.encryptor.header, serverHeader),
+    );
+    this.sendRaw(
+      jsonFrame(FrameType.Data, 0, { t: 'hello-fin', header: toB64(this.encryptor.header), sig: toB64(sig) }),
+    );
     this.state = 'streaming';
     this.onStreamReady();
   }

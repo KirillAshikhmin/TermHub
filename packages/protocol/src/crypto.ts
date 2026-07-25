@@ -156,3 +156,32 @@ export function sign(sec: Uint8Array, msg: Uint8Array): Uint8Array {
 export function verify(pub: Uint8Array, msg: Uint8Array, sig: Uint8Array): boolean {
   return sodium.crypto_sign_verify_detached(sig, msg, pub);
 }
+
+/** Домен-разделитель транскрипта хендшейка (чтобы подпись нельзя было переиспользовать
+ *  в другом контексте, где тем же ключом подписывается что-то ещё). */
+const HANDSHAKE_DOMAIN = new TextEncoder().encode('termhub-handshake-v1');
+
+/**
+ * Транскрипт хендшейка, который клиент подписывает своим долговременным ключом:
+ * (домен ‖ челлендж агента ‖ header клиента ‖ header агента).
+ *
+ * Зачем: сессионные ключи выводятся только из статических Ed25519-ключей сторон, поэтому
+ * secretstream детерминирован — записанный поток расшифровался бы повторно, и недоверенный
+ * relay мог бы переиграть агенту всё, что пользователь когда-либо набирал. Свежий челлендж
+ * делает каждую сессию неповторимой, а привязка обоих header'ов не даёт склеить валидную
+ * подпись с записанными ранее потоками. Считается ОДИНАКОВО на всех трёх сторонах
+ * (агент, web-клиент, CLI-клиент) — при правке меняй все три.
+ */
+export function handshakeTranscript(
+  challenge: Uint8Array,
+  clientHeader: Uint8Array,
+  serverHeader: Uint8Array,
+): Uint8Array {
+  const out = new Uint8Array(HANDSHAKE_DOMAIN.length + challenge.length + clientHeader.length + serverHeader.length);
+  let at = 0;
+  for (const part of [HANDSHAKE_DOMAIN, challenge, clientHeader, serverHeader]) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}

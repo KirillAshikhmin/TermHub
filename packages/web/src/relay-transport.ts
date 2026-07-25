@@ -13,6 +13,8 @@ import {
   makeDecryptor,
   makeEncryptor,
   sessionKeys,
+  sign,
+  handshakeTranscript,
   type Decryptor,
   type Encryptor,
   type Frame,
@@ -315,19 +317,27 @@ export class RelayTransport implements Transport {
       return;
     }
     if (frame.type !== FrameType.Data) return;
-    let msg: { t?: unknown; header?: unknown };
+    let msg: { t?: unknown; header?: unknown; nonce?: unknown };
     try {
-      msg = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown };
+      msg = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown; nonce?: unknown };
     } catch {
       return;
     }
     if (msg.t !== 'hello-ok' || typeof msg.header !== 'string') return;
+    // Агент обязан прислать челлендж свежести — без него сессию не начинаем (иначе
+    // относительно replay мы вернулись бы к старому, уязвимому поведению).
+    if (typeof msg.nonce !== 'string') return;
 
     const { rx, tx } = sessionKeys('client', this.identity, this.agentEdPub);
     this.encryptor = makeEncryptor(tx);
-    this.decryptor = makeDecryptor(rx, unb64(msg.header));
-    // hello-fin — plaintext (последний кадр до потоков), со своим header.
-    this.sendRaw(jsonFrame(FrameType.Data, 0, { t: 'hello-fin', header: b64(this.encryptor.header) }));
+    const serverHeader = unb64(msg.header);
+    this.decryptor = makeDecryptor(rx, serverHeader);
+    // hello-fin — plaintext (последний кадр до потоков): свой header + подпись
+    // транскрипта (челлендж ‖ наш header ‖ header агента) долговременным ключом.
+    const sig = sign(this.identity.edSec, handshakeTranscript(unb64(msg.nonce), this.encryptor.header, serverHeader));
+    this.sendRaw(
+      jsonFrame(FrameType.Data, 0, { t: 'hello-fin', header: b64(this.encryptor.header), sig: b64(sig) }),
+    );
     this.state = 'streaming';
     this.everStreamed = true;
     this.backoff = BACKOFF_START_MS;

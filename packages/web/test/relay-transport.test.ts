@@ -120,9 +120,15 @@ function driveToHelloSent(ws: FakeWebSocket): Uint8Array {
 function respondHelloOk(ws: FakeWebSocket, agentIdentity: Identity, clientEdPub: Uint8Array): Uint8Array {
   const { rx, tx } = sessionKeys('server', agentIdentity, clientEdPub);
   const agentEncryptor = makeEncryptor(tx);
-  ws.deliverBinary(jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEncryptor.header) }));
+  // nonce — челлендж свежести (анти-replay): клиент обязан подписать транскрипт.
+  ws.deliverBinary(
+    jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEncryptor.header), nonce: b64(NONCE) }),
+  );
   return rx;
 }
+
+/** Фиксированный челлендж для тестов (в проде — случайные 32 байта). */
+const NONCE = new Uint8Array(32).fill(7);
 
 describe('RelayTransport — onStreamReady: re-OPEN уходит раньше outbox', () => {
   it('первое подключение: DATA, набранная во время handshaking, доходит агенту ПОСЛЕ OPEN своего канала', () => {
@@ -246,7 +252,9 @@ describe('RelayTransport — create() дожидается подтвержде�
     const clientEdPub = driveToHelloSent(ws);
     const { tx } = sessionKeys('server', agentIdentity, clientEdPub);
     const agentEnc = makeEncryptor(tx);
-    ws.deliverBinary(jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header) }));
+    ws.deliverBinary(
+      jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header), nonce: b64(NONCE) }),
+    );
     expect(transport.isStreaming).toBe(true);
     return { transport, ws, agentEnc };
   }

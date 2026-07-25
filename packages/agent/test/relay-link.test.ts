@@ -19,6 +19,8 @@ import {
   sealPair,
   openPair,
   sessionKeys,
+  sign,
+  handshakeTranscript,
   makeEncryptor,
   makeDecryptor,
   encodeFrame,
@@ -55,6 +57,17 @@ function b64(bytes: Uint8Array): string {
 function unb64(s: string): Uint8Array {
   return new Uint8Array(Buffer.from(s, 'base64'));
 }
+/** hello-fin С ПОДПИСЬЮ транскрипта (челлендж ‖ header клиента ‖ header агента):
+ *  без неё агент в streaming не пускает — это и есть защита от переигрывания сессии. */
+function finFrame(
+  clientId: Identity,
+  clientEnc: { header: Uint8Array },
+  ok: { header: string; nonce: string },
+): Uint8Array {
+  const sig = sign(clientId.edSec, handshakeTranscript(unb64(ok.nonce), clientEnc.header, unb64(ok.header)));
+  return dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header), sig: b64(sig) });
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -292,7 +305,7 @@ describe('RelayLink — обслуживание клиента', () => {
       const okMsg = await col.next();
       const okFrame = decodeFrame(new Uint8Array(okMsg.binary as Buffer));
       expect(okFrame.type).toBe(FrameType.Data);
-      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string };
+      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');
 
       // 3. Ключи сессии клиента (role=client) + свои потоки
@@ -301,7 +314,7 @@ describe('RelayLink — обслуживание клиента', () => {
       const clientEnc = makeEncryptor(tx);
 
       // 4. hello-fin c header клиента
-      ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+      ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
 
       // 5. LIST (первый secretstream-chunk)
       ws.send(clientEnc.push(encodeFrame({ type: FrameType.List, channel: 0, payload: new Uint8Array(0) })), {
@@ -335,11 +348,12 @@ describe('RelayLink — обслуживание клиента', () => {
       const okMsg = await col.next();
       const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
         header: string;
+        nonce: string;
       };
       const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
       const clientDec = makeDecryptor(rx, unb64(ok.header));
       const clientEnc = makeEncryptor(tx);
-      ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+      ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
 
       // CREATE валидной сессии (root известен, подкаталог work существует).
       ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, { name: 'created-x', root, dir: 'work', preset: 'zsh' })), {
@@ -356,6 +370,64 @@ describe('RelayLink — обслуживание клиента', () => {
     25000,
   );
 
+  it('replay: записанный хендшейк + поток НЕ проигрываются повторно (свежесть челленджа)', async () => {
+    const clientId = generateIdentity();
+    const device: AuthorizedDevice = {
+      name: 'recorded',
+      edPub: b64(clientId.edPub),
+      fingerprint: fingerprint(clientId.edPub),
+      addedAt: Date.now(),
+    };
+    saveAuthorized([device]);
+
+    // ── Сеанс 1: записываем ровно то, что уходит от клиента (как это видит relay).
+    const first = await connectClient(relayHandle.port, agentId);
+    const recHello = dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name });
+    first.ws.send(recHello, { binary: true });
+    const ok1 = JSON.parse(td.decode(decodeFrame(new Uint8Array((await first.col.next()).binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx: rx1, tx: tx1 } = sessionKeys('client', clientId, agentIdentity.edPub);
+    const dec1 = makeDecryptor(rx1, unb64(ok1.header));
+    const enc1 = makeEncryptor(tx1);
+    const recFin = finFrame(clientId, enc1, ok1);
+    first.ws.send(recFin, { binary: true });
+    const recList = enc1.push(encodeFrame({ type: FrameType.List, channel: 0, payload: new Uint8Array(0) }));
+    first.ws.send(recList, { binary: true });
+    // Убеждаемся, что в ЖИВОЙ сессии это работает (иначе тест ничего не доказывает).
+    expect(decodeFrame(dec1.pull(new Uint8Array((await first.col.next()).binary as Buffer))).type).toBe(
+      FrameType.ListResult,
+    );
+    first.ws.close();
+
+    // ── Сеанс 2: недоверенный relay переигрывает записанные байты как есть.
+    const replay = await connectClient(relayHandle.port, agentId);
+    replay.ws.send(recHello, { binary: true }); // hello статичен — пройдёт
+    await replay.col.next(); // hello-ok, но уже с ДРУГИМ челленджем
+    replay.ws.send(recFin, { binary: true }); // подпись над СТАРЫМ челленджем
+    replay.ws.send(recList, { binary: true }); // записанная команда
+
+    // Агент обязан отвергнуть хендшейк: приходит PLAINTEXT ERROR (bad-signature),
+    // а не расшифрованный ListResult, и сессия закрывается.
+    const msg = await Promise.race([
+      replay.col.next(),
+      delay(3000).then(() => ({ t: 'silence' }) as Msg),
+    ]);
+    expect(msg.binary).toBeDefined(); // агент ответил кадром отказа
+    const rejectFrame = decodeFrame(new Uint8Array(msg.binary as Buffer));
+    expect(rejectFrame.type).toBe(FrameType.Error);
+    expect(frameJson<{ code: string }>(rejectFrame).code).toBe('bad-signature');
+
+    // И главное: записанная команда НЕ исполнилась — ListResult в потоке не приходит.
+    const after = await Promise.race([
+      replay.col.next().then(() => 'more-data' as const),
+      new Promise<'closed'>((resolve) => replay.ws.once('close', () => resolve('closed'))),
+      delay(1500).then(() => 'silence' as const),
+    ]);
+    expect(after).not.toBe('more-data');
+  }, 25000);
+
   it('отзыв действует на ЖИВОЕ соединение: следующий кадр отвергается, Share не выдаёт код', async () => {
     const clientId = generateIdentity();
     const device: AuthorizedDevice = {
@@ -371,11 +443,12 @@ describe('RelayLink — обслуживание клиента', () => {
     const okMsg = await col.next();
     const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
       header: string;
+      nonce: string;
     };
     const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
     const clientDec = makeDecryptor(rx, unb64(ok.header));
     const clientEnc = makeEncryptor(tx);
-    ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+    ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
 
     // До отзыва LIST работает.
     ws.send(clientEnc.push(encodeFrame({ type: FrameType.List, channel: 0, payload: new Uint8Array(0) })), {
@@ -475,12 +548,12 @@ describe('RelayLink — мультиплекс каналов и idle-тайма
       // Хендшейк hello → hello-ok → hello-fin → два secretstream-потока.
       ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: 'mux-laptop' }), { binary: true });
       const okFrame = decodeFrame(new Uint8Array((await col.next()).binary as Buffer));
-      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string };
+      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');
       const { rx, tx } = sessionKeys('client', clientId, muxIdentity.edPub);
       const clientDec = makeDecryptor(rx, unb64(ok.header));
       const clientEnc = makeEncryptor(tx);
-      ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+      ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
 
       const push = (bytes: Uint8Array): void => ws.send(clientEnc.push(bytes), { binary: true });
       const nextFrame = async () => decodeFrame(clientDec.pull(new Uint8Array((await col.next()).binary as Buffer)));
@@ -566,11 +639,11 @@ describe('RelayLink — hardening (pending-cap, revoke)', () => {
       const promoter = pending[0]!;
       promoter.ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub) }), { binary: true });
       const okFrame = decodeFrame(new Uint8Array((await promoter.col.next()).binary as Buffer));
-      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string };
+      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');
       const { tx } = sessionKeys('client', clientId, capIdentity.edPub);
       const clientEnc = makeEncryptor(tx);
-      promoter.ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+      promoter.ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
       await delay(250); // дать агенту дойти до streaming (pending 8 → 7)
 
       // Теперь новый клиент принимается (pending под лимитом) — не закрывается.
@@ -607,12 +680,12 @@ describe('RelayLink — hardening (pending-cap, revoke)', () => {
       // Хендшейк до streaming.
       ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub) }), { binary: true });
       const okFrame = decodeFrame(new Uint8Array((await col.next()).binary as Buffer));
-      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string };
+      const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');
       const { rx, tx } = sessionKeys('client', clientId, revokeIdentity.edPub);
       const clientDec = makeDecryptor(rx, unb64(ok.header));
       const clientEnc = makeEncryptor(tx);
-      ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+      ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
 
       const push = (bytes: Uint8Array): void => ws.send(clientEnc.push(bytes), { binary: true });
       const nextFrame = async () => decodeFrame(clientDec.pull(new Uint8Array((await col.next()).binary as Buffer)));

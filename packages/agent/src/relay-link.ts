@@ -8,8 +8,12 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { WebSocket } from 'ws';
+import { randomBytes } from 'node:crypto';
+
 import {
   sign,
+  verify,
+  handshakeTranscript,
   fingerprint,
   fromB64,
   generatePairingCode,
@@ -76,6 +80,8 @@ const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 /** Тайм-аут ожидания регистрации (для openPairing при недоступном relay). */
 const READY_TIMEOUT_MS = 5000;
+/** Размер челленджа свежести в хендшейке (замена replay-уязвимому детерминизму). */
+const CHALLENGE_BYTES = 32;
 /** Ed25519-публичный ключ — 32 байта. */
 const ED25519_PUB_BYTES = 32;
 /** Размеры терминала по умолчанию при OPEN (клиент затем шлёт RESIZE). */
@@ -131,6 +137,10 @@ interface ClientSession {
   scope?: DeviceScope;
   /** rx-ключ (client→agent), нужен для makeDecryptor на шаге hello-fin. */
   rxKey?: Uint8Array;
+  /** Одноразовый челлендж, отданный в hello-ok: клиент подписывает его в hello-fin. */
+  challenge?: Uint8Array;
+  /** Ed25519-ключ клиента (для проверки подписи хендшейка). */
+  edPub?: Uint8Array;
   encryptor?: Encryptor;
   decryptor?: Decryptor;
   /** Таймер pre-hello: гасится при переходе в streaming и в disposeClient. */
@@ -565,17 +575,45 @@ export class RelayLink {
 
     s.rxKey = rx;
     s.encryptor = makeEncryptor(tx);
-    this.sendPlain(s.connId, jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: toB64(s.encryptor.header) }));
+    // Свежесть: сессионные ключи выводятся ТОЛЬКО из статических Ed25519-ключей, поэтому
+    // сам по себе поток детерминирован — записанный сеанс расшифровался бы повторно, и
+    // недоверенный relay мог бы переиграть набранные пользователем команды. Челлендж
+    // привязывает сессию ко времени: без свежей подписи клиента в streaming не пускаем.
+    s.challenge = randomBytes(CHALLENGE_BYTES);
+    s.edPub = edPub;
+    this.sendPlain(
+      s.connId,
+      jsonFrame(FrameType.Data, 0, {
+        t: 'hello-ok',
+        header: toB64(s.encryptor.header),
+        nonce: toB64(s.challenge),
+      }),
+    );
     s.state = 'fin';
   }
 
   private handleFin(s: ClientSession, payload: Uint8Array): void {
     const frame = decodeFrame(payload);
     if (frame.type !== FrameType.Data) return this.rejectClient(s, 'bad-fin', 'expected hello-fin');
-    const fin = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown };
-    if (fin.t !== 'hello-fin' || typeof fin.header !== 'string' || !s.rxKey)
+    const fin = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown; sig?: unknown };
+    if (fin.t !== 'hello-fin' || typeof fin.header !== 'string' || !s.rxKey || !s.challenge || !s.edPub)
       return this.rejectClient(s, 'bad-fin', 'malformed hello-fin');
-    s.decryptor = makeDecryptor(s.rxKey, fromB64(fin.header));
+    // Подпись клиента над (челлендж ‖ его header ‖ наш header) долговременным ключом.
+    // Челлендж свежий, поэтому записанный ранее hello-fin здесь не пройдёт — это и
+    // закрывает переигрывание сессии недоверенным relay. Привязка обоих header'ов не
+    // даёт подставить к валидной подписи чужие (записанные) потоки.
+    if (typeof fin.sig !== 'string') return this.rejectClient(s, 'bad-fin', 'missing handshake signature');
+    const clientHeader = fromB64(fin.header);
+    const transcript = handshakeTranscript(s.challenge, clientHeader, s.encryptor!.header);
+    let sigOk = false;
+    try {
+      sigOk = verify(s.edPub, transcript, fromB64(fin.sig));
+    } catch {
+      sigOk = false;
+    }
+    if (!sigOk) return this.rejectClient(s, 'bad-signature', 'handshake signature rejected');
+    s.challenge = undefined; // одноразовый
+    s.decryptor = makeDecryptor(s.rxKey, clientHeader);
     s.state = 'streaming';
     if (s.helloTimer) {
       clearTimeout(s.helloTimer);
