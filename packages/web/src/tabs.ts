@@ -201,6 +201,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   createBtn.type = 'button';
   createBtn.className = 'th-btn th-btn--primary th-spanel__create';
   createBtn.append(svgIcon('plus'), document.createTextNode(t('dashboard.newSession')));
+  // Создание сессий — только владельцу. Для relay scope известен после первого list();
+  // до него прячем (mode==='relay'), иначе «+» мигнул бы гостю. render() ниже выставит
+  // финальное состояние по transport.clientScope.
+  createBtn.hidden = opts.transport.mode === 'relay';
   createBtn.addEventListener('click', () => {
     closePanel();
     opts.onCreate();
@@ -295,12 +299,26 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     opts.onKill,
   );
   tabs.set(opts.current, currentTab);
+  // До первого list у relay scope неизвестен — на всякий случай прячем крестик текущей
+  // вкладки (render ниже вернёт его владельцу). Гость сессии не убивает.
+  if (opts.transport.mode === 'relay') {
+    const c = currentTab.querySelector<HTMLElement>('.th-tab__close');
+    if (c) c.hidden = true;
+  }
   strip.append(currentTab);
 
   // Точечное обновление, как в дашборде: не пересоздаём узлы, чтобы не сбрасывать
   // горизонтальный скролл полосы и фокус.
   const render = (sessions: TabInfo[]): void => {
     latest = sessions; // снимок для панели быстрого переключения
+    // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
+    // крестики-закрытия табов.
+    const guest = opts.transport.clientScope != null;
+    createBtn.hidden = guest;
+    for (const el of tabs.values()) {
+      const c = el.querySelector<HTMLElement>('.th-tab__close');
+      if (c) c.hidden = guest;
+    }
     if (panelOpen) buildPanelRows(); // панель открыта во время поллинга — держим свежей
     const wanted = new Set(sessions.map((s) => s.name));
     wanted.add(opts.current);
@@ -322,6 +340,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       if (existing) updateSessionTab(existing, info, isCurrent, t, show);
       else {
         const el = renderSessionTab(info, isCurrent, t, opts.onSwitch, opts.onKill, show);
+        if (guest) {
+          const c = el.querySelector<HTMLElement>('.th-tab__close');
+          if (c) c.hidden = true;
+        }
         tabs.set(s.name, el);
         strip.append(el);
       }
