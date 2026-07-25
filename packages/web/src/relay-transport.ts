@@ -185,13 +185,19 @@ export class RelayTransport implements Transport {
   private pendingCreate: PendingCreate[] = [];
   private pendingCaffeinate: PendingCaffeinate[] = [];
   private pendingPushKey: PendingPushKey[] = [];
-  private pendingDirs: PendingDirs[] = [];
-  private pendingFilesList: PendingFilesList[] = [];
-  private pendingFileRead: PendingFileRead[] = [];
+  // Сопоставление ответов по id, а НЕ по порядку (FIFO): агент обрабатывает кадры
+  // асинхронно, время ответа зависит от размера каталога/файла, а таймаут вырезал
+  // ожидающего из середины очереди — дальше все ответы съезжали на один. Для чанков
+  // скачивания это давало ТИХУЮ порчу файла (правильный размер, перемешанные куски).
+  private pendingDirs = new Map<number, PendingDirs>();
+  private pendingFilesList = new Map<number, PendingFilesList>();
+  private pendingFileRead = new Map<number, PendingFileRead>();
   private pendingShare: PendingShare[] = [];
   private pendingDevices: PendingDevices[] = [];
-  private pendingFileStat: PendingFileStat[] = [];
-  private pendingFileChunk: PendingFileChunk[] = [];
+  private pendingFileStat = new Map<number, PendingFileStat>();
+  private pendingFileChunk = new Map<number, PendingFileChunk>();
+  /** Общий счётчик id для файловых/каталожных запросов. */
+  private fileReqId = 0;
   // Repo — id-матчинг (Map): diff нескольких файлов может лететь конкурентно, FIFO не годится.
   private pendingRepo = new Map<
     number,
@@ -363,6 +369,24 @@ export class RelayTransport implements Transport {
     for (const bytes of queued) this.sendEncrypted(bytes);
   }
 
+  /** Достаёт ожидающего по id из ответа. Ответ без id (старый агент) не сопоставляем:
+   *  лучше дать запросу честно упасть по таймауту, чем отдать ЧУЖОЙ результат. */
+  private takePending<T extends { timer: ReturnType<typeof setTimeout> }>(
+    map: Map<number, T>,
+    frame: Frame,
+  ): T | undefined {
+    let id: unknown;
+    try {
+      id = frameJson<{ id?: unknown }>(frame).id;
+    } catch {
+      return undefined;
+    }
+    if (typeof id !== 'number') return undefined;
+    const pending = map.get(id);
+    if (pending) map.delete(id);
+    return pending;
+  }
+
   private dispatch(frame: Frame): void {
     switch (frame.type) {
       case FrameType.ListResult: {
@@ -414,7 +438,7 @@ export class RelayTransport implements Transport {
         return;
       }
       case FrameType.DirsResult: {
-        const pending = this.pendingDirs.shift();
+        const pending = this.takePending(this.pendingDirs, frame);
         if (!pending) return;
         clearTimeout(pending.timer);
         let groups: DirGroup[] = [];
@@ -427,7 +451,7 @@ export class RelayTransport implements Transport {
         return;
       }
       case FrameType.FilesListResult: {
-        const pending = this.pendingFilesList.shift();
+        const pending = this.takePending(this.pendingFilesList, frame);
         if (!pending) return;
         clearTimeout(pending.timer);
         try {
@@ -440,7 +464,7 @@ export class RelayTransport implements Transport {
         return;
       }
       case FrameType.FileReadResult: {
-        const pending = this.pendingFileRead.shift();
+        const pending = this.takePending(this.pendingFileRead, frame);
         if (!pending) return;
         clearTimeout(pending.timer);
         try {
@@ -509,7 +533,7 @@ export class RelayTransport implements Transport {
         return;
       }
       case FrameType.FileStatResult: {
-        const pending = this.pendingFileStat.shift();
+        const pending = this.takePending(this.pendingFileStat, frame);
         if (!pending) return;
         clearTimeout(pending.timer);
         try {
@@ -522,7 +546,7 @@ export class RelayTransport implements Transport {
         return;
       }
       case FrameType.FileChunkData: {
-        const pending = this.pendingFileChunk.shift();
+        const pending = this.takePending(this.pendingFileChunk, frame);
         if (!pending) return;
         clearTimeout(pending.timer);
         try {
@@ -606,13 +630,10 @@ export class RelayTransport implements Transport {
       ...this.pendingCreate,
       ...this.pendingCaffeinate,
       ...this.pendingPushKey,
-      ...this.pendingDirs,
-      ...this.pendingFilesList,
-      ...this.pendingFileRead,
+
       ...this.pendingShare,
       ...this.pendingDevices,
-      ...this.pendingFileStat,
-      ...this.pendingFileChunk,
+
     ]) {
       clearTimeout(pending.timer);
       pending.reject(new Error('relay disconnected'));
@@ -621,19 +642,26 @@ export class RelayTransport implements Transport {
     this.pendingCreate = [];
     this.pendingCaffeinate = [];
     this.pendingPushKey = [];
-    this.pendingDirs = [];
-    this.pendingFilesList = [];
-    this.pendingFileRead = [];
+
     this.pendingShare = [];
     this.pendingDevices = [];
-    this.pendingFileStat = [];
-    this.pendingFileChunk = [];
-    for (const pending of [...this.pendingRepo.values(), ...this.pendingFileOp.values()]) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error('relay disconnected'));
+
+    // Все id-очереди (Map) — единообразно.
+    for (const map of [
+      this.pendingRepo,
+      this.pendingFileOp,
+      this.pendingDirs,
+      this.pendingFilesList,
+      this.pendingFileRead,
+      this.pendingFileStat,
+      this.pendingFileChunk,
+    ] as Array<Map<number, { timer: ReturnType<typeof setTimeout>; reject: (e: Error) => void }>>) {
+      for (const pending of map.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error('relay disconnected'));
+      }
+      map.clear();
     }
-    this.pendingRepo.clear();
-    this.pendingFileOp.clear();
     if (this.stopped) {
       this.onLink?.('closed');
       return;
@@ -739,13 +767,14 @@ export class RelayTransport implements Transport {
     // Каталоги под корнями — через E2E-канал агента (как LIST), чтобы модалка
     // создания давала выбор из списка и в relay-режиме, а не ручной ввод.
     if (!this.isStreaming) return Promise.resolve([]);
+    const id = ++this.fileReqId;
     return new Promise<DirGroup[]>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingDirs = this.pendingDirs.filter((p) => p.timer !== timer);
+        this.pendingDirs.delete(id);
         reject(new Error('dirs timeout'));
       }, LIST_TIMEOUT_MS);
-      this.pendingDirs.push({ resolve, reject, timer });
-      this.sendFrame(encodeFrame({ type: FrameType.Dirs, channel: CONTROL_CHANNEL, payload: new Uint8Array(0) }));
+      this.pendingDirs.set(id, { resolve, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.Dirs, CONTROL_CHANNEL, { id }));
     });
   }
 
@@ -777,37 +806,40 @@ export class RelayTransport implements Transport {
 
   filesList(root: string, subpath: string): Promise<FileEntry[]> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    const id = ++this.fileReqId;
     return new Promise<FileEntry[]>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingFilesList = this.pendingFilesList.filter((p) => p.timer !== timer);
+        this.pendingFilesList.delete(id);
         reject(new Error('files-list timeout'));
       }, LIST_TIMEOUT_MS);
-      this.pendingFilesList.push({ resolve, reject, timer });
-      this.sendFrame(jsonFrame(FrameType.FilesList, CONTROL_CHANNEL, { root, path: subpath }));
+      this.pendingFilesList.set(id, { resolve, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.FilesList, CONTROL_CHANNEL, { id, root, path: subpath }));
     });
   }
 
   fileRead(root: string, subpath: string): Promise<FileContent> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    const id = ++this.fileReqId;
     return new Promise<FileContent>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingFileRead = this.pendingFileRead.filter((p) => p.timer !== timer);
+        this.pendingFileRead.delete(id);
         reject(new Error('file-read timeout'));
       }, LIST_TIMEOUT_MS);
-      this.pendingFileRead.push({ resolve, reject, timer });
-      this.sendFrame(jsonFrame(FrameType.FileRead, CONTROL_CHANNEL, { root, path: subpath }));
+      this.pendingFileRead.set(id, { resolve, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.FileRead, CONTROL_CHANNEL, { id, root, path: subpath }));
     });
   }
 
   fileStat(root: string, subpath: string): Promise<FileStat> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    const id = ++this.fileReqId;
     return new Promise<FileStat>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingFileStat = this.pendingFileStat.filter((p) => p.timer !== timer);
+        this.pendingFileStat.delete(id);
         reject(new Error('file-stat timeout'));
       }, LIST_TIMEOUT_MS);
-      this.pendingFileStat.push({ resolve, reject, timer });
-      this.sendFrame(jsonFrame(FrameType.FileStat, CONTROL_CHANNEL, { root, path: subpath }));
+      this.pendingFileStat.set(id, { resolve, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.FileStat, CONTROL_CHANNEL, { id, root, path: subpath }));
     });
   }
 
@@ -864,13 +896,14 @@ export class RelayTransport implements Transport {
     timeoutMs = LIST_TIMEOUT_MS,
   ): Promise<Uint8Array> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    const id = ++this.fileReqId;
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pendingFileChunk = this.pendingFileChunk.filter((p) => p.timer !== timer);
+        this.pendingFileChunk.delete(id);
         reject(new Error('file-chunk timeout'));
       }, timeoutMs);
-      this.pendingFileChunk.push({ resolve, reject, timer });
-      this.sendFrame(jsonFrame(FrameType.FileChunk, CONTROL_CHANNEL, { root, path: subpath, offset, len }));
+      this.pendingFileChunk.set(id, { resolve, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.FileChunk, CONTROL_CHANNEL, { id, root, path: subpath, offset, len }));
     });
   }
 

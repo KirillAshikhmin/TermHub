@@ -729,7 +729,7 @@ export class RelayLink {
         void this.doPushSubscribe(frame);
         return;
       case FrameType.Dirs:
-        void this.doDirs(s);
+        void this.doDirs(s, frame);
         return;
       case FrameType.FilesList:
         void this.doFilesList(s, frame);
@@ -861,66 +861,70 @@ export class RelayLink {
   /** Листинг директории файлового браузера через relay. Ошибка (вне корня) —
    *  в поле `error` результата, сессию не рвём. */
   private async doFilesList(s: ClientSession, frame: Frame): Promise<void> {
-    let req: { root?: string; path?: string };
+    let req: { id?: number; root?: string; path?: string };
     try {
-      req = frameJson<{ root?: string; path?: string }>(frame);
+      req = frameJson<{ id?: number; root?: string; path?: string }>(frame);
     } catch {
       req = {};
     }
+    const id = req.id;
     try {
       if (!this.files) throw new Error('file browser unavailable');
       await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const entries = await this.files.listDir(req.root ?? '', req.path ?? '');
-      this.sendFrameBytes(s, jsonFrame(FrameType.FilesListResult, 0, { entries }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FilesListResult, 0, { id, entries }));
     } catch (err) {
-      this.sendFrameBytes(s, jsonFrame(FrameType.FilesListResult, 0, { error: (err as Error).message }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FilesListResult, 0, { id, error: (err as Error).message }));
     }
   }
 
   /** Чтение файла файлового браузера через relay. */
   private async doFileRead(s: ClientSession, frame: Frame): Promise<void> {
-    let req: { root?: string; path?: string };
+    let req: { id?: number; root?: string; path?: string };
     try {
-      req = frameJson<{ root?: string; path?: string }>(frame);
+      req = frameJson<{ id?: number; root?: string; path?: string }>(frame);
     } catch {
       req = {};
     }
+    const id = req.id;
     try {
       if (!this.files) throw new Error('file browser unavailable');
       await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const content = await this.files.readFile(req.root ?? '', req.path ?? '');
-      this.sendFrameBytes(s, jsonFrame(FrameType.FileReadResult, 0, { content }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FileReadResult, 0, { id, content }));
     } catch (err) {
-      this.sendFrameBytes(s, jsonFrame(FrameType.FileReadResult, 0, { error: (err as Error).message }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FileReadResult, 0, { id, error: (err as Error).message }));
     }
   }
 
   /** Метаданные файла (размер/mime/тип) через relay — для стриминга. */
   private async doFileStat(s: ClientSession, frame: Frame): Promise<void> {
-    let req: { root?: string; path?: string };
+    let req: { id?: number; root?: string; path?: string };
     try {
-      req = frameJson<{ root?: string; path?: string }>(frame);
+      req = frameJson<{ id?: number; root?: string; path?: string }>(frame);
     } catch {
       req = {};
     }
+    const id = req.id;
     try {
       if (!this.files) throw new Error('file browser unavailable');
       await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const stat = await this.files.statFile(req.root ?? '', req.path ?? '');
-      this.sendFrameBytes(s, jsonFrame(FrameType.FileStatResult, 0, { stat }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FileStatResult, 0, { id, stat }));
     } catch (err) {
-      this.sendFrameBytes(s, jsonFrame(FrameType.FileStatResult, 0, { error: (err as Error).message }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FileStatResult, 0, { id, error: (err as Error).message }));
     }
   }
 
   /** Чтение диапазона байт файла через relay (blob-стриминг клиента). */
   private async doFileChunk(s: ClientSession, frame: Frame): Promise<void> {
-    let req: { root?: string; path?: string; offset?: number; len?: number };
+    let req: { id?: number; root?: string; path?: string; offset?: number; len?: number };
     try {
-      req = frameJson<{ root?: string; path?: string; offset?: number; len?: number }>(frame);
+      req = frameJson<{ id?: number; root?: string; path?: string; offset?: number; len?: number }>(frame);
     } catch {
       req = {};
     }
+    const id = req.id;
     try {
       if (!this.files) throw new Error('file browser unavailable');
       await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
@@ -930,22 +934,28 @@ export class RelayLink {
       const bytes = await this.files.readChunk(req.root ?? '', req.path ?? '', req.offset ?? 0, len);
       this.sendFrameBytes(
         s,
-        jsonFrame(FrameType.FileChunkData, 0, { data: Buffer.from(bytes).toString('base64'), eof: bytes.length < len }),
+        jsonFrame(FrameType.FileChunkData, 0, { id, data: Buffer.from(bytes).toString('base64'), eof: bytes.length < len }),
       );
     } catch (err) {
-      this.sendFrameBytes(s, jsonFrame(FrameType.FileChunkData, 0, { error: (err as Error).message }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.FileChunkData, 0, { id, error: (err as Error).message }));
     }
   }
 
   /** Каталоги под корнями сессий через relay (для модалки создания — выбор из списка). */
-  private async doDirs(s: ClientSession): Promise<void> {
+  private async doDirs(s: ClientSession, frame: Frame): Promise<void> {
+    let id: number | undefined;
+    try {
+      id = frameJson<{ id?: number }>(frame).id;
+    } catch {
+      id = undefined;
+    }
     let dirs: { root: string; dirs: string[] }[] = [];
     try {
       dirs = await this.sessions.dirs();
     } catch {
       dirs = [];
     }
-    this.sendFrameBytes(s, jsonFrame(FrameType.DirsResult, 0, { dirs }));
+    this.sendFrameBytes(s, jsonFrame(FrameType.DirsResult, 0, { id, dirs }));
   }
 
   /** Генерация кода пейринга через relay (владелец): openPairing(scope) → код. */

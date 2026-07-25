@@ -7,6 +7,7 @@
 import {
   decodeFrame,
   fingerprint,
+  frameJson,
   FrameType,
   generateIdentity,
   initCrypto,
@@ -239,6 +240,74 @@ describe('RelayTransport — list() пока поток не установле�
     expect(transport.isStreaming).toBe(false);
     respondHelloOk(ws, agentIdentity, clientEdPub);
     expect(transport.isStreaming).toBe(true);
+  });
+});
+
+describe('RelayTransport — сопоставление ответов по id, а не по порядку', () => {
+  /** Доводит до streaming и возвращает средства «агента» для ответов. */
+  function streaming(): {
+    transport: RelayTransport;
+    ws: FakeWebSocket;
+    agentEnc: ReturnType<typeof makeEncryptor>;
+    agentDec: ReturnType<typeof makeDecryptor>;
+  } {
+    const clientIdentity = generateIdentity();
+    const agentIdentity = generateIdentity();
+    const transport = makeTransport(clientIdentity, agentIdentity);
+    const ws = sockets[0]!;
+    const clientEdPub = driveToHelloSent(ws);
+    const { rx, tx } = sessionKeys('server', agentIdentity, clientEdPub);
+    const agentEnc = makeEncryptor(tx);
+    const before = ws.sent.length;
+    ws.deliverBinary(jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header), nonce: b64(NONCE) }));
+    const fin = JSON.parse(td.decode(decodeFrame(ws.sent[before] as Uint8Array).payload)) as { header: string };
+    return { transport, ws, agentEnc, agentDec: makeDecryptor(rx, unb64(fin.header)) };
+  }
+
+  /** Расшифровывает запросы, отправленные клиентом после хендшейка. */
+  function sentRequests(ws: FakeWebSocket, agentDec: ReturnType<typeof makeDecryptor>, fromIdx: number): Array<Record<string, unknown>> {
+    return ws.sent.slice(fromIdx).map((b) => frameJson<Record<string, unknown>>(decodeFrame(agentDec.pull(b as Uint8Array))));
+  }
+
+  it('два конкурентных fileStat: ответы в ОБРАТНОМ порядке приходят каждому своему промису', async () => {
+    const { transport, ws, agentEnc, agentDec } = streaming();
+    const from = ws.sent.length;
+    const pA = transport.fileStat('/root', 'a.txt');
+    const pB = transport.fileStat('/root', 'b.txt');
+    const reqs = sentRequests(ws, agentDec, from);
+    expect(reqs).toHaveLength(2);
+    const idA = reqs[0]!.id as number;
+    const idB = reqs[1]!.id as number;
+    expect(idA).not.toBe(idB);
+
+    // Агент отвечает в обратном порядке (медленный первый файл) — раньше это давало
+    // перепутанные результаты: A получал stat от B.
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.FileStatResult, 0, { id: idB, stat: { size: 22, mime: 'text/plain', kind: 'text' } })));
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.FileStatResult, 0, { id: idA, stat: { size: 11, mime: 'text/plain', kind: 'text' } })));
+
+    expect((await pA).size).toBe(11);
+    expect((await pB).size).toBe(22);
+  });
+
+  it('ответ на УЖЕ отвалившийся по таймауту запрос не достаётся следующему ожидающему', async () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentEnc, agentDec } = streaming();
+    const from = ws.sent.length;
+    const pA = transport.filesList('/root', 'slow');
+    const expectA = expect(pA).rejects.toThrow(/timeout/);
+    await vi.advanceTimersByTimeAsync(11_000); // A отваливается по таймауту
+    await expectA;
+
+    const pB = transport.filesList('/root', 'fast');
+    const reqs = sentRequests(ws, agentDec, from);
+    const idA = reqs[0]!.id as number;
+    const idB = reqs[1]!.id as number;
+
+    // Запоздавший ответ на A не должен разрешить B (раньше FIFO отдавал его B).
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.FilesListResult, 0, { id: idA, entries: [{ name: 'wrong' }] })));
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.FilesListResult, 0, { id: idB, entries: [{ name: 'right' }] })));
+    const entries = (await pB) as Array<{ name: string }>;
+    expect(entries[0]!.name).toBe('right');
   });
 });
 
