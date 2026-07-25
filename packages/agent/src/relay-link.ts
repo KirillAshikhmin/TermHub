@@ -4,6 +4,9 @@
 // хендшейк hello/hello-ok/hello-fin → два secretstream-потока → внутри — фреймы
 // (LIST/OPEN/DATA/RESIZE/CREATE/KILL/PING). Relay содержимое не видит.
 
+import fsp from 'node:fs/promises';
+import path from 'node:path';
+
 import { WebSocket } from 'ws';
 import {
   sign,
@@ -84,6 +87,11 @@ const HELLO_TIMEOUT_MS = 5_000;
  *  от заваливания per-agent cap relay полу-открытыми сессиями (relay pending не видит). */
 const MAX_PENDING_HELLO_PER_AGENT = 8;
 
+/** Как часто перечитывать authorized.json для сверки живых соединений (кэш на кадрах). */
+const REVOKE_RECHECK_MS = 1_000;
+/** Как часто выселять отозванные, но молчащие соединения. */
+const REVOKE_SWEEP_MS = 5_000;
+
 const utf8dec = new TextDecoder();
 
 /** Состояние обслуживаемого клиента (эволюционирует по хендшейку). */
@@ -143,6 +151,15 @@ export class RelayLink {
   private stopped = false;
   private registered = false;
   private agentId = '';
+  /** Кэш множества допущенных отпечатков: authorized.json лежит на диске, а кадры идут
+   *  потоком (каждое нажатие клавиши), поэтому читать файл на кадр нельзя. TTL делает
+   *  отзыв заметным не позже REVOKE_RECHECK_MS даже если он сделан ДРУГИМ процессом
+   *  (`termhub revoke`) или правкой файла руками. */
+  private authorizedFps = new Set<string>();
+  private authorizedAt = 0;
+  /** Таймер выселения отозванных устройств, которые молчат (сами кадров не шлют, но
+   *  продолжали бы получать вывод открытых терминалов). */
+  private revokeSweep?: ReturnType<typeof setInterval>;
   private backoff = BACKOFF_START_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly clients = new Map<number, ClientSession>();
@@ -184,11 +201,60 @@ export class RelayLink {
   start(): void {
     this.stopped = false;
     this.connect();
+    // Выселяем отозванные устройства, даже если они молчат (иначе продолжали бы получать
+    // вывод уже открытых терминалов). Покрывает и отзыв из другого процесса.
+    this.revokeSweep ??= setInterval(() => this.evictRevoked(), REVOKE_SWEEP_MS);
+    if (typeof this.revokeSweep.unref === 'function') this.revokeSweep.unref();
+  }
+
+  /** Отпечаток всё ещё в authorized? Результат кэшируется на REVOKE_RECHECK_MS. */
+  private isStillAuthorized(fp: string): boolean {
+    const now = Date.now();
+    if (now - this.authorizedAt > REVOKE_RECHECK_MS) {
+      this.authorizedAt = now;
+      this.authorizedFps = new Set(this.authorized().map((d) => d.fingerprint));
+    }
+    return this.authorizedFps.has(fp);
+  }
+
+  /** Сбрасывает кэш допущенных (после отзыва в этом же процессе — чтобы без задержки). */
+  private invalidateAuthorized(): void {
+    this.authorizedAt = 0;
+  }
+
+  /** Требует, чтобы запрошенный путь лежал внутри каталога расшаренной сессии.
+   *  Для владельца (scope нет) — без ограничений. Для гостя ограничение корнями
+   *  недостаточно: «поделиться ОДНОЙ сессией» не должно открывать все sessionRoots,
+   *  а раньше гость с files:true видел весь файловый браузер (ограничение было в UI). */
+  private async assertScopedPath(s: ClientSession, root: string, subpath: string): Promise<void> {
+    const scope = s.scope;
+    if (!scope) return;
+    const sess = (await this.sessions.list()).find((x) => x.name === scope.session);
+    if (!sess) throw new Error('shared session not found');
+    const realDir = await fsp.realpath(sess.path);
+    const abs = path.resolve(root, subpath);
+    const real = await fsp.realpath(abs).catch(() => abs);
+    if (real !== realDir && !real.startsWith(realDir + path.sep))
+      throw new Error('path outside shared session');
+  }
+
+  /** Рвёт соединения устройств, которых больше нет в authorized. */
+  private evictRevoked(): void {
+    for (const [connId, s] of [...this.clients]) {
+      if (s.fingerprint && !this.isStillAuthorized(s.fingerprint)) {
+        this.send({ t: 'client-close', connId });
+        this.disposeClient(connId);
+      }
+    }
   }
 
   /** Останавливает мост: реконнект отменяется, клиенты/пейринг закрываются. */
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.revokeSweep) {
+      clearInterval(this.revokeSweep);
+      this.revokeSweep = undefined;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -375,6 +441,7 @@ export class RelayLink {
     // Персист с дедупом по отпечатку (повторный пейринг того же устройства — замена).
     const others = this.authorized().filter((d) => d.fingerprint !== device.fingerprint);
     saveAuthorized([...others, device]);
+    this.invalidateAuthorized(); // новое устройство должно быть видно сверке сразу
 
     this.send({ t: 'pair-msg', data: toB64(sealPair(p.key, { edPub: toB64(this.identity.edPub), ok: true })) });
 
@@ -449,8 +516,13 @@ export class RelayLink {
     const edPub = fromB64(hello.edPub);
     if (edPub.length !== ED25519_PUB_BYTES) return this.rejectClient(s, 'bad-hello', 'bad edPub length');
     const fp = fingerprint(edPub);
-    const device = this.authorized().find((d) => d.fingerprint === fp);
+    const devices = this.authorized();
+    const device = devices.find((d) => d.fingerprint === fp);
     if (!device) return this.rejectClient(s, 'unauthorized', 'device not authorized');
+    // Освежаем кэш этим же чтением: иначе только что спарившееся устройство могло бы
+    // быть отвергнуто как «отозванное» на первом же кадре из-за устаревшего снимка.
+    this.authorizedFps = new Set(devices.map((d) => d.fingerprint));
+    this.authorizedAt = Date.now();
 
     const { rx, tx } = sessionKeys('server', this.identity, edPub);
     s.fingerprint = fp;
@@ -483,6 +555,14 @@ export class RelayLink {
   }
 
   private handleAppFrame(s: ClientSession, frame: Frame): void {
+    // Отзыв обязан действовать НЕМЕДЛЕННО, в том числе на уже открытое соединение.
+    // Раньше сверка с authorized была ровно в одном месте (doOpen), поэтому отозванное
+    // устройство продолжало читать/писать файлы и даже выписывало себе новый код
+    // пейринга через Share — отзыв обходился навсегда.
+    if (s.fingerprint && !this.isStillAuthorized(s.fingerprint)) {
+      this.rejectClient(s, 'revoked', 'device revoked');
+      return;
+    }
     // Гость (scope задан): управляющие операции запрещены, ввод — только с правом
     // записи, файлы — только с правом files. Фильтрация сессий — в doList/doOpen.
     const scope = s.scope;
@@ -500,6 +580,11 @@ export class RelayLink {
         case FrameType.Revoke:
           return;
         case FrameType.Data:
+          if (!scope.write) return;
+          break;
+        case FrameType.Resize:
+          // Размер общий для всех клиентов сессии: гость «только для просмотра» не
+          // должен перекраивать окно владельцу.
           if (!scope.write) return;
           break;
         case FrameType.FilesList:
@@ -655,6 +740,10 @@ export class RelayLink {
         !s.scope.write
       )
         throw new Error('no write permission');
+      // `log` с fetch=true дёргает сеть (git fetch --all / hg pull) от имени владельца —
+      // гостю «только для просмотра» это недоступно.
+      if (req.fetch === true && s.scope && !s.scope.write) throw new Error('no write permission');
+      await this.assertScopedPath(s, String(req.root ?? ''), String(req.path ?? ''));
       const result = await runRepoAction(this.vcs, req);
       this.sendFrameBytes(s, jsonFrame(FrameType.RepoResult, 0, { id, result }));
     } catch (err) {
@@ -677,6 +766,12 @@ export class RelayLink {
       if (String(req.action) !== 'stat-full' && s.scope && !s.scope.write) {
         throw new Error('no write permission');
       }
+      const opRoot = String(req.root ?? '');
+      await this.assertScopedPath(s, opRoot, String(req.path ?? ''));
+      // move/copy имеют назначение — его тоже держим внутри расшаренной сессии.
+      if (req.dest !== undefined) {
+        await this.assertScopedPath(s, String(req.destRoot ?? opRoot), String(req.dest ?? ''));
+      }
       const result = await runFileOp(this.files, req);
       this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
     } catch (err) {
@@ -695,6 +790,7 @@ export class RelayLink {
     }
     try {
       if (!this.files) throw new Error('file browser unavailable');
+      await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const entries = await this.files.listDir(req.root ?? '', req.path ?? '');
       this.sendFrameBytes(s, jsonFrame(FrameType.FilesListResult, 0, { entries }));
     } catch (err) {
@@ -712,6 +808,7 @@ export class RelayLink {
     }
     try {
       if (!this.files) throw new Error('file browser unavailable');
+      await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const content = await this.files.readFile(req.root ?? '', req.path ?? '');
       this.sendFrameBytes(s, jsonFrame(FrameType.FileReadResult, 0, { content }));
     } catch (err) {
@@ -729,6 +826,7 @@ export class RelayLink {
     }
     try {
       if (!this.files) throw new Error('file browser unavailable');
+      await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const stat = await this.files.statFile(req.root ?? '', req.path ?? '');
       this.sendFrameBytes(s, jsonFrame(FrameType.FileStatResult, 0, { stat }));
     } catch (err) {
@@ -746,6 +844,7 @@ export class RelayLink {
     }
     try {
       if (!this.files) throw new Error('file browser unavailable');
+      await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
       const len = req.len ?? 0;
       const bytes = await this.files.readChunk(req.root ?? '', req.path ?? '', req.offset ?? 0, len);
       this.sendFrameBytes(
@@ -801,7 +900,9 @@ export class RelayLink {
     }
     if (!fp) return;
     saveAuthorized(this.authorized().filter((d) => d.fingerprint !== fp));
+    this.invalidateAuthorized(); // без задержки TTL
     this.sendFrameBytes(s, jsonFrame(FrameType.DevicesResult, 0, { devices: this.authorized() }));
+    this.evictRevoked(); // рвём живые соединения отозванного устройства прямо сейчас
   }
 
   /** Push-подписка через relay: сохраняет присланную подписку в PushService.

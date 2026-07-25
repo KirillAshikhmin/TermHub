@@ -355,6 +355,50 @@ describe('RelayLink — обслуживание клиента', () => {
     },
     25000,
   );
+
+  it('отзыв действует на ЖИВОЕ соединение: следующий кадр отвергается, Share не выдаёт код', async () => {
+    const clientId = generateIdentity();
+    const device: AuthorizedDevice = {
+      name: 'to-revoke',
+      edPub: b64(clientId.edPub),
+      fingerprint: fingerprint(clientId.edPub),
+      addedAt: Date.now(),
+    };
+    saveAuthorized([device]);
+
+    const { ws, col } = await connectClient(relayHandle.port, agentId);
+    ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+    const okMsg = await col.next();
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
+      header: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
+    const clientDec = makeDecryptor(rx, unb64(ok.header));
+    const clientEnc = makeEncryptor(tx);
+    ws.send(dataJsonFrame({ t: 'hello-fin', header: b64(clientEnc.header) }), { binary: true });
+
+    // До отзыва LIST работает.
+    ws.send(clientEnc.push(encodeFrame({ type: FrameType.List, channel: 0, payload: new Uint8Array(0) })), {
+      binary: true,
+    });
+    const listFrame = decodeFrame(clientDec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+    expect(listFrame.type).toBe(FrameType.ListResult);
+
+    // Отзываем устройство «снаружи» (как это делает `termhub revoke` / HTTP-эндпоинт).
+    saveAuthorized([]);
+    await delay(1200); // больше REVOKE_RECHECK_MS — снимок допущенных обновится
+
+    // Следующий кадр отвергается: раньше отозванный клиент продолжал работать и мог
+    // через Share выписать себе новый код пейринга, обходя отзыв навсегда.
+    const closed = new Promise<void>((resolve) => ws.once('close', () => resolve()));
+    ws.send(clientEnc.push(jsonFrame(FrameType.Share, 0, {})), { binary: true });
+    const gotShare = await Promise.race([
+      col.next().then((m) => decodeFrame(clientDec.pull(new Uint8Array(m.binary as Buffer))).type),
+      closed.then(() => 'closed' as const),
+      delay(3000).then(() => 'silence' as const),
+    ]);
+    expect(gotShare).not.toBe(FrameType.ShareResult); // кода пейринга не выдали
+  }, 25000);
 });
 
 describe('RelayLink — мультиплекс каналов и idle-таймаут', () => {
