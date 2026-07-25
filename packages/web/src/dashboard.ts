@@ -371,7 +371,8 @@ export function mountDashboard(
   // Создание сессий — только владельцу. Для relay scope известен лишь после первого
   // list(), поэтому до него прячем «+» (иначе он мигнул бы гостю); render() ниже
   // выставит финальное состояние по transport.clientScope.
-  fab.hidden = transport.mode === 'relay';
+  // style.display, а НЕ .hidden: у .th-fab свой display в CSS, он перекрывает [hidden].
+  fab.style.display = transport.mode === 'relay' ? 'none' : '';
   // Создали сессию → сразу открываем её терминал (а не просто обновляем список).
   fab.addEventListener('click', () =>
     openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
@@ -405,7 +406,7 @@ export function mountDashboard(
   // точечно, «занятые» пользователем (меню/фокус) не трогаем.
   const render = (sessions: SessionInfo[]): void => {
     // Гость (scope задан после первого list) не создаёт сессий — «+» скрыт.
-    fab.hidden = transport.clientScope != null;
+    fab.style.display = transport.clientScope != null ? 'none' : '';
     if (sessions.length === 0) {
       if (!showingEmpty) {
         cards.clear();
