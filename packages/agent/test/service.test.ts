@@ -149,8 +149,8 @@ describe('buildUnit (systemd --user)', () => {
     expect(unit).toContain('[Install]');
   });
 
-  it('ExecStart runs node + termhub.js start (quoted paths)', () => {
-    expect(unit).toContain(`ExecStart="${U.execPath}" "${U.binPath}" start`);
+  it('ExecStart runs node + termhub.js start, unquoted (systemd 259 rejects quoted ExecStart)', () => {
+    expect(unit).toContain(`ExecStart=${U.execPath} ${U.binPath} start`);
   });
 
   it('restarts on failure and is wanted by default.target', () => {
@@ -158,14 +158,19 @@ describe('buildUnit (systemd --user)', () => {
     expect(unit).toContain('WantedBy=default.target');
   });
 
-  it('passes install-time PATH and a UTF-8 LANG via Environment', () => {
-    expect(unit).toContain(`Environment="PATH=${U.path}"`);
-    expect(unit).toContain(`Environment="LANG=${U.lang}"`);
+  it('passes install-time PATH and a UTF-8 LANG via Environment, unquoted', () => {
+    expect(unit).toContain(`Environment=PATH=${U.path}`);
+    expect(unit).toContain(`Environment=LANG=${U.lang}`);
   });
 
   it('escapes the systemd specifier «%» in values', () => {
     const u = buildUnit({ ...U, home: '/home/a%b' });
-    expect(u).toContain('WorkingDirectory="/home/a%%b"');
+    expect(u).toContain('WorkingDirectory=/home/a%%b');
+  });
+
+  it('quotes only values that actually need it (spaces)', () => {
+    const u = buildUnit({ ...U, home: '/home/a b' });
+    expect(u).toContain('WorkingDirectory="/home/a b"');
   });
 });
 

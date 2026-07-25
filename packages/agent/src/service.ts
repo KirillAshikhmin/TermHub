@@ -220,10 +220,15 @@ export function systemdUnitPath(): string {
   return path.join(os.homedir(), '.config', 'systemd', 'user', `${SERVICE_LABEL}.service`);
 }
 
-/** Экранирует значение для unit-файла: спецификатор systemd «%», кавычка, бэкслеш; берёт в кавычки
- *  (пути/PATH со спецсимволами не должны ломать ExecStart/Environment). */
-function sdQuote(v: string): string {
-  return '"' + v.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+/** Значение для unit-файла. Кавычки — ТОЛЬКО когда без них не обойтись (пробел/кавычка/
+ *  бэкслеш): systemd 259 отвергает закавыченный ExecStart как «bad unit file setting», а
+ *  обычные пути/PATH пробелов не содержат. Спецификатор systemd «%» экранируется всегда. */
+function sdValue(v: string): string {
+  const escaped = v.replace(/%/g, '%%');
+  if (v === '' || /[\s"'\\]/.test(v)) {
+    return '"' + escaped.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  }
+  return escaped;
 }
 
 /** Входные данные генерации unit (чистая функция — без ФС). */
@@ -249,12 +254,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${sdQuote(opts.execPath)} ${sdQuote(opts.binPath)} start
+ExecStart=${sdValue(opts.execPath)} ${sdValue(opts.binPath)} start
 Restart=on-failure
 RestartSec=2
-WorkingDirectory=${sdQuote(opts.home)}
-Environment=${sdQuote(`PATH=${opts.path}`)}
-Environment=${sdQuote(`LANG=${opts.lang}`)}
+WorkingDirectory=${sdValue(opts.home)}
+Environment=${sdValue(`PATH=${opts.path}`)}
+Environment=${sdValue(`LANG=${opts.lang}`)}
 
 [Install]
 WantedBy=default.target
