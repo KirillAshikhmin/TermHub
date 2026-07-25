@@ -316,9 +316,19 @@ export class RelayTransport implements Transport {
       return;
     }
     if (frame.type === FrameType.Error) {
-      // Агент отверг устройство (не в authorized) — реконнект не поможет, нужен пейринг.
-      this.stopped = true;
-      this.onLink?.('unauthorized');
+      // Гасим транспорт НАВСЕГДА только если дело в доступе (нужен новый пейринг).
+      // Прочие отказы хендшейка (внутренняя ошибка, рассинхрон версий, битый кадр) —
+      // транзиентны: раньше любая из них намертво убивала транспорт без реконнекта.
+      let code = '';
+      try {
+        code = frameJson<{ code?: string }>(frame).code ?? '';
+      } catch {
+        code = '';
+      }
+      if (code === 'unauthorized' || code === 'revoked') {
+        this.stopped = true;
+        this.onLink?.('unauthorized');
+      }
       this.dropSocket();
       return;
     }

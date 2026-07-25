@@ -207,9 +207,18 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   });
   sheet.append(list, createBtn);
   panel.append(sheet);
+  panel.inert = true; // стартовое состояние — закрыта
   panel.addEventListener('click', (e) => {
     if (e.target === panel) closePanel(); // тап по затемнённому фону закрывает
   });
+  // Escape закрывает панель (ожидаемое поведение оверлея).
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && panelOpen) {
+      e.preventDefault();
+      closePanel();
+    }
+  };
+  document.addEventListener('keydown', onKeyDown);
 
   const expandBtn = iconButton('down', t('term.sessionsPanel'), () => (panelOpen ? closePanel() : openPanel()));
   expandBtn.classList.add('th-tabs-expand');
@@ -262,12 +271,14 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   function closePanel(): void {
     panelOpen = false;
     panel.classList.remove('is-open');
+    panel.inert = true; // закрытая панель — вне порядка табуляции и недоступна скринридеру
     expandBtn.classList.remove('is-open');
     expandBtn.setAttribute('aria-expanded', 'false');
   }
   function openPanel(): void {
     panelOpen = true;
     buildPanelRows();
+    panel.inert = false;
     panel.classList.add('is-open');
     expandBtn.classList.add('is-open');
     expandBtn.setAttribute('aria-expanded', 'true');
@@ -359,6 +370,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     teardown(): void {
       stopped = true;
       window.clearInterval(timer);
+      document.removeEventListener('keydown', onKeyDown);
     },
     refresh,
   };

@@ -46,6 +46,17 @@ function highlightText(code: HTMLElement, text: string, name: string): void {
 /** Корни кэшируем на время сессии страницы: при hash-навигации экран
  *  перемонтируется, но набор корней не меняется — лишний dirs() ни к чему. */
 let rootsCache: string[] | null = null;
+/** Транспорт, к которому относятся кэши: у relay агентов может быть несколько, и
+ *  корни/последняя папка одного не должны «протекать» в другой. */
+let cacheOwner: unknown = null;
+
+/** Сбрасывает кэши, если сменился транспорт (иначе покажем чужие корни/папку). */
+function resetCacheIfForeign(transport: unknown): void {
+  if (cacheOwner === transport) return;
+  cacheOwner = transport;
+  rootsCache = null;
+  lastFilesLoc = null;
+}
 /** Последняя открытая папка — восстанавливается при возврате на вкладку (не
  *  сбрасывается при уходе на сессии/репозиторий). */
 let lastFilesLoc: { root: string; path: string } | null = null;
@@ -213,6 +224,7 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
 /** Монтирует экран «Файлы». Путь берётся из hash (#/files/<root>/<path>),
  *  навигация меняет hash — кнопка «Назад» браузера листает историю путей. */
 export function mountFiles(root: HTMLElement, transport: Transport, session?: string): () => void {
+  resetCacheIfForeign(transport);
   // session-режим: подпуть из #/sfiles/<name>/<sub> (null → путь сессии по умолчанию).
   const sub = session ? parseSessionSub('sfiles') : null;
   const parsed = session ? { root: '', path: sub ?? '' } : parseFilesHash();

@@ -130,14 +130,34 @@ class LanTermChannel implements TermChannel {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
+      this.dropStaleSocket();
       this.connect();
     } else if (dead) {
+      this.dropStaleSocket();
       this.connect();
     }
   };
 
+  /** Глушит предыдущий сокет перед новым подключением: без этого «полуживой»
+   *  (CLOSING/CONNECTING) сокет продолжал жить своей жизнью и дублировал вывод. */
+  private dropStaleSocket(): void {
+    const old = this.ws;
+    if (!old) return;
+    this.ws = null;
+    old.onopen = null;
+    old.onmessage = null;
+    old.onclose = null; // не планировать реконнект на программное закрытие
+    old.onerror = null;
+    try {
+      old.close();
+    } catch {
+      // уже закрыт — идемпотентно
+    }
+  }
+
   private connect(): void {
     if (this.disposed) return;
+    this.dropStaleSocket();
     const sock = new WebSocket(this.url);
     sock.binaryType = 'arraybuffer';
     this.ws = sock;

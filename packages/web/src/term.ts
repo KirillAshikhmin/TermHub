@@ -270,6 +270,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   // База CWD для относительных путей — стартовый каталог сессии; уточняется OSC 7 (после cd).
   let termCwd = '';
   const loadRoots = (tries = 0): void => {
+    if (disposed) return; // экран снят — цепочку ретраев не продолжаем
     void Promise.all([transport.dirs(), resolveSessionPath(transport, session)])
       .then(([g, res]) => {
         if (g.length) fileRoots = g.map((x) => x.root);
@@ -277,10 +278,10 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
           sessionRoot = res.root;
           if (!termCwd) termCwd = res.subpath ? `${res.root}/${res.subpath}` : res.root;
         }
-        if (!fileRoots.length && tries < 10) setTimeout(() => loadRoots(tries + 1), 1500);
+        if (!disposed && !fileRoots.length && tries < 10) setTimeout(() => loadRoots(tries + 1), 1500);
       })
       .catch(() => {
-        if (tries < 10) setTimeout(() => loadRoots(tries + 1), 1500);
+        if (!disposed && tries < 10) setTimeout(() => loadRoots(tries + 1), 1500);
       });
   };
   loadRoots();

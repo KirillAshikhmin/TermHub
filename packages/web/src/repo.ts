@@ -21,6 +21,17 @@ import type { FileEntry, Transport } from './transport';
 
 /** Корни кэшируем на время жизни страницы (набор не меняется при hash-навигации). */
 let rootsCache: string[] | null = null;
+/** Транспорт, к которому относятся кэши: у relay агентов может быть несколько, и
+ *  корни/последняя папка одного не должны «протекать» в другой. */
+let cacheOwner: unknown = null;
+
+/** Сбрасывает кэши, если сменился транспорт (иначе покажем чужие корни/папку). */
+function resetCacheIfForeign(transport: unknown): void {
+  if (cacheOwner === transport) return;
+  cacheOwner = transport;
+  rootsCache = null;
+  lastRepoLoc = null;
+}
 /** Последняя открытая папка — восстанавливается при возврате на вкладку (не сбрасывается
  *  при уходе на сессии/проводник). Живёт на уровне модуля весь сеанс страницы. */
 let lastRepoLoc: { root: string; path: string } | null = null;
@@ -408,6 +419,7 @@ function openBranchMenu(
 
 /** Монтирует экран «Репозиторий». */
 export function mountRepo(root: HTMLElement, transport: Transport, session?: string): () => void {
+  resetCacheIfForeign(transport);
   const sub = session ? parseSessionSub('srepo') : null;
   const parsed = session ? { root: '', path: sub ?? '' } : parseRepoHash();
   // Возврат на голый #/repo (не session-режим) — восстанавливаем последнюю папку.

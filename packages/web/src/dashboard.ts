@@ -500,11 +500,11 @@ export function mountDashboard(
   };
 
   // Мгновенный показ из кэша (без скелетонов) при возврате на дашборд; refresh() обновит в фоне.
+  // ВАЖНО: loadedOnce тут НЕ ставим. Иначе при мёртвой связи (relay ещё поднимает поток)
+  // экран «Подключение к агенту…» подменялся бы устаревшими карточками + красным тостом,
+  // хотя данные на экране — из прошлого визита и, возможно, уже неверны.
   const cached = sessionCache.get(transport);
-  if (cached) {
-    loadedOnce = true;
-    render(cached);
-  }
+  if (cached) render(cached);
 
   const tick = (): void => {
     if (document.visibilityState === 'visible') void refresh();
