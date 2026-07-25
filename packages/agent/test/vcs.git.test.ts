@@ -1,7 +1,8 @@
 // VcsService — git-адаптер на настоящем временном репозитории. svn/hg не тестируем
 // (не гарантированы в CI); проверяем самый ходовой бэкенд + безопасность.
 
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import { promisify } from 'node:util';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { VcsService } from '../src/vcs.js';
+import { VcsService, runRepoAction } from '../src/vcs.js';
 
 const exec = promisify(execFile);
 
@@ -129,5 +130,34 @@ describe('VcsService — git', () => {
 
   it('анти-инъекция: ревизия-опция отклоняется', async () => {
     await expect(svc.show(root, 'proj', '--output=/tmp/x')).rejects.toThrow();
+  });
+
+  it('анти-инъекция: абсолютный путь файла в diff отклоняется (побег из корней)', async () => {
+    // Раньше `git diff --no-index -- /dev/null <abs>` печатал содержимое ЛЮБОГО файла ФС
+    // мимо whitelist корней: checkFile отсекал только «..» и ведущий «-».
+    const secret = path.join(os.tmpdir(), `termhub-secret-${process.pid}.txt`);
+    fs.writeFileSync(secret, 'TOP-SECRET-KEY-MATERIAL\n');
+    try {
+      await expect(runRepoAction(svc, { action: 'diff', root, path: 'proj', file: secret })).rejects.toThrow();
+      // И через прямой метод — тоже.
+      await expect(svc.diff(root, 'proj', secret)).rejects.toThrow();
+    } finally {
+      fs.rmSync(secret, { force: true });
+    }
+  });
+
+  it('git-хардненинг: враждебный core.fsmonitor из конфига репозитория не выполняется', async () => {
+    const marker = path.join(os.tmpdir(), `termhub-fsmonitor-${process.pid}.flag`);
+    fs.rmSync(marker, { force: true });
+    const repo = path.join(root, 'proj');
+    // Конфиг репозитория просит git запускать нашу «полезную нагрузку» на каждый status.
+    execFileSync('git', ['-C', repo, 'config', 'core.fsmonitor', `touch ${marker}`]);
+    try {
+      await svc.status(root, 'proj').catch(() => undefined);
+      expect(fs.existsSync(marker)).toBe(false); // хардненинг погасил fsmonitor
+    } finally {
+      execFileSync('git', ['-C', repo, 'config', '--unset', 'core.fsmonitor']);
+      fs.rmSync(marker, { force: true });
+    }
   });
 });

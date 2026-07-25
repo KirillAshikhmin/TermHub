@@ -8,7 +8,7 @@ import { WebSocket } from 'ws';
 import { issueCookie, checkCookie, LoginRateLimit } from '../src/auth.js';
 import { AgentServer } from '../src/server.js';
 import { hashPassword } from '../src/config.js';
-import type { TermhubConfig } from '../src/config.js';
+import type { TermhubConfig, DeviceScope } from '../src/config.js';
 import type { SessionService } from '../src/sessions.js';
 import type { SessionInfo } from '@termhub/protocol';
 
@@ -50,7 +50,7 @@ interface Started {
 async function start(opts: {
   config?: TermhubConfig;
   sessions?: SessionService;
-  onShare?: () => Promise<{ code: string; expiresAt: number }>;
+  onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
   push?: { subscribe(sub: unknown): Promise<void>; vapidPublicKey(): string };
   caffeinate?: { readonly supported: boolean; isActive(): boolean; set(on: boolean): void };
   staticDir?: string;
@@ -474,6 +474,43 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     expect((await res.json() as { error: string }).error).toContain('subscription');
   });
 
+  it('POST /api/share с НЕВАЛИДНЫМ scope → 422, код НЕ выпускается (fail-closed)', async () => {
+    // Раньше невалидное имя сессии молча превращалось в полный доступ владельца:
+    // владелец видел в UI «одна сессия, только чтение», а гость получал всё.
+    const onShare = vi.fn(async () => ({ code: 'ABCD-EFGH-JKMN-PQRS', expiresAt: 42 }));
+    s = await start({ onShare });
+    for (const bad of [{ session: '', write: false, files: false }, { session: 'a'.repeat(41) }, { session: 42 }, 'nonsense']) {
+      const res = await fetch(`${s.base}/api/share`, {
+        method: 'POST',
+        headers: { cookie: authCookie(), 'content-type': 'application/json' },
+        body: JSON.stringify({ scope: bad }),
+      });
+      expect(res.status).toBe(422);
+    }
+    expect(onShare).not.toHaveBeenCalled(); // ни одного кода пейринга не выпущено
+  });
+
+  it('POST /api/share с валидным scope передаёт его как есть; без scope → полный доступ', async () => {
+    const seen: Array<unknown> = [];
+    s = await start({
+      onShare: async (scope?: unknown) => {
+        seen.push(scope);
+        return { code: 'ABCD-EFGH-JKMN-PQRS', expiresAt: 42 };
+      },
+    });
+    const call = (body: unknown): Promise<Response> =>
+      fetch(`${s.base}/api/share`, {
+        method: 'POST',
+        headers: { cookie: authCookie(), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    // Имя с точкой — такие сессии заводит `tm` из имени каталога, их надо уметь шарить.
+    expect((await call({ scope: { session: 'v1.1', write: false, files: true } })).status).toBe(200);
+    expect((await call({})).status).toBe(200);
+    expect(seen[0]).toEqual({ session: 'v1.1', write: false, files: true });
+    expect(seen[1]).toBeUndefined(); // scope не передан → осознанный полный доступ
+  });
+
   it('POST /api/share без onShare → 503, с onShare → код', async () => {
     s = await start({});
     const no = await fetch(`${s.base}/api/share`, { method: 'POST', headers: { cookie: authCookie() } });
@@ -587,18 +624,48 @@ describe('AgentServer — WS /ws/term/:name (upgrade)', () => {
     expect(await got).toBe('my.room');
   });
 
-  it('upgrade с именем, не проходящим NAME_RE, отвергается (pty не спавнится)', async () => {
+  it('upgrade с именем из управляющих символов отвергается (pty не спавнится)', async () => {
     s = await start({});
     const handler = vi.fn();
     s.server.attachTerminalWs(handler);
+    // %01 — управляющий символ: реальная сессия так называться не может.
     const rejected = await new Promise<boolean>((resolve) => {
-      const ws = new WebSocket(wsUrl(s.base, 'bad%20name!'), { headers: { cookie: authCookie() } });
+      const ws = new WebSocket(wsUrl(s.base, 'bad%01name'), { headers: { cookie: authCookie() } });
       ws.on('open', () => resolve(false));
       ws.on('error', () => resolve(true));
       ws.on('close', () => resolve(true));
     });
     expect(rejected).toBe(true);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('upgrade с именем длиннее 40 символов отвергается', async () => {
+    s = await start({});
+    const handler = vi.fn();
+    s.server.attachTerminalWs(handler);
+    const rejected = await new Promise<boolean>((resolve) => {
+      const ws = new WebSocket(wsUrl(s.base, 'a'.repeat(41)), { headers: { cookie: authCookie() } });
+      ws.on('open', () => resolve(false));
+      ws.on('error', () => resolve(true));
+      ws.on('close', () => resolve(true));
+    });
+    expect(rejected).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('upgrade к существующей сессии с пробелом/точкой в имени проходит (её создал `tm` из каталога)', async () => {
+    s = await start({});
+    const got = new Promise<string>((resolve) => {
+      s.server.attachTerminalWs((ws, name) => {
+        resolve(name);
+        ws.close(1000);
+      });
+    });
+    // Имя из каталога «my app.v2» — SessionService такое не создаёт, но tmux допускает,
+    // а в tmux оно уходит только точным session-target («=имя»), поэтому безопасно.
+    const ws = new WebSocket(wsUrl(s.base, encodeURIComponent('my app.v2')), { headers: { cookie: authCookie() } });
+    await new Promise<void>((resolve) => ws.on('close', () => resolve()));
+    expect(await got).toBe('my app.v2');
   });
 });
 

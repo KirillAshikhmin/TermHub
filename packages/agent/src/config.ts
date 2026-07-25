@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { generateIdentity } from '@termhub/protocol';
 import type { Identity } from '@termhub/protocol';
+import { isExistingSessionName } from './sessions.js';
 import {
   configDir,
   configPath,
@@ -53,6 +54,19 @@ export interface DeviceScope {
   write: boolean;
   /** Разрешён ли файловый браузер. */
   files: boolean;
+}
+
+/** Разбирает scope из запроса «поделиться доступом». FAIL-CLOSED: различаем
+ *  «scope не передан» (осознанный полный доступ) и «scope передан, но невалиден».
+ *  Второй случай ОБЯЗАН приводить к отказу: раньше любой невалидный scope молча
+ *  превращался в полный доступ владельца, хотя UI показывал «одна сессия, только чтение».
+ *  Общая точка для обоих путей выдачи кода — HTTP (`server.ts`) и relay (`relay-link.ts`). */
+export function parseScope(v: unknown): DeviceScope | 'full' | 'invalid' {
+  if (v === undefined || v === null) return 'full';
+  if (typeof v !== 'object') return 'invalid';
+  const s = v as { session?: unknown; write?: unknown; files?: unknown };
+  if (typeof s.session !== 'string' || !isExistingSessionName(s.session)) return 'invalid';
+  return { session: s.session, write: s.write === true, files: s.files === true };
 }
 
 /** Устройство, допущенное к remote-доступу (authorized.json). */

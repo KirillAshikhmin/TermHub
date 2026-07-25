@@ -22,6 +22,26 @@ const exec = promisify(execFile);
 
 const LOG_LIMIT = 200; // сколько последних коммитов отдаём в логе
 const MAX_BUF = 16 * 1024 * 1024; // потолок вывода одной команды (большие диффы)
+
+/** Флаги, гасящие исполнение кода из конфига ПРОСМАТРИВАЕМОГО репозитория. Идут перед
+ *  подкомандой (`git -c … status`) и имеют приоритет над `.git/config`, поэтому чужой
+ *  репозиторий не может подсунуть свою команду:
+ *   • core.fsmonitor  — иначе git запускает указанный в конфиге бинарь на каждый status;
+ *   • core.hooksPath  — уводит хуки в никуда (никакие pre/post-хуки не выполняются);
+ *   • protocol.ext.allow — запрещает remote-транспорт `ext::<команда>` при fetch/log;
+ *   • core.pager/editor — никакого интерактива и запуска внешних программ. */
+const GIT_HARDENING = [
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'protocol.ext.allow=never',
+  '-c',
+  'core.pager=cat',
+  '-c',
+  'core.editor=true',
+];
 const US = '\x1f'; // разделитель полей в шаблонах вывода (unit separator)
 
 /** Разобранный VCS-контекст: тип и корень рабочей копии (cwd для команд). */
@@ -70,6 +90,19 @@ function checkFile(file: string): void {
   if (!file || file.startsWith('-') || file.includes('\0') || file.split('/').includes('..')) {
     throw new Error('Invalid file path');
   }
+  // Абсолютный путь = побег из корней: `git diff --no-index -- /dev/null <abs>` работает
+  // вне репозитория и напечатал бы содержимое ЛЮБОГО файла ФС (~/.termhub/identity.json,
+  // ~/.ssh/id_rsa) мимо whitelist корней. Pathspec обязан быть относительным.
+  if (path.isAbsolute(file)) throw new Error('Invalid file path');
+}
+
+/** Требует, чтобы `file` (относительный) после резолва симлинков лежал внутри `top`.
+ *  Нужен там, где git согласен работать вне репозитория (`--no-index`). */
+async function assertInsideRepo(top: string, file: string): Promise<void> {
+  const realTop = await fsp.realpath(top);
+  const abs = path.resolve(realTop, file);
+  const real = await fsp.realpath(abs).catch(() => abs);
+  if (real !== realTop && !real.startsWith(realTop + path.sep)) throw new Error('File outside repository');
 }
 
 /** Статус git-porcelain XY → односимвольный код для UI. */
@@ -121,7 +154,11 @@ export class VcsService {
 
   /** Запуск VCS-CLI в каталоге top без shell; stdout строкой. */
   private async run(top: string, cmd: string, args: string[]): Promise<string> {
-    const { stdout } = await exec(cmd, args, {
+    // Просмотр ЧУЖОГО репозитория не должен выполнять его код: конфиг репозитория может
+    // задать fsmonitor/хуки/ext-транспорт, и обычная `git status` запустила бы команду
+    // из `.git/config`. Гасим все такие рычаги флагами `-c` (они старше конфига репо).
+    const full = cmd === 'git' ? [...GIT_HARDENING, ...args] : args;
+    const { stdout } = await exec(cmd, full, {
       cwd: top,
       maxBuffer: MAX_BUF,
       windowsHide: true,
@@ -402,6 +439,9 @@ export class VcsService {
     const tracked = await this.runAllowFail(top, 'git', ['diff', '--no-color', 'HEAD', '--', file]);
     if (tracked.trim()) return tracked;
     // Пусто → возможно, файл новый (untracked): показываем как полное добавление.
+    // `--no-index` работает и ВНЕ репозитория, поэтому путь обязан быть внутри `top`
+    // (checkFile уже отверг абсолютные и «..», здесь — защита от симлинка наружу).
+    await assertInsideRepo(top, file);
     return this.runAllowFail(top, 'git', ['diff', '--no-color', '--no-index', '--', '/dev/null', file]);
   }
 

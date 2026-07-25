@@ -12,9 +12,10 @@ import type { WebSocket } from 'ws';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { TermhubConfig } from './config.js';
-import { verifyPassword, loadAuthorized, saveAuthorized, VERSION } from './config.js';
+import { verifyPassword, loadAuthorized, saveAuthorized, parseScope, VERSION } from './config.js';
 import type { DeviceScope } from './config.js';
 import type { SessionService } from './sessions.js';
+import { isExistingSessionName } from './sessions.js';
 import { runFileOp } from './files.js';
 import type { FileService } from './files.js';
 import { runRepoAction } from './vcs.js';
@@ -35,8 +36,6 @@ export interface CaffeinateController {
 }
 
 const COOKIE_NAME = 'termhub';
-/** Имя терминальной сессии: тот же контракт, что в SessionService.create/kill. */
-const SESSION_NAME_RE = /^[\w.-]{1,40}$/;
 /** Max-Age cookie в секундах (30 суток). */
 const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 /** Лимит тела запроса: 64 KiB. */
@@ -102,14 +101,6 @@ function readBody(req: IncomingMessage, res: ServerResponse, limit: number): Pro
   });
 }
 
-/** Валидирует scope из тела /api/share: `{session, write, files}` или undefined
- *  (полный доступ). Некорректная сессия → undefined (не ограничиваем неверным именем). */
-function parseScope(v: unknown): DeviceScope | undefined {
-  if (typeof v !== 'object' || v === null) return undefined;
-  const s = v as { session?: unknown; write?: unknown; files?: unknown };
-  if (typeof s.session !== 'string' || !SESSION_NAME_RE.test(s.session)) return undefined;
-  return { session: s.session, write: s.write === true, files: s.files === true };
-}
 
 /** Разбирает заголовок Cookie в карту имя→значение. */
 function parseCookies(header: string | undefined): Map<string, string> {
@@ -282,7 +273,10 @@ export class AgentServer {
     if (method === 'POST' && pathname === '/api/share') {
       if (!this.onShare) return this.sendJson(res, 503, { error: 'relay not configured' });
       const body = await this.readJson(req, res);
-      return this.sendJson(res, 200, await this.onShare(parseScope(body.scope)));
+      const scope = parseScope(body.scope);
+      // Невалидный scope не понижаем до полного доступа — отказываем (fail-closed).
+      if (scope === 'invalid') return this.sendJson(res, 422, { error: 'invalid scope' });
+      return this.sendJson(res, 200, await this.onShare(scope === 'full' ? undefined : scope));
     }
     if (method === 'GET' && pathname === '/api/caffeinate') return this.sendJson(res, 200, this.caffeinateState());
     if (method === 'POST' && pathname === '/api/caffeinate') return this.setCaffeinate(req, res);
@@ -601,9 +595,9 @@ export class AgentServer {
       socket.destroy();
       return;
     }
-    // Тот же контракт имени, что в SessionService.create/kill: не спавним pty под
-    // имя, которое сервис всё равно отверг бы (симметрия и защита от инъекции).
-    if (!SESSION_NAME_RE.test(name)) {
+    // Ссылка на СУЩЕСТВУЮЩУЮ сессию (её мог завести пользователь через `tm`, тогда имя
+    // берётся из каталога и может содержать точку). В tmux уходит только с префиксом «=».
+    if (!isExistingSessionName(name)) {
       socket.destroy();
       return;
     }

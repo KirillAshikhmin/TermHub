@@ -32,7 +32,7 @@ import {
   type FileInfo,
 } from '@termhub/protocol';
 import type { AuthorizedDevice } from './config.js';
-import { saveAuthorized } from './config.js';
+import { saveAuthorized, parseScope } from './config.js';
 import type { DeviceScope } from './config.js';
 import type { SessionService } from './sessions.js';
 
@@ -772,13 +772,16 @@ export class RelayLink {
   private async doShare(s: ClientSession, frame: Frame): Promise<void> {
     let scope: DeviceScope | undefined;
     try {
-      const raw = frameJson<{ scope?: { session?: unknown; write?: unknown; files?: unknown } }>(frame).scope;
-      scope =
-        raw && typeof raw.session === 'string' && /^[\w.-]{1,40}$/.test(raw.session)
-          ? { session: raw.session, write: raw.write === true, files: raw.files === true }
-          : undefined;
+      // FAIL-CLOSED, как в server.ts: невалидный scope НЕ понижаем до полного доступа.
+      const parsed = parseScope(frameJson<{ scope?: unknown }>(frame).scope);
+      if (parsed === 'invalid') {
+        this.sendFrameBytes(s, jsonFrame(FrameType.ShareResult, 0, { error: 'invalid scope' }));
+        return;
+      }
+      scope = parsed === 'full' ? undefined : parsed;
     } catch {
-      scope = undefined;
+      this.sendFrameBytes(s, jsonFrame(FrameType.ShareResult, 0, { error: 'invalid scope' }));
+      return;
     }
     try {
       const p = await this.openPairing(scope);
