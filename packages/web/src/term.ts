@@ -230,6 +230,16 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     // видимый текст ≠ URL. WebLinksAddon (ниже) их не ловит — только сырые http://.
     linkHandler: {
       activate: (_event, uri) => {
+        // OSC 8 задаёт произвольный URI, а его источник — вывод сессии (то есть всё,
+        // что там выполняется). Без allowlist схем один `printf` открывал бы
+        // javascript:/data:/file: по клику пользователя. Пускаем только веб-схемы.
+        let scheme = '';
+        try {
+          scheme = new URL(uri, location.href).protocol;
+        } catch {
+          return;
+        }
+        if (scheme !== 'http:' && scheme !== 'https:' && scheme !== 'mailto:') return;
         window.open(uri, '_blank', 'noopener,noreferrer');
       },
     },

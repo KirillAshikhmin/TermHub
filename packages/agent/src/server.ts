@@ -41,6 +41,28 @@ const COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 /** Лимит тела запроса: 64 KiB. */
 const BODY_LIMIT = 64 * 1024;
 
+/** Заголовки для ОТДАЧИ ПОЛЬЗОВАТЕЛЬСКИХ файлов: их содержимое подконтрольно тому, что
+ *  выполняется в сессии, поэтому браузер не должен трактовать их как документ на нашем
+ *  origin. `attachment` + `nosniff` превращают .svg/.html из stored XSS в скачивание. */
+const DOWNLOAD_HEADERS: Record<string, string> = {
+  'Content-Disposition': 'attachment',
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': "default-src 'none'; sandbox",
+};
+
+/** Защитные заголовки страницы приложения. CSP разрешает только свой origin; `data:`
+ *  нужен для превью картинок (files.ts отдаёт их как data:-URI), `blob:` — для скачивания
+ *  через relay. Внешних источников у PWA нет вовсе, поэтому список закрытый. */
+const SECURITY_HEADERS: Record<string, string> = {
+  'Content-Security-Policy':
+    "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; " +
+    "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; " +
+    "font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+};
+
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
 const NO_CACHE = 'no-cache';
 
@@ -221,6 +243,13 @@ export class AgentServer {
         return this.sendJson(res, 400, { error: 'invalid path' });
       }
       return this.serveStatic(res, decoded);
+    }
+
+    // CSRF: SameSite=Lax не покрывает всё (например «простые» POST из чужой вкладки при
+    // мягких настройках браузера), поэтому для мутирующих методов дополнительно требуем
+    // совпадения Origin с Host. CLI-клиенты Origin не шлют — их originAllowed пропускает.
+    if (method !== 'GET' && method !== 'HEAD' && !this.originAllowed(req)) {
+      return this.sendJson(res, 403, { error: 'cross-origin request rejected' });
     }
 
     // Публичные маршруты (без cookie-auth).
@@ -429,10 +458,16 @@ export class AgentServer {
         'Content-Range': `bytes ${start}-${end}/${size}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': String(end - start + 1),
+        ...DOWNLOAD_HEADERS,
       });
       fs.createReadStream(filePath, { start, end }).pipe(res);
     } else {
-      res.writeHead(200, { 'Content-Type': mime, 'Content-Length': String(size), 'Accept-Ranges': 'bytes' });
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': String(size),
+        'Accept-Ranges': 'bytes',
+        ...DOWNLOAD_HEADERS,
+      });
       fs.createReadStream(filePath).pipe(res);
     }
   }
@@ -549,7 +584,12 @@ export class AgentServer {
     const index = path.join(this.staticDir, 'index.html');
     if (this.isFile(index)) return this.sendFile(res, index);
     const buf = Buffer.from(PLACEHOLDER_HTML, 'utf8');
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': NO_CACHE, 'Content-Length': buf.length });
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': NO_CACHE,
+      'Content-Length': buf.length,
+      ...SECURITY_HEADERS,
+    });
     res.end(buf);
   }
 
@@ -566,7 +606,7 @@ export class AgentServer {
     const relFromRoot = path.relative(this.staticDir, full).split(path.sep);
     const cache = relFromRoot[0] === 'assets' ? IMMUTABLE_CACHE : NO_CACHE;
     const data = fs.readFileSync(full);
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'Content-Length': data.length });
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'Content-Length': data.length, ...SECURITY_HEADERS });
     res.end(data);
   }
 

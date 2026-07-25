@@ -474,6 +474,29 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     expect((await res.json() as { error: string }).error).toContain('subscription');
   });
 
+  it('HTML приложения отдаётся с CSP и защитными заголовками', async () => {
+    s = await start({ staticDir: path.join(os.tmpdir(), `th-nostatic-${process.pid}`) });
+    const res = await fetch(`${s.base}/`);
+    expect(res.status).toBe(200);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("object-src 'none'");
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+  });
+
+  it('мутирующий запрос с чужого Origin отвергается (CSRF-заслон поверх SameSite)', async () => {
+    s = await start({});
+    const res = await fetch(`${s.base}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://evil.example' },
+      body: JSON.stringify({ password: 'secret' }),
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers.get('set-cookie')).toBeNull(); // cookie не выдана
+  });
+
   it('POST /api/share с НЕВАЛИДНЫМ scope → 422, код НЕ выпускается (fail-closed)', async () => {
     // Раньше невалидное имя сессии молча превращалось в полный доступ владельца:
     // владелец видел в UI «одна сессия, только чтение», а гость получал всё.

@@ -9,6 +9,17 @@ import type { ServerResponse } from 'node:http';
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
 const NO_CACHE = 'no-cache';
 
+/** Защитные заголовки PWA (зеркало agent/server.ts: relay раздаёт тот же бандл). */
+const SECURITY_HEADERS: Record<string, string> = {
+  'Content-Security-Policy':
+    "default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; " +
+    "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:; " +
+    "font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+};
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -47,7 +58,12 @@ export function serveStatic(res: ServerResponse, pathname: string, staticDir: st
     if (isFile(index)) return sendFile(res, index, staticDir);
   }
   const buf = Buffer.from(PLACEHOLDER_HTML, 'utf8');
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': NO_CACHE, 'Content-Length': buf.length });
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': NO_CACHE,
+    'Content-Length': buf.length,
+    ...SECURITY_HEADERS,
+  });
   res.end(buf);
 }
 
@@ -64,7 +80,7 @@ function sendFile(res: ServerResponse, full: string, staticDir: string): void {
   const relFromRoot = path.relative(staticDir, full).split(path.sep);
   const cache = relFromRoot[0] === 'assets' ? IMMUTABLE_CACHE : NO_CACHE;
   const data = fs.readFileSync(full);
-  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'Content-Length': data.length });
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'Content-Length': data.length, ...SECURITY_HEADERS });
   res.end(data);
 }
 

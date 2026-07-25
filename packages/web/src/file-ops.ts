@@ -113,12 +113,21 @@ async function notaNavigate(win: Window | null, text: string, name: string): Pro
 
 /** Открыть уже загруженный текст в NotAText (из превью). */
 export function openTextInNotaText(text: string, name: string): void {
-  void notaNavigate(window.open('about:blank', '_blank'), text, name);
+  void notaNavigate(openBlankTab(), text, name);
+}
+
+/** Открывает пустую вкладку и РВЁТ связь через opener. Флаг `noopener` в open() тут не
+ *  годится — он возвращает null, а handle нужен для последующей навигации. Без обнуления
+ *  сторонняя страница могла бы через window.opener увести нашу вкладку (tabnabbing). */
+function openBlankTab(): Window | null {
+  const win = window.open('about:blank', '_blank');
+  if (win) win.opener = null;
+  return win;
 }
 
 /** Открыть файл в NotAText из меню: тянем содержимое, затем открываем инлайн-ссылку. */
 export function openInNotaText(transport: Transport, root: string, path: string, name: string): void {
-  const win = window.open('about:blank', '_blank'); // синхронно в жесте — обход popup-блока
+  const win = openBlankTab(); // синхронно в жесте — обход popup-блока
   transport.fileRead(root, path).then(
     (c) => {
       if (c.truncated || c.kind !== 'text' || c.size > 1_500_000) {
