@@ -16,6 +16,10 @@ import { serveStatic } from './static.js';
  *  16 МБ — чтобы вмещать чтение файлов браузером (картинка до 10 МБ → base64
  *  ~13.3 МБ + E2E/JSON overhead); терминальные фреймы много меньше. */
 const MAX_MESSAGE = 16 * 1024 * 1024;
+/** Потолок неотправленного буфера сокета: выше — получатель не успевает. */
+const MAX_BUFFERED = 8 * 1024 * 1024;
+/** Период heartbeat: не ответившие на ping соединения выселяем (мёртвые NAT-сессии). */
+const HEARTBEAT_MS = 30_000;
 /** TTL pair-комнаты по умолчанию — 5 минут. */
 const DEFAULT_PAIR_TTL = 5 * 60 * 1000;
 /** Ограничение новых соединений с одного IP по умолчанию (простое окно). */
@@ -49,6 +53,8 @@ export interface RelayHandle {
 /** Состояние одного WS-соединения relay (эволюционирует по мере хендшейка). */
 interface ConnState {
   ip: string;
+  /** Ответил ли на последний ping (heartbeat): иначе соединение считаем мёртвым. */
+  alive?: boolean;
   // register-хендшейк
   regEdPub?: Buffer;
   regNonce?: Buffer;
@@ -77,6 +83,7 @@ class RelayServer {
   private readonly rateCfg: { max: number; windowMs: number };
   private readonly trustProxy: boolean;
   private readonly rateSweep: ReturnType<typeof setInterval>;
+  private readonly heartbeat: ReturnType<typeof setInterval>;
   private readonly server: Server;
 
   constructor(opts: RelayOptions) {
@@ -88,6 +95,23 @@ class RelayServer {
     // записи на каждый когда-либо виденный IP (ротация IPv6 → OOM).
     this.rateSweep = setInterval(() => sweepRateWindows(this.rate, Date.now(), this.rateCfg.windowMs), this.rateCfg.windowMs);
     if (typeof this.rateSweep.unref === 'function') this.rateSweep.unref();
+    // Heartbeat: мёртвые соединения (упавший NAT, уснувший клиент) иначе висят в памяти
+    // relay и занимают слоты агента до TCP-таймаута ОС.
+    this.heartbeat = setInterval(() => {
+      for (const [ws, st] of this.states) {
+        if (st.alive === false) {
+          ws.terminate();
+          continue;
+        }
+        st.alive = false;
+        try {
+          ws.ping();
+        } catch {
+          ws.terminate();
+        }
+      }
+    }, HEARTBEAT_MS);
+    if (typeof this.heartbeat.unref === 'function') this.heartbeat.unref();
     this.server = http.createServer((req, res) => this.handleHttp(req, res));
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
@@ -101,6 +125,7 @@ class RelayServer {
 
   private async close(): Promise<void> {
     clearInterval(this.rateSweep);
+    clearInterval(this.heartbeat);
     for (const ws of this.wss.clients) ws.terminate();
     this.rooms.dispose();
     this.wss.close();
@@ -190,9 +215,13 @@ class RelayServer {
   // ── WS соединение ───────────────────────────────────────────────────────────
 
   private onConnection(ws: WebSocket, ip: string): void {
-    const state: ConnState = { ip };
+    const state: ConnState = { ip, alive: true };
     this.states.set(ws, state);
+    ws.on('pong', () => {
+      state.alive = true;
+    });
     ws.on('message', (data: Buffer, isBinary: boolean) => {
+      state.alive = true;
       const buf = Array.isArray(data) ? Buffer.concat(data) : (data as Buffer);
       if (isBinary) this.onBinary(state, buf);
       else this.onText(ws, state, buf);
@@ -233,6 +262,14 @@ class RelayServer {
   }
 
   private onRegister(ws: WebSocket, state: ConnState, msg: Record<string, unknown>): void {
+    // Одно соединение = одна роль и одна регистрация. Иначе сокет мог зарегистрировать
+    // сколько угодно agentId: rooms копил записи, а при дисконнекте снимался только
+    // последний (state.agentId) — «призрачные» агенты и неограниченный рост памяти.
+    if (state.agentId || state.clientAgentId) {
+      send(ws, { t: 'error', code: 'already-registered' });
+      ws.close(1008, 'already registered');
+      return;
+    }
     if (typeof msg.edPub !== 'string') {
       send(ws, { t: 'error', code: 'bad-register' });
       ws.close(1008, 'bad register');
@@ -250,6 +287,11 @@ class RelayServer {
   }
 
   private onProve(ws: WebSocket, state: ConnState, msg: Record<string, unknown>): void {
+    if (state.agentId) {
+      send(ws, { t: 'error', code: 'already-registered' });
+      ws.close(1008, 'already registered');
+      return;
+    }
     if (!state.regEdPub || !state.regNonce) {
       send(ws, { t: 'error', code: 'no-challenge' });
       ws.close(1008, 'no challenge');
@@ -278,6 +320,13 @@ class RelayServer {
   }
 
   private onConnect(ws: WebSocket, state: ConnState, msg: Record<string, unknown>): void {
+    // Повторный connect на том же сокете занимал ещё один клиентский слот агента, а
+    // освобождался при дисконнекте только последний — сокет мог выбрать весь лимит.
+    if (state.clientAgentId !== undefined || state.agentId) {
+      send(ws, { t: 'error', code: 'already-connected' });
+      ws.close(1008, 'already connected');
+      return;
+    }
     if (typeof msg.agentId !== 'string') {
       send(ws, { t: 'error', code: 'bad-connect' });
       ws.close(1008, 'bad connect');
@@ -386,6 +435,12 @@ class RelayServer {
       if (!agent) return;
       const client = agent.clients.get(buf.readUInt32BE(0));
       if (!client || client.readyState !== WebSocket.OPEN) return;
+      // Медленный получатель не должен раздувать память relay: перестали успевать —
+      // рвём именно его соединение (агент и остальные клиенты не страдают).
+      if (client.bufferedAmount > MAX_BUFFERED) {
+        client.close(4009, 'backpressure');
+        return;
+      }
       client.send(buf.subarray(4), { binary: true });
       return;
     }
@@ -393,6 +448,7 @@ class RelayServer {
       // клиент → агент: ставим префикс [connId:u32 BE]
       const agent = this.rooms.getAgent(state.clientAgentId);
       if (!agent || agent.ws.readyState !== WebSocket.OPEN) return;
+      if (agent.ws.bufferedAmount > MAX_BUFFERED) return; // агент не успевает — кадр роняем
       const out = Buffer.allocUnsafe(4 + buf.length);
       out.writeUInt32BE(state.clientConnId >>> 0, 0);
       buf.copy(out, 4);

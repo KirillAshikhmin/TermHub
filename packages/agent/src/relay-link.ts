@@ -87,6 +87,31 @@ const HELLO_TIMEOUT_MS = 5_000;
  *  от заваливания per-agent cap relay полу-открытыми сессиями (relay pending не видит). */
 const MAX_PENDING_HELLO_PER_AGENT = 8;
 
+/** Потолок одновременных терминалов на одного клиента (каждый = процесс tmux + pty). */
+const MAX_TERMINALS_PER_CLIENT = 12;
+/** Потолок одного чанка скачивания: клиент просит 256 КиБ, потолок с большим запасом. */
+const MAX_FILE_CHUNK = 4 * 1024 * 1024;
+/** Backpressure pty→WS relay (зеркало bridge.ts для LAN-пути). */
+const WS_HIGH_WATER = 1 << 20; // 1 MiB — порог паузы pty
+const WS_LOW_WATER = 256 * 1024; // 256 KiB — порог возобновления
+const WS_DRAIN_INTERVAL_MS = 50;
+
+/** Кадры, на которых сверка с authorized идёт БЕЗ кэша (редкие, но привилегированные
+ *  или дорогие): отзыв устройства обязан действовать на них мгновенно. */
+const FRESH_AUTH_CHECK = new Set<FrameType>([
+  FrameType.Open,
+  FrameType.Create,
+  FrameType.Kill,
+  FrameType.RenameSession,
+  FrameType.Share,
+  FrameType.Devices,
+  FrameType.Revoke,
+  FrameType.FileOp,
+  FrameType.Repo,
+  FrameType.PushSubscribe,
+  FrameType.Caffeinate,
+]);
+
 /** Как часто перечитывать authorized.json для сверки живых соединений (кэш на кадрах). */
 const REVOKE_RECHECK_MS = 1_000;
 /** Как часто выселять отозванные, но молчащие соединения. */
@@ -160,6 +185,8 @@ export class RelayLink {
   /** Таймер выселения отозванных устройств, которые молчат (сами кадров не шлют, но
    *  продолжали бы получать вывод открытых терминалов). */
   private revokeSweep?: ReturnType<typeof setInterval>;
+  /** Таймер слива буфера WS: жив, пока pty на паузе из-за backpressure. */
+  private drainTimer?: ReturnType<typeof setInterval>;
   private backoff = BACKOFF_START_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly clients = new Map<number, ClientSession>();
@@ -254,6 +281,10 @@ export class RelayLink {
     if (this.revokeSweep) {
       clearInterval(this.revokeSweep);
       this.revokeSweep = undefined;
+    }
+    if (this.drainTimer) {
+      clearInterval(this.drainTimer);
+      this.drainTimer = undefined;
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -466,6 +497,10 @@ export class RelayLink {
   private onClientOpen(msg: Record<string, unknown>): void {
     const connId = Number(msg.connId);
     if (!Number.isInteger(connId)) return;
+    // Повторный client-open на занятый connId раньше молча затирал живую сессию в Map:
+    // её pty оставались висеть без владельца (утечка процессов), а поток шифрования
+    // рассинхронизировался. Старую сессию корректно закрываем.
+    if (this.clients.has(connId)) this.disposeClient(connId);
     const session: ClientSession = { connId, state: 'hello', terminals: new Map() };
     // Cap на pending (не подтвердивших streaming) клиентов. relay видит их как обычных
     // клиентов и держит слот до дисконнекта; отозванное/враждебное устройство знает
@@ -559,7 +594,13 @@ export class RelayLink {
     // Раньше сверка с authorized была ровно в одном месте (doOpen), поэтому отозванное
     // устройство продолжало читать/писать файлы и даже выписывало себе новый код
     // пейринга через Share — отзыв обходился навсегда.
+    // Дорогие и привилегированные кадры (открытие терминала, управление устройствами,
+    // мутации) сверяем БЕЗ кэша — отзыв на них действует мгновенно. Потоковые кадры
+    // (Data/Resize) идут по кэшу: читать файл на каждое нажатие клавиши нельзя.
+    if (FRESH_AUTH_CHECK.has(frame.type)) this.invalidateAuthorized();
     if (s.fingerprint && !this.isStillAuthorized(s.fingerprint)) {
+      // Сообщаем причину в потоке (клиент покажет «устройство отозвано»), затем рвём.
+      this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'revoked', message: 'device revoked' }));
       this.rejectClient(s, 'revoked', 'device revoked');
       return;
     }
@@ -845,7 +886,9 @@ export class RelayLink {
     try {
       if (!this.files) throw new Error('file browser unavailable');
       await this.assertScopedPath(s, req.root ?? '', req.path ?? '');
-      const len = req.len ?? 0;
+      // Кламп: `len` приходит от клиента и уходит в Buffer.alloc — без потолка это
+      // запрос на аллокацию произвольного размера (память агента).
+      const len = Math.min(Math.max(Math.trunc(req.len ?? 0), 0), MAX_FILE_CHUNK);
       const bytes = await this.files.readChunk(req.root ?? '', req.path ?? '', req.offset ?? 0, len);
       this.sendFrameBytes(
         s,
@@ -926,12 +969,14 @@ export class RelayLink {
   private doOpen(s: ClientSession, frame: Frame): void {
     const channel = frame.channel;
     if (s.terminals.has(channel)) return;
-    // Повторная сверка authorized на КАЖДЫЙ новый терминал: если устройство отозвали
-    // (revoke) уже при живом streaming-коннекте, новые OPEN отклоняем и рвём сессию.
-    // Существующие терминалы до дисконнекта продолжают работать (задокументировано).
-    if (s.fingerprint && !this.authorized().some((d) => d.fingerprint === s.fingerprint)) {
-      this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'revoked', message: 'device revoked' }));
-      return this.rejectClient(s, 'revoked', 'device revoked');
+    // Сверка authorized выполняется в handleAppFrame на КАЖДЫЙ кадр (включая этот),
+    // поэтому отдельная проверка здесь больше не нужна.
+    // Потолок терминалов на клиента: каждый OPEN спавнит `tmux attach` (процесс + pty),
+    // а канал выбирает клиент — без лимита даже гость «только для просмотра» открывал
+    // бы их пачками и клал машину владельца.
+    if (s.terminals.size >= MAX_TERMINALS_PER_CLIENT) {
+      this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'too-many-terminals', message: 'too many terminals' }));
+      return;
     }
     let req: { session?: unknown };
     try {
@@ -1061,6 +1106,21 @@ export class RelayLink {
     out.writeUInt32BE(connId >>> 0, 0);
     out.set(payload, 4);
     ws.send(out, { binary: true });
+    // Backpressure pty→WS (в LAN-пути он есть в bridge.ts, здесь его не было):
+    // быстрый вывод (`yes`, `cat bigfile`) при медленном мобильном клиенте раздувал
+    // буфер сокета до OOM агента. При переполнении — пауза ВСЕХ pty этого клиента.
+    if (ws.bufferedAmount > WS_HIGH_WATER && !this.drainTimer) {
+      for (const s of this.clients.values()) for (const t of s.terminals.values()) t.pause();
+      this.drainTimer = setInterval(() => {
+        const sock = this.ws;
+        if (!sock || sock.readyState !== WebSocket.OPEN || sock.bufferedAmount < WS_LOW_WATER) {
+          clearInterval(this.drainTimer);
+          this.drainTimer = undefined;
+          for (const s of this.clients.values()) for (const t of s.terminals.values()) t.resume();
+        }
+      }, WS_DRAIN_INTERVAL_MS);
+      if (typeof this.drainTimer.unref === 'function') this.drainTimer.unref();
+    }
   }
 
   private send(obj: unknown): void {
