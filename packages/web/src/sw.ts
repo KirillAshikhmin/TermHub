@@ -25,6 +25,7 @@ interface WindowClientLike {
   url: string;
   focus(): Promise<unknown>;
   navigate(url: string): Promise<unknown>;
+  postMessage(message: unknown): void;
 }
 interface SwScope {
   addEventListener(type: 'install', listener: (e: WaitUntilEvent) => void): void;
@@ -88,12 +89,24 @@ sw.addEventListener('fetch', (event) => {
 sw.addEventListener('push', (event) => {
   const { session, task } = readPush(event.data);
   event.waitUntil(
-    sw.registration.showNotification('TermHub', {
-      body: task ? `${session}: ${task}` : session,
-      tag: session,
-      renotify: true,
-      data: { session },
-    }),
+    (async () => {
+      await sw.registration.showNotification('TermHub', {
+        body: task ? `${session}: ${task}` : session,
+        // icon — цветная иконка в теле уведомления; badge — МОНОХРОМНЫЙ силуэт в
+        // статус-баре (Android рисует его по альфа-каналу, цвет игнорирует).
+        // Только растр: SVG в уведомлениях Chrome не поддерживает.
+        icon: './icon-192.png',
+        badge: './badge.png',
+        tag: session,
+        renotify: true,
+        data: { session },
+      });
+      // Звук уведомления задаёт система (канал уведомлений), веб его выбрать не может.
+      // Поэтому, если страница ещё жива, просим её проиграть наш «звонок» — тот же,
+      // что и при звонке в открытом приложении.
+      const clients = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) client.postMessage({ t: 'termhub-bell', session });
+    })(),
   );
 });
 

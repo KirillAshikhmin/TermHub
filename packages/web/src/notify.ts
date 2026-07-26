@@ -28,7 +28,13 @@ export async function requestNotificationPermission(): Promise<PermissionState> 
 export function notifyBell(sessionName: string): void {
   if (!notificationsSupported() || Notification.permission !== 'granted') return;
   try {
-    new Notification(sessionName, { body: t('notify.bellBody'), tag: `termhub-bell-${sessionName}` });
+    // Те же иконки, что и у push-уведомлений (badge — монохромный силуэт).
+    new Notification(sessionName, {
+      body: t('notify.bellBody'),
+      icon: './icon-192.png',
+      badge: './badge.png',
+      tag: `termhub-bell-${sessionName}`,
+    });
   } catch {
     // Некоторые окружения бросают на прямой конструктор — тихо игнорируем.
   }

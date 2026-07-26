@@ -12,7 +12,7 @@ import { mountDiag } from './diag';
 import { mountFiles } from './files';
 import { getLang, onLangChange } from './i18n';
 import type { RemoteController, RemoteRoute } from './remote';
-import { initAudioUnlock } from './sound';
+import { initAudioUnlock, playBell } from './sound';
 import { shouldRegisterSw } from './sw-register';
 import { initTheme } from './theme';
 import { LanTransport } from './transport';
@@ -154,6 +154,14 @@ if (shouldRegisterSw({ isSecureContext: window.isSecureContext, hasServiceWorker
         };
         checkUpdate();
         document.addEventListener('visibilitychange', checkUpdate);
+        // Звук пуш-уведомления выбирает система (канал уведомлений) — из веба его
+        // не задать. Поэтому SW просит открытую страницу проиграть наш «звонок»:
+        // тот же звук, что и при звонке в активном приложении. Работает, пока
+        // страница жива и аудио разблокировано; иначе слышен системный звук.
+        navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
+          const data = event.data as { t?: unknown } | null;
+          if (data && data.t === 'termhub-bell') playBell();
+        });
       },
       (err: unknown) => console.warn('SW registration failed:', err),
     );
