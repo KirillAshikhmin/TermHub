@@ -9,7 +9,7 @@ interface Manifest {
   start_url: string;
   scope: string;
   display: string;
-  orientation: string;
+  orientation?: string;
   background_color: string;
   theme_color: string;
   icons: Array<{ src: string; sizes: string; type: string; purpose: string }>;
@@ -25,8 +25,10 @@ describe('web app manifest', () => {
     expect(m.start_url).toBe('./');
     expect(m.scope).toBe('./');
     expect(m.display).toBe('standalone');
-    // Портретная блокировка: PWA не крутится вопреки залоченному телефону.
-    expect(m.orientation).toBe('portrait');
+    // Ориентацию НЕ задаём: PWA следует за поворотом устройства. Терминалу
+    // ландшафт полезен (больше колонок), а навязывать портрет поверх системной
+    // настройки — лишнее (так же поступают другие PWA, напр. Sprut.hub).
+    expect(m.orientation).toBeUndefined();
     expect(m.background_color).toMatch(/^#[0-9a-fA-F]{6}$/);
     expect(m.theme_color).toMatch(/^#[0-9a-fA-F]{6}$/);
   });
