@@ -5,9 +5,9 @@
 
 import { t } from './i18n';
 import { openModal } from './ui';
-import { renderHeader, renderHoloBar, renderTabs, iconButton, spinner, toast, wireToolbar, errorScreen } from './ui';
+import { renderHeader, renderHoloBar, renderTabs, iconButton, spinner, svgIcon, toast, wireToolbar, errorScreen } from './ui';
 import { openCreateModal } from './dashboard';
-import { openRowMenu, openTextInNotaText, streamDownload } from './file-ops';
+import { openRowMenu, openTextInNotaText, showProgress, streamDownload } from './file-ops';
 import { formatDate, formatSize } from './format';
 import { mountSessionBar } from './tabs';
 import { filesHash, parseSessionSub } from './routes';
@@ -508,11 +508,169 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
     obs.observe(root, { attributes: true, attributeFilter: ['class'] });
   }
 
+  // ── FAB «+»: загрузка файлов и создание папки в ТЕКУЩЕЙ папке ───────────────
+  // Гостю без права записи не показываем вовсе (агент такие операции всё равно
+  // отклонит, но и кнопку предлагать незачем) — canWrite объявлен выше.
+  let fab: HTMLButtonElement | null = null;
+  if (canWrite) {
+    fab = document.createElement('button');
+    fab.type = 'button';
+    fab.className = 'th-fab';
+    fab.setAttribute('aria-label', t('files.add'));
+    fab.title = t('files.add');
+    fab.append(svgIcon('plus'));
+    fab.addEventListener('click', () => openAddMenu());
+    root.append(fab);
+  }
+
+  /** Меню действий «+»: загрузить файлы / создать папку. */
+  function openAddMenu(): void {
+    openModal((close) => {
+      const box = document.createElement('div');
+      box.className = 'th-addmenu';
+      const head = document.createElement('div');
+      head.className = 'th-modal__head';
+      const title = document.createElement('h2');
+      title.textContent = t('files.add');
+      head.append(title, iconButton('close', t('common.close'), close));
+
+      const upload = document.createElement('button');
+      upload.type = 'button';
+      upload.className = 'th-addmenu__item';
+      upload.append(svgIcon('up'), document.createTextNode(t('files.uploadFiles')));
+      upload.addEventListener('click', () => {
+        close();
+        pickAndUpload();
+      });
+
+      const folder = document.createElement('button');
+      folder.type = 'button';
+      folder.className = 'th-addmenu__item';
+      folder.append(svgIcon('folder'), document.createTextNode(t('files.newFolder')));
+      folder.addEventListener('click', () => {
+        close();
+        openNewFolder();
+      });
+
+      box.append(head, upload, folder);
+      return box;
+    });
+  }
+
+  /** Системный выбор файлов (можно несколько) → последовательная загрузка. */
+  function pickAndUpload(): void {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const files = [...(input.files ?? [])];
+      input.remove();
+      if (files.length) void uploadAll(files);
+    });
+    document.body.append(input);
+    input.click();
+  }
+
+  /** Загружает файлы по одному в текущую папку, показывая прогресс. */
+  async function uploadAll(files: File[]): Promise<void> {
+    // Папку фиксируем на старте: пользователь может уйти в другую, пока идёт заливка.
+    const destRoot = curRoot;
+    const destDir = curPath;
+    let failed = 0;
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i]!;
+      const caption =
+        files.length > 1 ? `${file.name} (${i + 1}/${files.length})` : file.name;
+      const prog = showProgress(t('files.uploading', { name: caption }));
+      try {
+        await transport.uploadFile(destRoot, joinPath(destDir, file.name), file, (frac) => prog.set(frac));
+      } catch (err) {
+        failed += 1;
+        toast(err instanceof Error ? err.message : t('files.error'), 'error');
+      } finally {
+        prog.done();
+      }
+    }
+    if (stopped) return;
+    if (failed < files.length) toast(t('files.uploaded', { n: files.length - failed }));
+    // Показываем результат, только если пользователь всё ещё в той же папке.
+    if (curRoot === destRoot && curPath === destDir) void load({ silent: true });
+  }
+
+  /** Модалка создания папки в текущей папке. */
+  function openNewFolder(): void {
+    openModal((close) => {
+      const form = document.createElement('form');
+      form.className = 'th-create';
+      form.noValidate = true;
+      const head = document.createElement('div');
+      head.className = 'th-modal__head';
+      const title = document.createElement('h2');
+      title.textContent = t('files.newFolder');
+      head.append(title, iconButton('close', t('common.close'), close));
+
+      const body = document.createElement('div');
+      body.className = 'th-create__body';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'th-input';
+      input.autocomplete = 'off';
+      input.placeholder = t('files.folderName');
+      const label = document.createElement('label');
+      label.className = 'th-field';
+      const span = document.createElement('span');
+      span.className = 'th-field__label';
+      span.textContent = t('files.folderName');
+      label.append(span, input);
+      body.append(label);
+
+      const foot = document.createElement('div');
+      foot.className = 'th-modal__foot';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'th-btn';
+      cancel.textContent = t('common.cancel');
+      cancel.addEventListener('click', close);
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.className = 'th-btn th-btn--primary';
+      submit.textContent = t('common.create');
+      foot.append(cancel, submit);
+
+      form.append(head, body, foot);
+      setTimeout(() => input.focus(), 0);
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = input.value.trim();
+        // Имя — ровно один сегмент: «/» и «..» увели бы папку за пределы текущей.
+        if (!name || name.includes('/') || name === '.' || name === '..') {
+          toast(t('files.badFolderName'), 'error');
+          return;
+        }
+        submit.disabled = true;
+        submit.replaceChildren(spinner());
+        try {
+          await transport.fileOp('mkdir', { root: curRoot, path: joinPath(curPath, name) });
+          close();
+          void load({ silent: true });
+        } catch (err) {
+          submit.disabled = false;
+          submit.textContent = t('common.create');
+          toast(err instanceof Error ? err.message : t('files.error'), 'error');
+        }
+      });
+      return form;
+    });
+  }
+
   startLoading();
 
   return () => {
     stopped = true;
     obs?.disconnect();
+    fab?.remove();
     teardownTop();
   };
 }

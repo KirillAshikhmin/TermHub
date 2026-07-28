@@ -853,6 +853,30 @@ export class RelayTransport implements Transport {
     });
   }
 
+  /** Загрузка кусками через E2E: у relay нет HTTP-эндпоинта, а лимит WS-сообщения
+   *  (16 МБ) не даёт слать файл целиком. Куски идут последовательно, чтобы агент
+   *  дописывал их в правильном порядке; последний помечен `last`. */
+  async uploadFile(root: string, subpath: string, file: File, onProgress?: (frac: number) => void): Promise<void> {
+    const CHUNK = 256 * 1024;
+    let offset = 0;
+    onProgress?.(0);
+    // Пустой файл — один пустой кусок, иначе агент не создаст его вовсе.
+    do {
+      const slice = file.slice(offset, offset + CHUNK);
+      const buf = new Uint8Array(await slice.arrayBuffer());
+      const last = offset + buf.length >= file.size;
+      await this.fileOp('upload-chunk', {
+        root,
+        path: subpath,
+        offset,
+        last,
+        data: b64(buf),
+      });
+      offset += buf.length;
+      onProgress?.(file.size === 0 ? 1 : Math.min(1, offset / file.size));
+    } while (offset < file.size);
+  }
+
   /** У relay нет HTTP — прямого URL нет, тянем через fileBlob (чанки). */
   downloadUrl(): string | null {
     return null;

@@ -31,7 +31,7 @@ export function streamDownload(transport: Transport, root: string, filePath: str
     save(direct);
     return;
   }
-  const prog = showDownloadProgress(name);
+  const prog = showProgress(t('files.downloading', { name }));
   transport.fileBlob(root, filePath, (frac) => prog.set(frac)).then(
     (blob) => {
       prog.done();
@@ -44,13 +44,13 @@ export function streamDownload(transport: Transport, root: string, filePath: str
   );
 }
 
-/** Плавающий индикатор прогресса скачивания (relay-режим, где blob тянется чанками). */
-function showDownloadProgress(name: string): { set: (frac: number) => void; done: () => void } {
+/** Плавающий индикатор прогресса (скачивание и загрузка). Подпись задаёт вызывающий. */
+export function showProgress(text: string): { set: (frac: number) => void; done: () => void } {
   const box = document.createElement('div');
   box.className = 'th-dlprog';
   const label = document.createElement('div');
   label.className = 'th-dlprog__label';
-  label.textContent = t('files.downloading', { name });
+  label.textContent = text;
   const track = document.createElement('div');
   track.className = 'th-dlprog__track';
   const bar = document.createElement('div');

@@ -79,6 +79,10 @@ export interface Transport {
   downloadUrl(root: string, subpath: string): string | null;
   /** Собрать файл целиком в Blob (relay — чанками; LAN — fetch). onProgress(0..1). */
   fileBlob(root: string, subpath: string, onProgress?: (frac: number) => void): Promise<Blob>;
+  /** Загрузить файл в папку: `subpath` — путь назначения вместе с именем файла.
+   *  LAN — потоком одним POST; relay — кусками через E2E. onProgress(0..1).
+   *  Существующий файл не перезаписывается (агент отвечает ошибкой). */
+  uploadFile(root: string, subpath: string, file: File, onProgress?: (frac: number) => void): Promise<void>;
   /** Операции VCS (git/svn/hg) над папкой в пределах корня (оба режима). action —
    *  log|show|status|diff|commit; params — {root, path, rev?, file?, files?, message?}. */
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T>;
@@ -310,6 +314,10 @@ export class LanTransport implements Transport {
       if (!r.ok) throw new Error(`download ${r.status}`);
       return r.blob();
     });
+  }
+
+  uploadFile(root: string, subpath: string, file: File, onProgress?: (frac: number) => void): Promise<void> {
+    return api.uploadFile(root, subpath, file, onProgress);
   }
 
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {

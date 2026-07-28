@@ -4,6 +4,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import type { FileContent, FileEntry, FileInfo } from '@termhub/protocol';
 
 /** Лимиты инлайн-просмотра: больше — только скачивание (truncated). */
@@ -225,6 +226,66 @@ export class FileService {
     await fsp.writeFile(file, content, 'utf8');
   }
 
+  /** Создать каталог. `subpath` — путь вместе с именем нового каталога. Без `recursive`:
+   *  существующий каталог/файл — честная ошибка, а не молчаливый успех. */
+  async mkdir(root: string, subpath: string): Promise<void> {
+    const target = await this.resolveDest(root, subpath);
+    await fsp.mkdir(target);
+  }
+
+  /** Кусок загружаемого файла (relay: приходит чанками в FileOp).
+   *  Пишем во временный файл рядом и переименовываем на последнем куске — при обрыве
+   *  не остаётся «половинки» под настоящим именем. Существующий файл не перетираем. */
+  async uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void> {
+    const target = await this.resolveDest(root, subpath);
+    const temp = uploadTempPath(target);
+    if (offset === 0) {
+      await this.assertAbsent(target);
+      await fsp.writeFile(temp, data);
+    } else {
+      await fsp.appendFile(temp, data);
+    }
+    if (last) await this.finishUpload(temp, target);
+  }
+
+  /** Приём файла потоком (LAN: тело POST идёт прямо на диск, без base64 и лимита JSON). */
+  async uploadStream(root: string, subpath: string, stream: NodeJS.ReadableStream): Promise<void> {
+    const target = await this.resolveDest(root, subpath);
+    const temp = uploadTempPath(target);
+    await this.assertAbsent(target);
+    const handle = await fsp.open(temp, 'w');
+    try {
+      const writable = handle.createWriteStream();
+      await pipeline(stream, writable);
+    } catch (err) {
+      await fsp.rm(temp, { force: true });
+      throw err;
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+    await this.finishUpload(temp, target);
+  }
+
+  /** Требует отсутствия файла назначения (загрузка не должна молча затирать). */
+  private async assertAbsent(target: string): Promise<void> {
+    const exists = await fsp
+      .stat(target)
+      .then(() => true)
+      .catch(() => false);
+    if (exists) throw new Error('File already exists');
+  }
+
+  /** Переносит временный файл на место назначения (с повторной проверкой отсутствия). */
+  private async finishUpload(temp: string, target: string): Promise<void> {
+    try {
+      await this.assertAbsent(target);
+      await fsp.rename(temp, target);
+    } catch (err) {
+      await fsp.rm(temp, { force: true });
+      throw err;
+    }
+  }
+
   /** Резолв НЕсуществующего назначения: родитель обязан быть внутри корня (realpath). */
   private async resolveDest(root: string, subpath: string): Promise<string> {
     if (!this.roots.includes(root)) throw new Error('Unknown root');
@@ -236,6 +297,12 @@ export class FileService {
     }
     return path.join(realParent, path.basename(target));
   }
+}
+
+/** Имя временного файла загрузки рядом с целью: скрытый, с явным суффиксом — если
+ *  загрузка оборвалась, понятно, что это и что его можно удалить. */
+function uploadTempPath(target: string): string {
+  return path.join(path.dirname(target), `.${path.basename(target)}.termhub-part`);
 }
 
 /** mode → строка прав rwxr-xr-x (младшие 9 бит). */
@@ -253,6 +320,8 @@ export interface FileOpCtl {
   move(root: string, subpath: string, destRoot: string, dest: string): Promise<void>;
   copy(root: string, subpath: string, destRoot: string, dest: string): Promise<void>;
   writeFile(root: string, subpath: string, content: string): Promise<void>;
+  mkdir(root: string, subpath: string): Promise<void>;
+  uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void>;
 }
 
 /** Диспетчер файловых операций — единая точка для server.ts и relay-link.ts. */
@@ -270,6 +339,15 @@ export async function runFileOp(files: FileOpCtl, req: Record<string, unknown>):
       return files.copy(root, sub, String(req.destRoot ?? root), String(req.dest ?? ''));
     case 'write':
       return files.writeFile(root, sub, String(req.content ?? ''));
+    case 'mkdir':
+      return files.mkdir(root, sub);
+    case 'upload-chunk': {
+      // relay-путь загрузки: данные приходят кусками в base64 (JSON-кадр).
+      const data = Buffer.from(String(req.data ?? ''), 'base64');
+      const offset = Number(req.offset ?? 0);
+      if (!Number.isInteger(offset) || offset < 0) throw new Error('Invalid offset');
+      return files.uploadChunk(root, sub, data, offset, req.last === true);
+    }
     default:
       throw new Error('Unknown file operation');
   }

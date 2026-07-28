@@ -67,6 +67,8 @@ interface FilesCtl {
   move(root: string, subpath: string, destRoot: string, dest: string): Promise<void>;
   copy(root: string, subpath: string, destRoot: string, dest: string): Promise<void>;
   writeFile(root: string, subpath: string, content: string): Promise<void>;
+  mkdir(root: string, subpath: string): Promise<void>;
+  uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void>;
 }
 import { attachTerminal, type TerminalHandle } from './bridge.js';
 import { runRepoAction } from './vcs.js';

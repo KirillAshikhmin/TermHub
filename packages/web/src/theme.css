@@ -1117,6 +1117,31 @@ select.th-input {
   font-size: 0.8rem;
 }
 
+/* Меню «+» в проводнике: крупные строки-действия (загрузка / новая папка) */
+.th-addmenu {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.th-addmenu__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+.th-addmenu__item:hover {
+  background: var(--bg-hover);
+}
+
 /* Кнопка-стрелка разворота панели сессий: иконка поворачивается на месте */
 .th-tabs-expand .th-icon {
   transition: transform var(--t);

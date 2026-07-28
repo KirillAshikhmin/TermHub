@@ -285,6 +285,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/files/download') return this.fileDownload(req, res, url);
     if (method === 'POST' && pathname === '/api/repo') return this.repoApi(req, res);
     if (method === 'POST' && pathname === '/api/files/op') return this.filesOp(req, res);
+    if (method === 'POST' && pathname === '/api/files/upload') return this.fileUpload(req, res, url);
     if (method === 'POST' && pathname === '/api/push/subscribe') return this.pushSubscribe(req, res);
     if (method === 'GET' && pathname === '/api/devices') {
       const list = loadAuthorized().map((d) => ({ name: d.name, fingerprint: d.fingerprint, addedAt: d.addedAt }));
@@ -398,6 +399,19 @@ export class AgentServer {
     try {
       const result = await runFileOp(this.files, body);
       this.sendJson(res, 200, { result });
+    } catch (err) {
+      this.sendJson(res, 400, { error: (err as Error).message });
+    }
+  }
+
+  /** Загрузка файла в LAN: тело запроса стримится прямо на диск. Отдельный эндпоинт,
+   *  а не /api/files/op, потому что там тело ограничено 64 КиБ и разбирается как JSON —
+   *  для файлов это и медленно (base64), и попросту мало. */
+  private async fileUpload(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
+    try {
+      await this.files.uploadStream(url.searchParams.get('root') ?? '', url.searchParams.get('path') ?? '', req);
+      this.sendJson(res, 200, { ok: true });
     } catch (err) {
       this.sendJson(res, 400, { error: (err as Error).message });
     }

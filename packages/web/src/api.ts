@@ -152,6 +152,31 @@ export const api = {
     request<{ result: T }>('POST', '/api/repo', { body: { action, ...params } }).then((r) => r.result),
   fileOp: <T = unknown>(action: string, params: Record<string, unknown>) =>
     request<{ result: T }>('POST', '/api/files/op', { body: { action, ...params } }).then((r) => r.result),
+  /** Загрузка файла: тело уходит потоком на /api/files/upload. XHR, а не fetch, —
+   *  ради событий прогресса (у fetch нет upload-progress). */
+  uploadFile: (root: string, path: string, file: File, onProgress?: (frac: number) => void) =>
+    new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/files/upload?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+      xhr.withCredentials = true;
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) return resolve();
+        let message = `upload ${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText) as { error?: string };
+          if (body.error) message = body.error;
+        } catch {
+          // не JSON — оставляем код статуса
+        }
+        reject(new ApiError(xhr.status, message));
+      });
+      xhr.addEventListener('error', () => reject(new Error('upload failed')));
+      xhr.addEventListener('abort', () => reject(new Error('upload aborted')));
+      xhr.send(file);
+    }),
   share: (scope?: DeviceScope) => request<ShareInfo>('POST', '/api/share', { body: { scope } }),
   devices: () => request<DeviceInfo[]>('GET', '/api/devices'),
   revoke: (fingerprint: string) => request<void>('DELETE', `/api/devices/${encodeURIComponent(fingerprint)}`),

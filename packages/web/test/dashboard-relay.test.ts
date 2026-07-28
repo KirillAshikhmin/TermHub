@@ -93,6 +93,10 @@ class ScriptedTransport implements Transport {
     return Promise.resolve(new Blob());
   }
 
+  uploadFile(_root: string, _subpath: string, _file: File): Promise<void> {
+    return Promise.resolve();
+  }
+
   repo<T = unknown>(_action: string, _params: Record<string, unknown>): Promise<T> {
     return Promise.reject(new Error('repo not scripted'));
   }

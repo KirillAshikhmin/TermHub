@@ -67,4 +67,58 @@ describe('FileService — операции', () => {
     await svc.writeFile(root, 'sub/a.txt', 'updated!');
     expect((await svc.readFile(root, 'sub/a.txt')).data).toBe('updated!');
   });
+
+  it('mkdir: создаёт папку; повторный вызов — ошибка (не молчаливый успех)', async () => {
+    await svc.mkdir(root, 'newdir');
+    expect((await fsp.stat(path.join(root, 'newdir'))).isDirectory()).toBe(true);
+    await expect(svc.mkdir(root, 'newdir')).rejects.toThrow();
+  });
+
+  it('mkdir: анти-побег за корень', async () => {
+    await expect(svc.mkdir(root, '../escaped')).rejects.toThrow();
+    expect(await fsp.stat(path.join(root, '..', 'escaped')).catch(() => null)).toBeNull();
+  });
+
+  it('uploadChunk: собирает файл из кусков и не оставляет временных файлов', async () => {
+    const part1 = Buffer.from('hello ');
+    const part2 = Buffer.from('upload');
+    await svc.uploadChunk(root, 'up.txt', part1, 0, false);
+    // До последнего куска настоящего файла ещё нет — только временный.
+    expect(await fsp.stat(path.join(root, 'up.txt')).catch(() => null)).toBeNull();
+    await svc.uploadChunk(root, 'up.txt', part2, part1.length, true);
+    expect(await fsp.readFile(path.join(root, 'up.txt'), 'utf8')).toBe('hello upload');
+    const left = (await fsp.readdir(root)).filter((n) => n.includes('termhub-part'));
+    expect(left).toEqual([]);
+  });
+
+  it('uploadChunk: существующий файл не перезаписывается', async () => {
+    await expect(svc.uploadChunk(root, 'up.txt', Buffer.from('x'), 0, true)).rejects.toThrow(/exists/i);
+    expect(await fsp.readFile(path.join(root, 'up.txt'), 'utf8')).toBe('hello upload');
+  });
+
+  it('uploadChunk: анти-побег за корень', async () => {
+    await expect(svc.uploadChunk(root, '../escaped.txt', Buffer.from('x'), 0, true)).rejects.toThrow();
+  });
+
+  it('uploadStream: пишет файл потоком (LAN-путь)', async () => {
+    const { Readable } = await import('node:stream');
+    await svc.uploadStream(root, 'streamed.bin', Readable.from([Buffer.from('abc'), Buffer.from('def')]));
+    expect(await fsp.readFile(path.join(root, 'streamed.bin'), 'utf8')).toBe('abcdef');
+    const left = (await fsp.readdir(root)).filter((n) => n.includes('termhub-part'));
+    expect(left).toEqual([]);
+  });
+
+  it('runFileOp: mkdir и upload-chunk доступны обоим транспортам', async () => {
+    await runFileOp(svc, { action: 'mkdir', root, path: 'viaop' });
+    expect((await fsp.stat(path.join(root, 'viaop'))).isDirectory()).toBe(true);
+    await runFileOp(svc, {
+      action: 'upload-chunk',
+      root,
+      path: 'viaop/f.txt',
+      offset: 0,
+      last: true,
+      data: Buffer.from('payload').toString('base64'),
+    });
+    expect(await fsp.readFile(path.join(root, 'viaop', 'f.txt'), 'utf8')).toBe('payload');
+  });
 });
