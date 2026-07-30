@@ -488,6 +488,13 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
       sendData(encoder.encode(e.key === 'ArrowLeft' ? '\x01' : '\x05'));
       return false;
     }
+    // Option+←/→ — по словам, как в нативных полях macOS. Шлём ESC b / ESC f —
+    // словесные привязки readline, понятные и zsh/bash, и ink-TUI. Сам xterm на
+    // Alt+стрелку шлёт \x1b[1;3D/\x1b[1;3C, который большинство TUI игнорирует.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      sendData(encoder.encode(e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf'));
+      return false;
+    }
     return true;
   });
   // onBinary: последовательности, непредставимые как UTF-16 строка (raw-байты).
