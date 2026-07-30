@@ -61,6 +61,8 @@ const ru: Dict = {
     killError: 'Не удалось завершить сессию',
     rename: 'Переименовать',
     renameError: 'Не удалось переименовать сессию',
+    moveUp: 'Выше',
+    moveDown: 'Ниже',
   },
   rename: {
     title: 'Переименовать сессию',
@@ -72,6 +74,7 @@ const ru: Dict = {
     activity: 'По активности',
     name: 'По имени',
     bell: 'Со звонком сверху',
+    manual: 'Вручную',
   },
   create: {
     title: 'Новая сессия',
@@ -339,6 +342,8 @@ const en: Dict = {
     killError: 'Could not kill the session',
     rename: 'Rename',
     renameError: 'Could not rename the session',
+    moveUp: 'Move up',
+    moveDown: 'Move down',
   },
   rename: {
     title: 'Rename session',
@@ -350,6 +355,7 @@ const en: Dict = {
     activity: 'By activity',
     name: 'By name',
     bell: 'Bells first',
+    manual: 'Manual',
   },
   create: {
     title: 'New session',

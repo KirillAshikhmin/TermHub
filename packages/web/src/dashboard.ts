@@ -15,7 +15,7 @@ import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
-import { readSortMode, sortSessions } from './session-sort';
+import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { updateAppBadge } from './app-badge';
 import { iconButton, openModal, renderHeader, renderTabs, sortSelect, spinner, svgIcon, toast } from './ui';
 
@@ -45,6 +45,10 @@ export interface CardOptions {
   onOpen?: () => void;
   onKill?: () => void;
   onRename?: () => void;
+  /** Ручной порядок: сдвинуть карточку на позицию выше/ниже. Передаются только в
+   *  режиме сортировки «вручную» — в остальных пункты меню не имели бы смысла. */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }
 
 /** Точка активности — первый элемент в .th-card__name (перед текстом имени). */
@@ -83,7 +87,7 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   // Меню управления (rename/kill) — только владельцу. Гость (scope) колбэков не
   // получает (dashboard их не передаёт) → меню не рисуем вовсе.
   let closeOpenMenu: (() => boolean) | null = null;
-  if (opts.onRename || opts.onKill) {
+  if (opts.onRename || opts.onKill || opts.onMoveUp || opts.onMoveDown) {
     const menuWrap = document.createElement('div');
     menuWrap.className = 'th-card__menu-wrap';
     const menuBtn = document.createElement('button');
@@ -99,6 +103,22 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
       menuWrap.classList.remove('is-open');
       menuBtn.setAttribute('aria-expanded', 'false');
     };
+    /** Пункт меню карточки; собирается одинаково для перемещения и переименования. */
+    const menuItem = (icon: string, label: string, run: () => void): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'th-card__menu-item';
+      btn.append(svgIcon(icon), document.createTextNode(label));
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeMenu();
+        run();
+      });
+      return btn;
+    };
+    const moveItems: HTMLButtonElement[] = [];
+    if (opts.onMoveUp) moveItems.push(menuItem('up', translate('card.moveUp'), opts.onMoveUp));
+    if (opts.onMoveDown) moveItems.push(menuItem('down', translate('card.moveDown'), opts.onMoveDown));
     const renameBtn = document.createElement('button');
     renameBtn.type = 'button';
     renameBtn.className = 'th-card__menu-item';
@@ -117,7 +137,7 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
       closeMenu();
       opts.onKill?.();
     });
-    pop.append(renameBtn, killBtn);
+    pop.append(...moveItems, ...(opts.onRename ? [renameBtn] : []), ...(opts.onKill ? [killBtn] : []));
     menuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const open = menuWrap.classList.toggle('is-open');
@@ -366,6 +386,9 @@ export function mountDashboard(
   toolbar.append(
     sortSelect(sortMode, (mode) => {
       sortMode = mode;
+      // Полная пересборка: пункты «выше/ниже» есть только в ручном режиме, а карточки
+      // переиспользуются между рендерами и сами по себе меню не поменяют.
+      gridReady = false;
       render(ordered(lastSessions)); // мгновенная перестановка, не ждём следующего полла
     }),
   );
@@ -375,8 +398,16 @@ export function mountDashboard(
   main.append(toolbar, grid);
   root.append(main);
 
-  /** Список в текущем порядке. 🔔-режим смотрит на непрочитанные звонки. */
-  const ordered = (sessions: SessionInfo[]): SessionInfo[] => sortSessions(sessions, sortMode, bellUnseen);
+  /** Список в текущем порядке. 🔔-режим смотрит на непрочитанные звонки, ручной —
+   *  на сохранённый порядок (перечитываем каждый раз: его меняют кнопками меню). */
+  const ordered = (sessions: SessionInfo[]): SessionInfo[] =>
+    sortSessions(sessions, sortMode, bellUnseen, readManualOrder());
+
+  /** Сдвиг карточки в ручном порядке на одну позицию. */
+  const move = (name: string, delta: -1 | 1): void => {
+    writeManualOrder(moveInOrder(readManualOrder(), lastSessions.map((s) => s.name), name, delta));
+    render(ordered(lastSessions));
+  };
 
   const fab = document.createElement('button');
   fab.type = 'button';
@@ -415,6 +446,9 @@ export function mountDashboard(
       // Управление сессиями — только владельцу; гость (scope) получает карту без меню.
       onKill: transport.clientScope ? undefined : () => void killSession(session.name),
       onRename: transport.clientScope ? undefined : () => openRenameModal(transport, session.name, () => void refresh()),
+      // Двигать вручную — только в ручном режиме: в остальных порядок задан правилом.
+      onMoveUp: sortMode === 'manual' ? () => move(session.name, -1) : undefined,
+      onMoveDown: sortMode === 'manual' ? () => move(session.name, 1) : undefined,
     });
 
   // Щадящее обновление: не перестраиваем всю сетку каждый поллинг (это сбрасывало

@@ -9,7 +9,7 @@ import { t } from './i18n';
 import type { Transport } from './transport';
 import { iconButton, sortSelect, svgIcon, toast } from './ui';
 import { openRenameModal, renderSessionCard } from './dashboard';
-import { readSortMode, sortSessions } from './session-sort';
+import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
@@ -215,7 +215,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     }),
   );
   const list = document.createElement('div');
-  list.className = 'th-spanel__list th-spanel__grid';
+  list.className = 'th-spanel__list th-grid';
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
   createBtn.className = 'th-btn th-btn--primary th-spanel__create';
@@ -261,7 +261,14 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       ? latest
       : [{ name: opts.current, bell: false, title: '', path: '', command: '', activityTs: now, attached: 0 }, ...latest];
     const guest = opts.transport.clientScope != null;
-    for (const s of sortSessions(rows, sortMode, bellUnseen)) {
+    const shown = sortSessions(rows, sortMode, bellUnseen, readManualOrder());
+    const visible = shown.map((x) => x.name);
+    const move = (name: string, delta: -1 | 1): void => {
+      writeManualOrder(moveInOrder(readManualOrder(), visible, name, delta));
+      buildPanelRows();
+      render(latest); // полоса вкладок идёт в том же порядке
+    };
+    for (const s of shown) {
       const hot = sessionWorking(s.title) || (!sessionManaged(s.title) && activity.isHot(s.name));
       // 🔔 — только пока звонок «не прочитан»; у текущей сессии он всегда прочитан.
       const info = { ...s, bell: bellUnseen(s.name) && s.name !== opts.current };
@@ -281,6 +288,8 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
                 void refresh();
                 if (panelOpen) buildPanelRows();
               }),
+        onMoveUp: guest || sortMode !== 'manual' ? undefined : () => move(s.name, -1),
+        onMoveDown: guest || sortMode !== 'manual' ? undefined : () => move(s.name, 1),
       });
       if (s.name === opts.current) card.classList.add('is-current');
       list.append(card);
@@ -325,7 +334,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // горизонтальный скролл полосы и фокус.
   const render = (input: SessionInfo[]): void => {
     latest = input; // снимок для панели быстрого переключения
-    const sessions = sortSessions(input, sortMode, bellUnseen);
+    const sessions = sortSessions(input, sortMode, bellUnseen, readManualOrder());
     // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
     // крестики-закрытия табов.
     const guest = opts.transport.clientScope != null;

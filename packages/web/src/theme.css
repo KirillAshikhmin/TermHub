@@ -2444,13 +2444,8 @@ main.th-files {
   outline-offset: 1px;
 }
 
-/* Панель быстрого переключения показывает те же карточки, что и дашборд. */
-.th-spanel__grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 1fr;
-}
-
+/* Панель быстрого переключения показывает те же карточки и в той же сетке, что и
+   дашборд (класс .th-grid) — отдельной раскладки у неё больше нет. */
 .th-spanel__toolbar {
   display: flex;
   justify-content: flex-end;
