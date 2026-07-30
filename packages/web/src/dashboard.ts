@@ -15,8 +15,9 @@ import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
+import { readSortMode, sortSessions } from './session-sort';
 import { updateAppBadge } from './app-badge';
-import { iconButton, openModal, renderHeader, renderTabs, spinner, svgIcon, toast } from './ui';
+import { iconButton, openModal, renderHeader, renderTabs, sortSelect, spinner, svgIcon, toast } from './ui';
 
 const POLL_INTERVAL = 3000;
 
@@ -357,11 +358,25 @@ export function mountDashboard(
 
   const main = document.createElement('main');
   main.className = 'th-dashboard';
+  // Порядок общий с панелью быстрого переключения и полосой вкладок (session-sort).
+  let sortMode = readSortMode();
+  let lastSessions: SessionInfo[] = [];
+  const toolbar = document.createElement('div');
+  toolbar.className = 'th-spanel__toolbar';
+  toolbar.append(
+    sortSelect(sortMode, (mode) => {
+      sortMode = mode;
+      render(ordered(lastSessions)); // мгновенная перестановка, не ждём следующего полла
+    }),
+  );
   const grid = document.createElement('div');
   grid.className = 'th-grid';
   grid.append(skeletonCard(), skeletonCard(), skeletonCard());
-  main.append(grid);
+  main.append(toolbar, grid);
   root.append(main);
+
+  /** Список в текущем порядке. 🔔-режим смотрит на непрочитанные звонки. */
+  const ordered = (sessions: SessionInfo[]): SessionInfo[] => sortSessions(sessions, sortMode, bellUnseen);
 
   const fab = document.createElement('button');
   fab.type = 'button';
@@ -406,6 +421,7 @@ export function mountDashboard(
   // бы фокус и закрывало открытое ⋯-меню). Карточки создаём/удаляем/обновляем
   // точечно, «занятые» пользователем (меню/фокус) не трогаем.
   const render = (sessions: SessionInfo[]): void => {
+    lastSessions = sessions;
     // Гость (scope задан после первого list) не создаёт сессий — «+» скрыт.
     fab.style.display = transport.clientScope != null ? 'none' : '';
     if (sessions.length === 0) {
@@ -419,7 +435,7 @@ export function mountDashboard(
     // Переход из скелетонов/пустого в сетку — единственный момент полной замены.
     if (!gridReady || showingEmpty || !main.contains(grid)) {
       grid.replaceChildren();
-      main.replaceChildren(grid);
+      main.replaceChildren(toolbar, grid);
       cards.clear();
       showingEmpty = false;
       gridReady = true;
@@ -483,7 +499,7 @@ export function mountDashboard(
       // от уведомления, которое мелькнуло и ушло.
       updateAppBadge(unseenBellCount());
       reactToBells(sessions);
-      render(sessions);
+      render(ordered(sessions));
       sessionCache.set(transport, sessions); // кэш для мгновенного показа при возврате
       loadedOnce = true;
     } catch (err) {

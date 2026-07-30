@@ -241,12 +241,47 @@ describe('mountSessionTabs', () => {
     await vi.advanceTimersByTimeAsync(0); // дать поллингу наполнить список
     const expand = tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!;
     expand.click();
-    const rows = tabs.el.querySelectorAll<HTMLButtonElement>('.th-spanel__row');
+    const rows = tabs.el.querySelectorAll<HTMLElement>('.th-spanel__list .th-card');
     const bRow = [...rows].find((r) => r.textContent?.includes('b'))!;
     bRow.click();
     expect(onSwitch).toHaveBeenCalledWith('b');
     expect(tabs.el.querySelector('.th-spanel')!.classList.contains('is-open')).toBe(false);
     tabs.teardown();
+  });
+
+  // Панель и дашборд должны показывать ОДНО И ТО ЖЕ: карточку со всеми полями, а не
+  // упрощённую строку. Проверяем по признакам карточки дашборда.
+  it('панель рисует карточки дашборда: каталог, команда, звонок', async () => {
+    const { transport } = stubTransport([
+      [sessionFixture('a'), sessionFixture('b', { command: 'claude', bell: true })],
+    ]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'a' });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
+
+    const cards = [...tabs.el.querySelectorAll<HTMLElement>('.th-spanel__list .th-card')];
+    const bCard = cards.find((c) => c.textContent?.includes('b'))!;
+    expect(bCard.querySelector('.th-card__dir')!.textContent).toContain('b');
+    expect(bCard.querySelector('.th-badge')!.textContent).toBe('claude');
+    expect(bCard.querySelector('.th-bell')).not.toBeNull();
+    tabs.teardown();
+  });
+
+  it('панель и полоса идут в выбранном порядке (по имени)', async () => {
+    localStorage.setItem('termhub.sessionSort', 'name');
+    const { transport } = stubTransport([
+      [sessionFixture('gamma', { activityTs: 300 }), sessionFixture('alpha', { activityTs: 100 })],
+    ]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'alpha' });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
+
+    const names = [...tabs.el.querySelectorAll<HTMLElement>('.th-spanel__list .th-card__name-text')].map(
+      (n) => n.textContent,
+    );
+    expect(names).toEqual(['alpha', 'gamma']); // по активности было бы gamma первой
+    tabs.teardown();
+    localStorage.clear();
   });
 });
 

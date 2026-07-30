@@ -6,6 +6,7 @@ import { getLang, setLang, t } from './i18n';
 import { notificationsSupported, permissionState, requestNotificationPermission } from './notify';
 import { enablePush } from './push';
 import { currentTheme, toggleTheme } from './theme';
+import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
 
@@ -586,4 +587,37 @@ function addCaffeineItem(addItem: AddItem, transport: Transport): () => void {
     stopped = true;
     if (retry) clearTimeout(retry);
   };
+}
+
+/**
+ * Селект порядка сессий. Один и тот же контрол на дашборде и в панели быстрого
+ * переключения — выбор общий (persist в session-sort), поэтому оба списка и полоса
+ * вкладок всегда идут в одном порядке.
+ *
+ * Именно `<select>`, а не сегмент-контрол: режимов уже три, подписи длинные, а на
+ * телефоне нативный селект даёт крупные цели для тапа без своей вёрстки.
+ */
+export function sortSelect(current: SortMode, onChange: (mode: SortMode) => void): HTMLElement {
+  const wrap = document.createElement('label');
+  wrap.className = 'th-sort';
+  const caption = document.createElement('span');
+  caption.className = 'th-sort__label';
+  caption.textContent = t('sort.label');
+  const select = document.createElement('select');
+  select.className = 'th-sort__select';
+  select.setAttribute('aria-label', t('sort.label'));
+  for (const mode of SORT_MODES) {
+    const opt = document.createElement('option');
+    opt.value = mode;
+    opt.textContent = t(`sort.${mode}`);
+    if (mode === current) opt.selected = true;
+    select.append(opt);
+  }
+  select.addEventListener('change', () => {
+    const mode = select.value as SortMode;
+    writeSortMode(mode);
+    onChange(mode);
+  });
+  wrap.append(caption, select);
+  return wrap;
 }

@@ -67,6 +67,12 @@ const ru: Dict = {
     name: 'Новое имя',
     submit: 'Переименовать',
   },
+  sort: {
+    label: 'Сортировка',
+    activity: 'По активности',
+    name: 'По имени',
+    bell: 'Со звонком сверху',
+  },
   create: {
     title: 'Новая сессия',
     name: 'Имя',
@@ -338,6 +344,12 @@ const en: Dict = {
     title: 'Rename session',
     name: 'New name',
     submit: 'Rename',
+  },
+  sort: {
+    label: 'Sort',
+    activity: 'By activity',
+    name: 'By name',
+    bell: 'Bells first',
   },
   create: {
     title: 'New session',

@@ -2416,3 +2416,43 @@ main.th-files {
   padding: 24px 16px;
   text-align: center;
 }
+
+/* Селект порядка сессий (дашборд + панель быстрого переключения). */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.th-sort__select {
+  appearance: none;
+  padding: 6px 28px 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2 4.5 6 8.5 10 4.5' fill='none' stroke='%238b949e' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>")
+    no-repeat right 8px center;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.th-sort__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Панель быстрого переключения показывает те же карточки, что и дашборд. */
+.th-spanel__grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+.th-spanel__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 4px 10px;
+}

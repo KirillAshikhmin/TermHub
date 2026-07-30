@@ -2,10 +2,14 @@
 // tmux-сессиями без возврата на дашборд. Чистые рендеры (тестируются
 // отдельно) + mountSessionTabs, владеющий поллингом списка через транспорт.
 
+import type { SessionInfo } from '@termhub/protocol';
+
 import type { TFn } from './i18n';
 import { t } from './i18n';
 import type { Transport } from './transport';
-import { iconButton, svgIcon, toast } from './ui';
+import { iconButton, sortSelect, svgIcon, toast } from './ui';
+import { openRenameModal, renderSessionCard } from './dashboard';
+import { readSortMode, sortSessions } from './session-sort';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
@@ -189,15 +193,29 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // Кнопка-стрелка разворачивает список ВСЕХ сессий на весь экран (крупные цели для
   // тапа с телефона), снизу — «Создать сессию». Стрелка поворачивается на 180°,
   // оставаясь на месте, и повторным нажатием закрывает панель.
-  let latest: TabInfo[] = [{ name: opts.current, bell: false, title: '' }];
+  // Снимок полного списка: панель рисует из него карточки дашборда, поэтому нужны
+  // все поля SessionInfo, а не только те, что требует таб.
+  let latest: SessionInfo[] = [];
   let panelOpen = false;
+  // Порядок общий с дашбордом (session-sort): «третья сверху» означает одно и то же
+  // на главной, в панели и в полосе вкладок.
+  let sortMode = readSortMode();
 
   const panel = document.createElement('div');
   panel.className = 'th-spanel';
   const sheet = document.createElement('div');
   sheet.className = 'th-spanel__sheet';
+  const sortBar = document.createElement('div');
+  sortBar.className = 'th-spanel__toolbar';
+  sortBar.append(
+    sortSelect(readSortMode(), (mode) => {
+      sortMode = mode;
+      buildPanelRows();
+      render(latest); // полоса вкладок идёт в том же порядке
+    }),
+  );
   const list = document.createElement('div');
-  list.className = 'th-spanel__list';
+  list.className = 'th-spanel__list th-spanel__grid';
   const createBtn = document.createElement('button');
   createBtn.type = 'button';
   createBtn.className = 'th-btn th-btn--primary th-spanel__create';
@@ -211,7 +229,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     closePanel();
     opts.onCreate();
   });
-  sheet.append(list, createBtn);
+  sheet.append(sortBar, list, createBtn);
   panel.append(sheet);
   panel.inert = true; // стартовое состояние — закрыта
   panel.addEventListener('click', (e) => {
@@ -231,47 +249,41 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   expandBtn.setAttribute('aria-haspopup', 'true');
   expandBtn.setAttribute('aria-expanded', 'false');
 
-  // Строит строки панели из последнего известного списка (снимок на момент открытия).
+  // Панель показывает РОВНО те же карточки, что и дашборд (renderSessionCard) — с
+  // точкой активности, звонком, каталогом, командой, временем и меню
+  // переименования/завершения. Раньше здесь был свой упрощённый список строк, и он
+  // расходился с главным экраном по составу и по порядку.
   const buildPanelRows = (): void => {
     list.replaceChildren();
+    const now = Date.now();
     // Текущая сессия присутствует всегда (как и в полосе), даже если её нет в списке.
     const rows = latest.some((s) => s.name === opts.current)
       ? latest
-      : [{ name: opts.current, bell: false, title: '' } as TabInfo, ...latest];
-    for (const s of rows) {
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'th-spanel__row';
-      if (s.name === opts.current) row.classList.add('is-current');
+      : [{ name: opts.current, bell: false, title: '', path: '', command: '', activityTs: now, attached: 0 }, ...latest];
+    const guest = opts.transport.clientScope != null;
+    for (const s of sortSessions(rows, sortMode, bellUnseen)) {
       const hot = sessionWorking(s.title) || (!sessionManaged(s.title) && activity.isHot(s.name));
-      if (hot) row.append(makeActivityDot('th-spanel__activity', t('card.activity')));
-      const lbl = document.createElement('span');
-      lbl.className = 'th-spanel__label';
-      const title = sessionTitleText(s.title);
-      const hasTitle = title !== '' && title !== s.name;
-      const nm = document.createElement('span');
-      nm.className = 'th-spanel__name';
-      nm.textContent = hasTitle ? title : s.name;
-      lbl.append(nm);
-      if (hasTitle) {
-        const sub = document.createElement('span');
-        sub.className = 'th-spanel__sub';
-        sub.textContent = s.name;
-        lbl.append(sub);
-      }
-      row.append(lbl);
-      if (bellUnseen(s.name) && s.name !== opts.current) {
-        const bell = document.createElement('span');
-        bell.className = 'th-spanel__bell';
-        bell.setAttribute('aria-label', t('card.bell'));
-        bell.textContent = '🔔';
-        row.append(bell);
-      }
-      row.addEventListener('click', () => {
-        closePanel();
-        opts.onSwitch(s.name);
+      // 🔔 — только пока звонок «не прочитан»; у текущей сессии он всегда прочитан.
+      const info = { ...s, bell: bellUnseen(s.name) && s.name !== opts.current };
+      const card = renderSessionCard(info, t, {
+        now,
+        showActivity: hot,
+        onOpen: () => {
+          closePanel();
+          opts.onSwitch(s.name);
+        },
+        // Управление — только владельцу, как и на дашборде.
+        onKill: guest ? undefined : () => opts.onKill(s.name),
+        onRename: guest
+          ? undefined
+          : () =>
+              openRenameModal(opts.transport, s.name, () => {
+                void refresh();
+                if (panelOpen) buildPanelRows();
+              }),
       });
-      list.append(row);
+      if (s.name === opts.current) card.classList.add('is-current');
+      list.append(card);
     }
   };
   function closePanel(): void {
@@ -311,8 +323,9 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
 
   // Точечное обновление, как в дашборде: не пересоздаём узлы, чтобы не сбрасывать
   // горизонтальный скролл полосы и фокус.
-  const render = (sessions: TabInfo[]): void => {
-    latest = sessions; // снимок для панели быстрого переключения
+  const render = (input: SessionInfo[]): void => {
+    latest = input; // снимок для панели быстрого переключения
+    const sessions = sortSessions(input, sortMode, bellUnseen);
     // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
     // крестики-закрытия табов.
     const guest = opts.transport.clientScope != null;
