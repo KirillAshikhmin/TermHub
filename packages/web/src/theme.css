@@ -811,6 +811,10 @@ select.th-input {
   color: var(--text);
   box-shadow: var(--shadow-sm);
 }
+.th-segment__btn--codex.is-active {
+  color: var(--accent);
+}
+
 .th-segment__btn--claude.is-active {
   color: var(--claude);
 }

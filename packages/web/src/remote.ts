@@ -37,6 +37,26 @@ export interface RemoteController {
   activeTransport(): Transport | null;
 }
 
+/** Ключ отметки о самообновлении (sessionStorage: живёт в пределах вкладки). */
+const RELOAD_MARK_KEY = 'termhub.updateReloadAt';
+/** Не чаще одной автоперезагрузки за этот интервал — заслон от цикла перезагрузок,
+ *  если новый бандл почему-то не доехал (кэш прокси, офлайн, сломанный деплой). */
+const RELOAD_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Перезагружает страницу ради свежего бандла. false — недавно уже перезагружались,
+ *  повтор не поможет и лишь скроет проблему от пользователя. */
+function reloadForUpdate(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(RELOAD_MARK_KEY) ?? 0);
+    if (Number.isFinite(last) && Date.now() - last < RELOAD_COOLDOWN_MS) return false;
+    sessionStorage.setItem(RELOAD_MARK_KEY, String(Date.now()));
+  } catch {
+    return false; // sessionStorage недоступен — молча крутить перезагрузки нельзя
+  }
+  location.reload();
+  return true;
+}
+
 function relayWsUrl(): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/relay`;
 }
@@ -67,6 +87,18 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
     if (status === 'unauthorized') {
       toast(t('remote.unauthorized'), 'error');
       dropTransport();
+      opts.rerender();
+      return;
+    }
+    // Версии протокола разошлись: этот бандл и агент собраны из разного кода.
+    // index.html раздаётся по network-first, поэтому обычная перезагрузка забирает
+    // свежий бандл. Делаем её сами — иначе установленный PWA залипает навсегда, ведь
+    // навигации в нём не происходит. Перезагрузка ограничена по частоте (см. ниже):
+    // если она не помогла, второй круг только скроет проблему.
+    if (status === 'outdated') {
+      dropTransport();
+      if (reloadForUpdate()) return;
+      toast(t('remote.outdated'), 'error');
       opts.rerender();
       return;
     }

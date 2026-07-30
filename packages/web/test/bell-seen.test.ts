@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bellUnseen, markBellSeen, observeBells } from '../src/bell-seen';
+import { bellUnseen, markBellSeen, observeBells, unseenBellCount } from '../src/bell-seen';
 
 describe('bell-seen', () => {
   it('звонок непрочитан, пока не открыли; markBellSeen гасит', () => {
@@ -24,5 +24,22 @@ describe('bell-seen', () => {
     observeBells([]); // c пропала
     expect(bellUnseen('c')).toBe(false);
     expect(bellUnseen('nope')).toBe(false);
+  });
+
+  // Число для бейджа на иконке приложения: держится, пока звонок не просмотрен.
+  it('unseenBellCount считает только непрочитанные звонки', () => {
+    observeBells([
+      { name: 'a', bell: true },
+      { name: 'b', bell: true },
+      { name: 'c', bell: false },
+    ]);
+    expect(unseenBellCount()).toBe(2);
+    markBellSeen('a');
+    expect(unseenBellCount()).toBe(1);
+    // Пропавшая сессия выбывает из счёта.
+    observeBells([{ name: 'b', bell: true }]);
+    expect(unseenBellCount()).toBe(1);
+    markBellSeen('b');
+    expect(unseenBellCount()).toBe(0);
   });
 });

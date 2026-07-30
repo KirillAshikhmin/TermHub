@@ -18,7 +18,8 @@ import { openCreateModal } from './dashboard';
 import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
-import { markBellSeen } from './bell-seen';
+import { markBellSeen, unseenBellCount } from './bell-seen';
+import { updateAppBadge } from './app-badge';
 import { detectPaths, filePathParts, parentRel } from './termlinks';
 import { filesHash, sfilesHash } from './routes';
 import { resolveSessionPath } from './session-path';
@@ -127,6 +128,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   root.replaceChildren();
   let disposed = false;
   markBellSeen(session); // открыли сессию — её звонок прочитан
+  updateAppBadge(unseenBellCount()); // бейдж на иконке гаснет сразу, не ждя полла
   // Гость без права записи (relay scope) — терминал только на просмотр: ввод не шлём,
   // панель клавиш и экранную клавиатуру прячем. Агент дополнительно игнорирует ввод.
   const readOnly = !!transport.clientScope && !transport.clientScope.write;
@@ -457,22 +459,34 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   // ── Ввод из терминала → pty ──────────────────────────────────────────
   const encoder = new TextEncoder();
   const dataDisp = term.onData((s) => sendData(encoder.encode(s)));
-  // Роли Enter/Shift+Enter зависят от тумблера «Отправлять по Enter» (enterSends):
-  //   enterSends=true  (по умолч.): Enter → отправка (\r), Shift+Enter → перенос
-  //   enterSends=false:             Enter → перенос,        Shift+Enter → отправка (\r)
+  // Shift+Enter — ВСЕГДА перенос строки. Тумблер «Отправлять по Enter» (enterSends)
+  // меняет поведение ТОЛЬКО чистого Enter:
+  //   enterSends=true  (по умолч.): Enter → отправка (\r)
+  //   enterSends=false:             Enter → перенос
+  // Раньше роли менялись местами, и при выключенном тумблере Shift+Enter неожиданно
+  // отправлял ввод вместо переноса.
   // «Перенос» шлём как ESC+CR (\x1b\r) — это то, что терминал отправляет на Option/
   // Alt+Enter, и Claude Code (как и другие readline/ink-TUI) вставляет новую строку.
   // Голый \n не годится: Claude Code трактует его как submit (проверено на v2.1.209).
   // xterm сам шлёт \r на любой Enter, поэтому перехватываем только случай переноса;
-  // иначе (return true) xterm отправляет \r. Перенос нужен ровно когда shiftKey == enterSends.
+  // иначе (return true) xterm отправляет \r.
   let enterSends = readEnterSends();
   term.attachCustomKeyEventHandler((e) => {
-    if (e.type === 'keydown' && e.key === 'Enter') {
-      if (e.shiftKey === enterSends) {
+    if (e.type !== 'keydown') return true;
+    if (e.key === 'Enter') {
+      if (e.shiftKey || !enterSends) {
         sendData(encoder.encode('\x1b\r'));
         return false;
       }
       return true;
+    }
+    // Cmd+←/→ — в начало/конец строки ввода, как в нативных полях macOS. Шлём Ctrl-A/
+    // Ctrl-E: их понимают и readline (zsh/bash), и ink-TUI вроде Claude Code, тогда как
+    // Home/End (\x1b[H, \x1b[F) обрабатывают далеко не все. Сам xterm на Cmd+стрелку
+    // не шлёт ничего, поэтому без перехвата клавиша просто пропадала.
+    if (e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      sendData(encoder.encode(e.key === 'ArrowLeft' ? '\x01' : '\x05'));
+      return false;
     }
     return true;
   });
@@ -599,9 +613,9 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
       return;
     }
     if (e.key === 'Enter') {
-      // Тумблер «Отправлять по Enter»: submit при shiftKey === !enterSends; иначе —
-      // перенос строки (textarea вставит \n, при отправке станет ESC+CR).
-      if (e.shiftKey === !enterSends) {
+      // Как и в терминале: Shift+Enter — всегда перенос строки (textarea вставит \n,
+      // при отправке станет ESC+CR), тумблер меняет только поведение чистого Enter.
+      if (!e.shiftKey && enterSends) {
         e.preventDefault();
         doCompose();
       }

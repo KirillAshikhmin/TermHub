@@ -44,8 +44,11 @@ export function isExistingSessionName(name: string): boolean {
   return name.length > 0 && name.length <= 40 && !/[\u0000-\u001f\u007f]/.test(name);
 }
 
-/** Допустимые пресеты создаваемой сессии. */
-const PRESETS = new Set(['zsh', 'claude']);
+/** Допустимые пресеты создаваемой сессии. «zsh» — просто оболочка, остальные
+ *  запускают одноимённую команду поверх неё (см. create). */
+export const SESSION_PRESETS = ['zsh', 'claude', 'codex'] as const;
+export type SessionPreset = (typeof SESSION_PRESETS)[number];
+const PRESETS = new Set<string>(SESSION_PRESETS);
 
 /** Результат tmux-вызова с exit-кодом и stderr (для распознавания «no server»). */
 interface TmuxError extends Error {
@@ -156,10 +159,11 @@ export class SessionService {
     return parseListOutput(sessionsOut, panesOut);
   }
 
-  async create(req: { name: string; root: string; dir: string; preset: 'zsh' | 'claude' }): Promise<void> {
+  async create(req: { name: string; root: string; dir: string; preset: SessionPreset }): Promise<void> {
     if (!NAME_RE.test(req.name))
       throw new Error(`Invalid session name «${req.name}»: letters, digits, «_», «-» allowed, 1–40 characters`);
-    if (!PRESETS.has(req.preset)) throw new Error(`Invalid preset «${req.preset}»: expected «zsh» or «claude»`);
+    if (!PRESETS.has(req.preset))
+      throw new Error(`Invalid preset «${req.preset}»: expected one of ${SESSION_PRESETS.join(', ')}`);
     if (!this.roots.includes(req.root))
       throw new Error(`Unknown root «${req.root}»`);
     if (!DIR_RE.test(req.dir) || req.dir === '.' || req.dir === '..')
@@ -174,8 +178,10 @@ export class SessionService {
     }
     if (!isDir) throw new Error(`Directory «${req.dir}» not found in root ${req.root}`);
 
+    // Имя пресета и есть команда (кроме «zsh» — это просто оболочка по умолчанию).
+    // Пресет уже сверен с whitelist выше, поэтому произвольная команда сюда не пройдёт.
     const args = ['new-session', '-d', '-s', req.name, '-c', dirPath];
-    if (req.preset === 'claude') args.push('claude');
+    if (req.preset !== 'zsh') args.push(req.preset);
     await this.tmux(args);
   }
 

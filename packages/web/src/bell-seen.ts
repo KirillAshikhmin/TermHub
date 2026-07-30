@@ -37,3 +37,10 @@ export function bellUnseen(name: string): boolean {
   const e = state.get(name);
   return !!e && e.bell && !e.seen;
 }
+
+/** Сколько сессий сейчас звонят непрочитанным звонком — число для бейджа на иконке. */
+export function unseenBellCount(): number {
+  let n = 0;
+  for (const e of state.values()) if (e.bell && !e.seen) n += 1;
+  return n;
+}

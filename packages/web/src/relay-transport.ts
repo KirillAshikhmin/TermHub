@@ -50,8 +50,10 @@ const CHALLENGE_BYTES = 32;
 
 const utf8dec = new TextDecoder();
 
-/** Статус relay-линка для оркестратора (баннер «подключение/переподключение»). */
-export type LinkStatus = 'connecting' | 'online' | 'reconnecting' | 'unauthorized' | 'closed';
+/** Статус relay-линка для оркестратора (баннер «подключение/переподключение»).
+ *  `outdated` — рассинхрон версий протокола между этим бандлом и агентом: чинится
+ *  только обновлением кода, поэтому реконнект бессмысленен (см. onHandshakeFrame). */
+export type LinkStatus = 'connecting' | 'online' | 'reconnecting' | 'unauthorized' | 'closed' | 'outdated';
 
 /** Состояние WS-соединения по мере хендшейка. */
 type LinkState = 'connecting' | 'handshaking' | 'streaming' | 'closed';
@@ -345,6 +347,12 @@ export class RelayTransport implements Transport {
       if (code === 'unauthorized' || code === 'revoked') {
         this.stopped = true;
         this.onLink?.('unauthorized');
+      } else if (code === 'bad-hello') {
+        // Агент не понял форму нашего hello — значит этот бандл старее агента.
+        // Реконнект будет отвергнут ровно так же, поэтому крутить его бессмысленно:
+        // лечится только обновлением кода.
+        this.stopped = true;
+        this.onLink?.('outdated');
       }
       this.dropSocket();
       return;
@@ -371,7 +379,15 @@ export class RelayTransport implements Transport {
     // вообще не связываясь с агентом, отдать записанный hello-ok и записанные чанки:
     // ключи детерминированы статическими Ed25519, поэтому старый поток расшифровался бы
     // снова и отрисовался как живая сессия (дашборд, терминал, файлы).
-    if (typeof msg.sig !== 'string' || !this.challenge) {
+    // Поля подписи нет вовсе — агент старее этого бандла (протокольный рассинхрон),
+    // и реконнект ничего не изменит. Это НЕ то же самое, что неверная подпись ниже.
+    if (typeof msg.sig !== 'string') {
+      this.stopped = true;
+      this.onLink?.('outdated');
+      this.dropSocket();
+      return;
+    }
+    if (!this.challenge) {
       this.dropSocket();
       return;
     }
@@ -381,6 +397,9 @@ export class RelayTransport implements Transport {
     } catch {
       serverOk = false;
     }
+    // Подпись ЕСТЬ, но не сходится — это не версии, а подделка: либо relay переигрывает
+    // запись, либо ключ не тот. Обновление кода тут не при чём, поэтому НЕ 'outdated':
+    // иначе враждебный relay мог бы гонять клиент по перезагрузкам.
     if (!serverOk) {
       this.dropSocket();
       return;

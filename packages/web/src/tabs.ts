@@ -9,7 +9,8 @@ import { iconButton, svgIcon, toast } from './ui';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
-import { bellUnseen, markBellSeen, observeBells } from './bell-seen';
+import { bellUnseen, markBellSeen, observeBells, unseenBellCount } from './bell-seen';
+import { updateAppBadge } from './app-badge';
 
 const POLL_INTERVAL = 3000;
 
@@ -372,6 +373,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       if (stopped) return;
       activity.observe(sessions);
       observeBells(sessions);
+      updateAppBadge(unseenBellCount());
       render(sessions);
       if (!scrolledOnce) {
         scrolledOnce = true;

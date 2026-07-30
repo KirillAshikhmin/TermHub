@@ -211,6 +211,13 @@ describe('SessionService.create — валидация', () => {
     expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'claude']);
   });
 
+  it('preset codex → команда codex в конце', async () => {
+    const svc = new SessionService({ roots: [root] });
+    await svc.create({ name: 'main', root, dir: 'projectA', preset: 'codex' });
+    const args = mockExecFile.mock.calls.at(-1)![1] as string[];
+    expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'codex']);
+  });
+
   it('отвергает недопустимый preset', async () => {
     const svc = new SessionService({ roots: [root] });
     await expect(

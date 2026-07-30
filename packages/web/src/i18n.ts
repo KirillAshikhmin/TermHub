@@ -75,6 +75,7 @@ const ru: Dict = {
     preset: 'Запустить',
     presetZsh: 'Оболочку',
     presetClaude: 'Claude',
+    presetCodex: 'Codex',
     submit: 'Создать',
     noDirs: 'Нет доступных каталогов',
     needDir: 'Укажите корень и каталог',
@@ -87,6 +88,7 @@ const ru: Dict = {
     addByCode: 'Добавить по коду',
     removeAgent: 'Удалить агент',
     unauthorized: 'Агент отклонил устройство. Выполните сопряжение заново.',
+    outdated: 'Версия приложения не совпадает с версией агента. Обновите страницу.',
   },
   pair: {
     title: 'Сопряжение по коду',
@@ -345,6 +347,7 @@ const en: Dict = {
     preset: 'Launch',
     presetZsh: 'Shell',
     presetClaude: 'Claude',
+    presetCodex: 'Codex',
     submit: 'Create',
     noDirs: 'No directories available',
     needDir: 'Enter a root and a directory',
@@ -357,6 +360,7 @@ const en: Dict = {
     addByCode: 'Add by code',
     removeAgent: 'Remove agent',
     unauthorized: 'The agent rejected this device. Pair again.',
+    outdated: 'This app version does not match the agent. Reload the page.',
   },
   pair: {
     title: 'Pair by code',

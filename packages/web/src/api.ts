@@ -13,11 +13,16 @@ export interface ModeInfo {
   host: string;
 }
 
+/** Пресет создаваемой сессии. «zsh» — оболочка, остальные запускают одноимённую
+ *  команду поверх неё. Зеркалит SESSION_PRESETS агента (packages/agent/src/sessions.ts):
+ *  добавляешь пресет — правь обе стороны и словари i18n. */
+export type SessionPreset = 'zsh' | 'claude' | 'codex';
+
 export interface CreateSessionInput {
   name: string;
   root: string;
   dir: string;
-  preset: 'zsh' | 'claude';
+  preset: SessionPreset;
 }
 
 /** Состояние удержания сна (caffeinate): активно и поддерживается ли платформой. */

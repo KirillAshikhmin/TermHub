@@ -4,7 +4,7 @@
 import type { SessionInfo } from '@termhub/protocol';
 
 import { api, ApiError } from './api';
-import type { CreateSessionInput, DirGroup } from './api';
+import type { CreateSessionInput, DirGroup, SessionPreset } from './api';
 import type { TFn } from './i18n';
 import { t } from './i18n';
 import { notifyBell } from './notify';
@@ -14,7 +14,8 @@ import type { Transport } from './transport';
 import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
-import { bellUnseen, observeBells } from './bell-seen';
+import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
+import { updateAppBadge } from './app-badge';
 import { iconButton, openModal, renderHeader, renderTabs, spinner, svgIcon, toast } from './ui';
 
 const POLL_INTERVAL = 3000;
@@ -478,6 +479,9 @@ export function mountDashboard(
       linkDownNotified = false;
       activity.observe(sessions);
       observeBells(sessions);
+      // Бейдж на иконке приложения держится, пока звонок не просмотрен, — в отличие
+      // от уведомления, которое мелькнуло и ушло.
+      updateAppBadge(unseenBellCount());
       reactToBells(sessions);
       render(sessions);
       sessionCache.set(transport, sessions); // кэш для мгновенного показа при возврате
@@ -639,7 +643,7 @@ export function openCreateModal(transport: Transport, onCreated: (name: string) 
 
     form.append(head, body, foot);
 
-    let preset: 'zsh' | 'claude' = 'zsh';
+    let preset: SessionPreset = 'zsh';
     // Собирает вход из текущей формы; null — форма ещё не готова/невалидна.
     let collect: (() => CreateSessionInput | null) | null = null;
 
@@ -858,8 +862,8 @@ function optionEl(value: string): HTMLOptionElement {
   return opt;
 }
 
-/** Сегмент-контрол выбора пресета zsh/claude. */
-function buildSegment(onChange: (value: 'zsh' | 'claude') => void): HTMLElement {
+/** Сегмент-контрол выбора пресета (оболочка / claude / codex). */
+function buildSegment(onChange: (value: SessionPreset) => void): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'th-field';
   const label = document.createElement('span');
@@ -869,9 +873,10 @@ function buildSegment(onChange: (value: 'zsh' | 'claude') => void): HTMLElement 
   const seg = document.createElement('div');
   seg.className = 'th-segment';
   seg.setAttribute('role', 'radiogroup');
-  const options: Array<{ value: 'zsh' | 'claude'; label: string }> = [
+  const options: Array<{ value: SessionPreset; label: string }> = [
     { value: 'zsh', label: t('create.presetZsh') },
     { value: 'claude', label: t('create.presetClaude') },
+    { value: 'codex', label: t('create.presetCodex') },
   ];
   const buttons: HTMLButtonElement[] = [];
   for (const opt of options) {
@@ -883,6 +888,7 @@ function buildSegment(onChange: (value: 'zsh' | 'claude') => void): HTMLElement 
     btn.setAttribute('aria-checked', String(opt.value === 'zsh'));
     if (opt.value === 'zsh') btn.classList.add('is-active');
     if (opt.value === 'claude') btn.classList.add('th-segment__btn--claude');
+    if (opt.value === 'codex') btn.classList.add('th-segment__btn--codex');
     btn.addEventListener('click', () => {
       onChange(opt.value);
       for (const b of buttons) {

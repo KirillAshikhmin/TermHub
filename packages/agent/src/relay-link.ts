@@ -42,7 +42,7 @@ import {
 import type { AuthorizedDevice } from './config.js';
 import { saveAuthorized, parseScope } from './config.js';
 import type { DeviceScope } from './config.js';
-import type { SessionService } from './sessions.js';
+import type { SessionService, SessionPreset } from './sessions.js';
 
 /** Минимум для управления сном из relay-моста (структурно совместим с Caffeinate). */
 interface CaffeinateCtl {
@@ -1122,7 +1122,7 @@ export class RelayLink {
         name,
         root: String(req.root ?? ''),
         dir: String(req.dir ?? ''),
-        preset: req.preset as 'zsh' | 'claude',
+        preset: req.preset as SessionPreset,
       });
       // Подтверждаем создание (сессия уже существует) — клиент дожидается, чтобы
       // навигация ушла на готовую сессию, а не на ещё несуществующую.

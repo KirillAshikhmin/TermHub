@@ -14,7 +14,7 @@ import type { Duplex } from 'node:stream';
 import type { TermhubConfig } from './config.js';
 import { verifyPassword, loadAuthorized, saveAuthorized, parseScope, VERSION } from './config.js';
 import type { DeviceScope } from './config.js';
-import type { SessionService } from './sessions.js';
+import type { SessionService, SessionPreset } from './sessions.js';
 import { isExistingSessionName } from './sessions.js';
 import { runFileOp } from './files.js';
 import type { FileService } from './files.js';
@@ -340,7 +340,7 @@ export class AgentServer {
         name: String(body.name ?? ''),
         root: String(body.root ?? ''),
         dir: String(body.dir ?? ''),
-        preset: body.preset as 'zsh' | 'claude',
+        preset: body.preset as SessionPreset,
       });
       this.sendJson(res, 200, { ok: true });
     } catch (err) {
