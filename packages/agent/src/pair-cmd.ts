@@ -27,6 +27,7 @@ import {
 } from '@termhub/protocol';
 import type { ClientStore, KnownAgent } from './client-store.js';
 import { loadClientStore } from './client-store.js';
+import { stripUnsafe } from './safe-text.js';
 
 /** Длина Ed25519-публичного ключа. */
 const ED25519_PUB_BYTES = 32;
@@ -122,11 +123,14 @@ export function runPair(opts: RunPairOpts): Promise<KnownAgent> {
       } else if (msg.t === 'pair-closed' || msg.t === 'pair-peer-left') {
         finish(new Error('Pairing closed: the code expired or the agent disconnected.'));
       } else if (msg.t === 'error') {
+        // Код приходит от НЕдоверенного relay и печатается в терминал оператора до
+        // всякой аутентификации — обеззараживаем, иначе туда вписывается OSC 52
+        // (подмена буфера обмена) или последовательности, переписывающие вывод.
         finish(
           new Error(
             msg.code === 'no-room'
               ? 'Pairing room not found: check the code and that the agent has opened pairing (termhub share).'
-              : `Relay rejected the pairing (${String(msg.code)}).`,
+              : `Relay rejected the pairing (${stripUnsafe(String(msg.code)).slice(0, 64)}).`,
           ),
         );
       }

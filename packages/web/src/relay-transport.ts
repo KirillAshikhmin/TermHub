@@ -14,7 +14,9 @@ import {
   makeEncryptor,
   sessionKeys,
   sign,
+  verify,
   handshakeTranscript,
+  serverHandshakeTranscript,
   type Decryptor,
   type Encryptor,
   type Frame,
@@ -43,6 +45,8 @@ const LIST_TIMEOUT_MS = 10_000;
 /** Backoff реконнекта: старт 1 с, удвоение до потолка 15 с. */
 const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 15_000;
+/** Длина челленджа свежести; должна совпадать с CHALLENGE_BYTES агента. */
+const CHALLENGE_BYTES = 32;
 
 const utf8dec = new TextDecoder();
 
@@ -177,6 +181,9 @@ export class RelayTransport implements Transport {
   private stopped = false;
   private encryptor?: Encryptor;
   private decryptor?: Decryptor;
+  /** Свежий челлендж этой сессии: агент подписывает им свой header, и без валидной
+   *  подписи мы не входим в streaming (защита от переигрывания записанного потока). */
+  private challenge?: Uint8Array;
   /** Кадры, накопленные до установления потока (flush на streaming). */
   private outbox: Uint8Array[] = [];
   private readonly terminals = new Map<number, TermEntry>();
@@ -280,10 +287,20 @@ export class RelayTransport implements Transport {
     }
   }
 
-  /** Шлёт plaintext hello внутри DATA-фрейма (канал 0) — агент проверит fingerprint. */
+  /** Шлёт plaintext hello внутри DATA-фрейма (канал 0) — агент проверит fingerprint.
+   *  nonce — наш челлендж свежести: им агент обязан подписать hello-ok, иначе relay
+   *  мог бы переиграть нам записанный поток агента. */
   private startHandshake(): void {
     this.state = 'handshaking';
-    this.sendRaw(jsonFrame(FrameType.Data, 0, { t: 'hello', edPub: b64(this.identity.edPub), name: this.clientName }));
+    this.challenge = crypto.getRandomValues(new Uint8Array(CHALLENGE_BYTES));
+    this.sendRaw(
+      jsonFrame(FrameType.Data, 0, {
+        t: 'hello',
+        edPub: b64(this.identity.edPub),
+        name: this.clientName,
+        nonce: b64(this.challenge),
+      }),
+    );
   }
 
   private onBinary(payload: Uint8Array): void {
@@ -333,9 +350,14 @@ export class RelayTransport implements Transport {
       return;
     }
     if (frame.type !== FrameType.Data) return;
-    let msg: { t?: unknown; header?: unknown; nonce?: unknown };
+    let msg: { t?: unknown; header?: unknown; nonce?: unknown; sig?: unknown };
     try {
-      msg = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown; nonce?: unknown };
+      msg = JSON.parse(utf8dec.decode(frame.payload)) as {
+        t?: unknown;
+        header?: unknown;
+        nonce?: unknown;
+        sig?: unknown;
+      };
     } catch {
       return;
     }
@@ -344,9 +366,29 @@ export class RelayTransport implements Transport {
     // относительно replay мы вернулись бы к старому, уязвимому поведению).
     if (typeof msg.nonce !== 'string') return;
 
+    const serverHeader = unb64(msg.header);
+    // ...и обязан подписать свой header НАШИМ челленджем. Без этой проверки relay мог,
+    // вообще не связываясь с агентом, отдать записанный hello-ok и записанные чанки:
+    // ключи детерминированы статическими Ed25519, поэтому старый поток расшифровался бы
+    // снова и отрисовался как живая сессия (дашборд, терминал, файлы).
+    if (typeof msg.sig !== 'string' || !this.challenge) {
+      this.dropSocket();
+      return;
+    }
+    let serverOk = false;
+    try {
+      serverOk = verify(this.agentEdPub, serverHandshakeTranscript(this.challenge, serverHeader), unb64(msg.sig));
+    } catch {
+      serverOk = false;
+    }
+    if (!serverOk) {
+      this.dropSocket();
+      return;
+    }
+    this.challenge = undefined; // одноразовый
+
     const { rx, tx } = sessionKeys('client', this.identity, this.agentEdPub);
     this.encryptor = makeEncryptor(tx);
-    const serverHeader = unb64(msg.header);
     this.decryptor = makeDecryptor(rx, serverHeader);
     // hello-fin — plaintext (последний кадр до потоков): свой header + подпись
     // транскрипта (челлендж ‖ наш header ‖ header агента) долговременным ключом.

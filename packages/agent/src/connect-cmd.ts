@@ -11,6 +11,7 @@
 // TTY-обёртка — нет.
 
 import { WebSocket } from 'ws';
+import { randomBytes } from 'node:crypto';
 import {
   decodeFrame,
   encodeFrame,
@@ -23,7 +24,9 @@ import {
   makeEncryptor,
   sessionKeys,
   sign,
+  verify,
   handshakeTranscript,
+  serverHandshakeTranscript,
   toB64,
   type Decryptor,
   type Encryptor,
@@ -52,6 +55,27 @@ const CR = 0x0d;
 /** Размеры терминала по умолчанию, если stdout не TTY. */
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+/** Длина челленджа свежести; должна совпадать с CHALLENGE_BYTES агента. */
+const CHALLENGE_BYTES = 32;
+/** Коды ошибок relay, которые допустимо показывать дословно (см. describeError). */
+const RELAY_ERROR_CODES = new Set([
+  'agent-offline',
+  'too-many-clients',
+  'no-room',
+  'room-taken',
+  'too-many-attempts',
+  'bad-json',
+  'unknown-type',
+  'already-registered',
+  'already-connected',
+  'bad-register',
+  'bad-edpub',
+  'bad-signature',
+  'no-challenge',
+  'bad-connect',
+  'bad-pair-open',
+  'bad-pair-join',
+]);
 
 const utf8dec = new TextDecoder();
 
@@ -108,6 +132,9 @@ class RemoteConn implements RemoteAgent {
   private state: LinkState = 'connecting';
   private encryptor?: Encryptor;
   private decryptor?: Decryptor;
+  /** Свежий челлендж этой сессии: агент подписывает им свой header, и без валидной
+   *  подписи мы не входим в streaming (защита от переигрывания записанного потока). */
+  private challenge?: Uint8Array;
   private outbox: Uint8Array[] = [];
   private readonly terminals = new Map<number, TermEntry>();
   private nextChannel = FIRST_TERM_CHANNEL;
@@ -170,19 +197,32 @@ class RemoteConn implements RemoteAgent {
     }
   }
 
+  /** Сообщение по коду ошибки relay. Код приходит от НЕдоверенной стороны и печатается
+   *  в терминал оператора до всякой аутентификации, поэтому в текст попадают только
+   *  known-коды: произвольная строка позволяла бы вписать OSC 52 и подменить буфер
+   *  обмена (termhub setup включает set-clipboard в tmux). */
   private describeError(code: string): string {
     if (code === 'agent-offline') return 'Agent is currently offline (not connected to relay).';
     if (code === 'too-many-clients') return 'Too many clients connected to the agent.';
-    return `Relay rejected the connection (${code}).`;
+    if (RELAY_ERROR_CODES.has(code)) return `Relay rejected the connection (${code}).`;
+    return 'Relay rejected the connection.';
   }
 
-  /** Plaintext hello в DATA-фрейме (канал 0). Только edPub — по нему агент находит
+  /** Plaintext hello в DATA-фрейме (канал 0). edPub — по нему агент находит
    *  authorized-запись (адресация, аналог connId) и делает ECDH. Имя устройства НЕ
    *  шлём: агент знает его из своего authorized.json по fingerprint(edPub), а
-   *  недоверенный relay не должен видеть hostname клиента. */
+   *  недоверенный relay не должен видеть hostname клиента. nonce — наш челлендж
+   *  свежести, которым агент обязан подписать hello-ok. */
   private startHandshake(): void {
     this.state = 'handshaking';
-    this.sendRaw(jsonFrame(FrameType.Data, 0, { t: 'hello', edPub: toB64(this.identity.edPub) }));
+    this.challenge = new Uint8Array(randomBytes(CHALLENGE_BYTES));
+    this.sendRaw(
+      jsonFrame(FrameType.Data, 0, {
+        t: 'hello',
+        edPub: toB64(this.identity.edPub),
+        nonce: toB64(this.challenge),
+      }),
+    );
   }
 
   private onBinary(payload: Uint8Array): void {
@@ -219,9 +259,14 @@ class RemoteConn implements RemoteAgent {
       return;
     }
     if (frame.type !== FrameType.Data) return;
-    let msg: { t?: unknown; header?: unknown; nonce?: unknown };
+    let msg: { t?: unknown; header?: unknown; nonce?: unknown; sig?: unknown };
     try {
-      msg = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; header?: unknown; nonce?: unknown };
+      msg = JSON.parse(utf8dec.decode(frame.payload)) as {
+        t?: unknown;
+        header?: unknown;
+        nonce?: unknown;
+        sig?: unknown;
+      };
     } catch {
       return;
     }
@@ -229,9 +274,31 @@ class RemoteConn implements RemoteAgent {
     // Челлендж свежести обязателен (см. handshakeTranscript): без него не начинаем.
     if (typeof msg.nonce !== 'string') return;
 
+    const serverHeader = fromB64(msg.header);
+    // Подпись агента над (наш челлендж ‖ его header) закреплённым agentEdPub. Без неё
+    // недоверенный relay мог бы, не связываясь с агентом вовсе, отдать записанный
+    // hello-ok и записанные чанки: ключи выводятся из статических Ed25519, поэтому
+    // старый поток расшифровался бы снова и отрисовался как живая сессия.
+    if (typeof msg.sig !== 'string' || !this.challenge) {
+      this.failure = new Error('Agent did not authenticate the session (relay may be replaying it).');
+      this.dropSocket();
+      return;
+    }
+    let serverOk = false;
+    try {
+      serverOk = verify(this.agentEdPub, serverHandshakeTranscript(this.challenge, serverHeader), fromB64(msg.sig));
+    } catch {
+      serverOk = false;
+    }
+    if (!serverOk) {
+      this.failure = new Error('Agent signature rejected (relay may be replaying a recorded session).');
+      this.dropSocket();
+      return;
+    }
+    this.challenge = undefined; // одноразовый
+
     const { rx, tx } = sessionKeys('client', this.identity, this.agentEdPub);
     this.encryptor = makeEncryptor(tx);
-    const serverHeader = fromB64(msg.header);
     this.decryptor = makeDecryptor(rx, serverHeader);
     const sig = sign(
       this.identity.edSec,

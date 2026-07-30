@@ -243,11 +243,11 @@ describe('relay pair', () => {
     const h = await relay();
     const agentWs = await track(await open(h.port));
     const agentCol = collect(agentWs);
-    agentWs.send(JSON.stringify({ t: 'pair-open', roomId: 'RM01' }));
+    agentWs.send(JSON.stringify({ t: 'pair-open', roomId: 'RMAB' }));
 
     const clientWs = await track(await open(h.port));
     const clientCol = collect(clientWs);
-    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RM01' }));
+    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RMAB' }));
 
     // client → agent
     clientWs.send(JSON.stringify({ t: 'pair-msg', data: b64(Buffer.from('c2a')) }));
@@ -262,15 +262,38 @@ describe('relay pair', () => {
     expect(Buffer.from(String(atClient.data), 'base64').toString()).toBe('a2c');
   });
 
+  // roomId приходит по НЕаутентифицированному сокету и печатается в лог. Без проверки
+  // формы переводы строк подделывали строки лога, а неограниченная длина раздувала и
+  // лог, и удерживаемые в памяти ключи комнат.
+  it('roomId вне алфавита/длины кода → отказ, комната не открывается', async () => {
+    const h = await relay();
+    const agentWs = await track(await open(h.port));
+    const agentCol = collect(agentWs);
+    const bad = ['RM01', 'toolong', 'AB', '', 'AA\nBB', 'A'.repeat(100_000)];
+    for (const roomId of bad) {
+      agentWs.send(JSON.stringify({ t: 'pair-open', roomId }));
+      const res = await agentCol.next();
+      expect(res.t).toBe('error');
+      expect(res.code).toBe('bad-pair-open');
+    }
+    // ни одна из отклонённых комнат не существует — join в неё закрывает сокет
+    const clientWs = await track(await open(h.port));
+    const clientCol = collect(clientWs);
+    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RM01' }));
+    const joinRes = await clientCol.next();
+    expect(joinRes.t).toBe('error');
+    expect(joinRes.code).toBe('bad-pair-join');
+  });
+
   it('4-й join → отказ (лимит попыток)', async () => {
     const h = await relay();
     const agentWs = await track(await open(h.port));
     collect(agentWs);
-    agentWs.send(JSON.stringify({ t: 'pair-open', roomId: 'RM02' }));
+    agentWs.send(JSON.stringify({ t: 'pair-open', roomId: 'RMCD' }));
 
     const clientWs = await track(await open(h.port));
     const col = collect(clientWs);
-    for (let i = 0; i < 4; i++) clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RM02' }));
+    for (let i = 0; i < 4; i++) clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RMCD' }));
     const res = await col.next();
     expect(res.t).toBe('error');
     expect(res.code).toBe('too-many-attempts');
@@ -281,12 +304,12 @@ describe('relay pair', () => {
     const h = await relay();
     const agent1 = await track(await open(h.port));
     const a1col = collect(agent1);
-    agent1.send(JSON.stringify({ t: 'pair-open', roomId: 'RM04' }));
+    agent1.send(JSON.stringify({ t: 'pair-open', roomId: 'RMGH' }));
 
     // второй агент пытается занять тот же roomId — отказ, чужую комнату не трогаем
     const agent2 = await track(await open(h.port));
     const a2col = collect(agent2);
-    agent2.send(JSON.stringify({ t: 'pair-open', roomId: 'RM04' }));
+    agent2.send(JSON.stringify({ t: 'pair-open', roomId: 'RMGH' }));
     const rejected = await a2col.next();
     expect(rejected.t).toBe('error');
     expect(rejected.code).toBe('room-taken');
@@ -294,7 +317,7 @@ describe('relay pair', () => {
     // первая комната цела: клиент джойнится и pair-msg доставляется первой паре
     const clientWs = await track(await open(h.port));
     collect(clientWs);
-    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RM04' }));
+    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RMGH' }));
     clientWs.send(JSON.stringify({ t: 'pair-msg', data: b64(Buffer.from('c2a')) }));
     const atAgent1 = await a1col.next();
     expect(atAgent1.t).toBe('pair-msg');
@@ -305,13 +328,13 @@ describe('relay pair', () => {
     const h = await relay({ pairTtlMs: 40 });
     const agentWs = await track(await open(h.port));
     const agentCol = collect(agentWs);
-    agentWs.send(JSON.stringify({ t: 'pair-open', roomId: 'RM03' }));
+    agentWs.send(JSON.stringify({ t: 'pair-open', roomId: 'RMEF' }));
     const expired = await agentCol.next(); // pair-closed по TTL
     expect(expired.t).toBe('pair-closed');
 
     const clientWs = await track(await open(h.port));
     const col = collect(clientWs);
-    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RM03' }));
+    clientWs.send(JSON.stringify({ t: 'pair-join', roomId: 'RMEF' }));
     const res = await col.next();
     expect(res.t).toBe('error');
     expect(res.code).toBe('no-room');
@@ -377,6 +400,28 @@ describe('relay trust-proxy (X-Forwarded-For)', () => {
     await track(await openWithHeaders(h.port, { 'x-forwarded-for': '1.1.1.1' }));
     // Другой XFF, но тот же remoteAddress (127.0.0.1) → тот же бакет → отклонён.
     expect(await expectRejected(h.port, { 'x-forwarded-for': '2.2.2.2' })).toBe(true);
+  });
+
+  // nginx ($proxy_add_x_forwarded_for) и Caddy ДОПИСЫВАЮТ наблюдённый адрес справа к
+  // тому, что прислал клиент. Брали левый элемент — и клиент, меняя его на каждом
+  // коннекте, получал свежий бакет (обход лимита) либо занимал бакет чужого IP.
+  it('trustProxy: бакет берётся из ПОСЛЕДНЕГО хопа — подставленный клиентом левый не даёт нового бакета', async () => {
+    const h = await relay({ rateLimit: { max: 1, windowMs: 60_000 }, trustProxy: true });
+    // Прокси дописал реальный адрес справа; левый элемент выбрал сам клиент.
+    const first = await track(await openWithHeaders(h.port, { 'x-forwarded-for': '9.9.9.9, 5.5.5.5' }));
+    expect(first.readyState).toBe(WebSocket.OPEN);
+    // Меняем ТОЛЬКО подконтрольный клиенту левый элемент — бакет обязан остаться прежним.
+    expect(await expectRejected(h.port, { 'x-forwarded-for': '8.8.8.8, 5.5.5.5' })).toBe(true);
+    // Меняется хоп, дописанный прокси, — это уже другой клиент, ему свой бакет.
+    const other = await track(await openWithHeaders(h.port, { 'x-forwarded-for': '8.8.8.8, 6.6.6.6' }));
+    expect(other.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it('trustProxy: не-IP в XFF игнорируется (иначе произвольная строка становилась ключом)', async () => {
+    const h = await relay({ rateLimit: { max: 1, windowMs: 60_000 }, trustProxy: true });
+    await track(await openWithHeaders(h.port, { 'x-forwarded-for': 'not-an-ip' }));
+    // Откат на remoteAddress → второй коннект с другой мусорной строкой в тот же бакет.
+    expect(await expectRejected(h.port, { 'x-forwarded-for': 'x'.repeat(5000) })).toBe(true);
   });
 });
 

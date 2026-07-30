@@ -73,12 +73,18 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
     }
 }
 ```
+
+Note `$remote_addr`, not `$proxy_add_x_forwarded_for`: the latter *appends* the
+observed address to whatever the client sent, so the header arrives partly
+attacker-controlled. The relay reads the rightmost hop precisely for that reason,
+but replacing the header instead of appending to it leaves nothing to get wrong —
+the rate limit is the only anti-abuse control on the public `/relay` endpoint.
 
 Certificate renewal keeps working as before (certbot reloads nginx itself).
 

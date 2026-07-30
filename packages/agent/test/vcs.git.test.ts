@@ -161,3 +161,49 @@ describe('VcsService — git', () => {
     }
   });
 });
+
+// Гость, которому расшарили ОДНУ сессию, получает VcsService с roots = каталог этой
+// сессии (см. RelayLink.doRepo). Раньше проверялись только root/path, а detectAt
+// поднимался от них вверх до whitelist-корня — file резолвился относительно вершины
+// репозитория, и гость читал файлы соседних проектов и историю всего монорепо.
+describe('VcsService — ограничение гостя каталогом расшаренной сессии', () => {
+  let shared: string;
+  let confined: VcsService;
+
+  beforeAll(async () => {
+    // Структура: root/ (git-репозиторий) → root/inner (расшаренная сессия), плюс
+    // root/secret.env рядом — файл, которого гость видеть не должен.
+    await git(['init', '-q', '-b', 'main'], root);
+    await git(['config', 'user.email', 't@t'], root);
+    await git(['config', 'user.name', 'T'], root);
+    shared = path.join(root, 'inner');
+    await fsp.mkdir(shared, { recursive: true });
+    await fsp.writeFile(path.join(shared, 'ok.txt'), 'visible\n');
+    await fsp.writeFile(path.join(root, 'secret.env'), 'TOKEN=leaked\n');
+    confined = new VcsService({ roots: [shared] });
+  });
+
+  it('владелец (roots=root) действительно достаёт secret.env — значит утечка была реальной', async () => {
+    const owner = new VcsService({ roots: [root] });
+    const content = await owner.cat(root, 'inner', '../secret.env').catch((e: Error) => e.message);
+    // Через ../ не пускает checkFile, но через вершину репозитория — да:
+    const viaTop = await owner.cat(root, 'inner', 'secret.env').catch((e: Error) => e.message);
+    expect(String(viaTop)).toContain('TOKEN=leaked');
+    expect(typeof content).toBe('string');
+  });
+
+  it('гость не может выйти за каталог сессии через file (cat)', async () => {
+    await expect(confined.cat(shared, '', 'secret.env')).rejects.toThrow();
+  });
+
+  it('гость не может подсунуть чужой root', async () => {
+    await expect(confined.cat(root, 'inner', 'secret.env')).rejects.toThrow(/Unknown root/);
+  });
+
+  it('гостю доступен файл ВНУТРИ расшаренного каталога', async () => {
+    // Маркер репозитория выше каталога сессии, поэтому detectAt его уже не находит и
+    // репо-операции отдают vcs=null — но сам каталог остаётся читаемым.
+    const log = await confined.log(shared, '');
+    expect(log.vcs).toBeNull();
+  });
+});

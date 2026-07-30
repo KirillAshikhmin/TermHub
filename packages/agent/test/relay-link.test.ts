@@ -20,7 +20,9 @@ import {
   openPair,
   sessionKeys,
   sign,
+  verify,
   handshakeTranscript,
+  serverHandshakeTranscript,
   makeEncryptor,
   makeDecryptor,
   encodeFrame,
@@ -57,6 +59,17 @@ function b64(bytes: Uint8Array): string {
 function unb64(s: string): Uint8Array {
   return new Uint8Array(Buffer.from(s, 'base64'));
 }
+/** plaintext hello С ЧЕЛЛЕНДЖЕМ клиента: им агент обязан подписать свой hello-ok,
+ *  иначе записанный поток агента переигрывался бы клиенту недоверенным relay. */
+function helloFrame(clientId: Identity, nonce: Uint8Array, name?: string): Uint8Array {
+  return dataJsonFrame({
+    t: 'hello',
+    edPub: b64(clientId.edPub),
+    nonce: b64(nonce),
+    ...(name === undefined ? {} : { name }),
+  });
+}
+
 /** hello-fin С ПОДПИСЬЮ транскрипта (челлендж ‖ header клиента ‖ header агента):
  *  без неё агент в streaming не пускает — это и есть защита от переигрывания сессии. */
 function finFrame(
@@ -274,7 +287,7 @@ describe('RelayLink — обслуживание клиента', () => {
   it('hello незнакомца (fingerprint не в authorized) → ERROR-фрейм', async () => {
     const stranger = generateIdentity();
     const { ws, col } = await connectClient(relayHandle.port, agentId);
-    ws.send(dataJsonFrame({ t: 'hello', edPub: b64(stranger.edPub), name: 'stranger' }), { binary: true });
+    ws.send(helloFrame(stranger, crypto.randomBytes(32), 'stranger'), { binary: true });
 
     const msg = await col.next();
     expect(msg.binary).toBeInstanceOf(Buffer);
@@ -282,6 +295,63 @@ describe('RelayLink — обслуживание клиента', () => {
     expect(frame.type).toBe(FrameType.Error);
     const err = JSON.parse(td.decode(frame.payload)) as { code: string };
     expect(err.code).toBe('unauthorized');
+  });
+
+  // Зеркальная свежесть: клиент подписывает челлендж агента (см. replay-тест ниже), а
+  // агент — челлендж клиента. Без второй подписи недоверенный relay мог, не связываясь
+  // с агентом вовсе, отдать клиенту записанный hello-ok и записанные чанки.
+  it('hello-ok ПОДПИСАН челленджем клиента ключом агента', async () => {
+    const clientId = generateIdentity();
+    saveAuthorized([
+      {
+        name: 'sig-laptop',
+        edPub: b64(clientId.edPub),
+        fingerprint: fingerprint(clientId.edPub),
+        addedAt: Date.now(),
+      },
+    ]);
+    const { ws, col } = await connectClient(relayHandle.port, agentId);
+    const nonce = new Uint8Array(crypto.randomBytes(32));
+    ws.send(helloFrame(clientId, nonce), { binary: true });
+
+    const msg = await col.next();
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(msg.binary as Buffer)).payload)) as {
+      t: string;
+      header: string;
+      sig?: string;
+    };
+    expect(ok.t).toBe('hello-ok');
+    expect(typeof ok.sig).toBe('string');
+    // Подпись валидна ИМЕННО под нашим челленджем и header'ом агента...
+    expect(
+      verify(agentIdentity.edPub, serverHandshakeTranscript(nonce, unb64(ok.header)), unb64(ok.sig!)),
+    ).toBe(true);
+    // ...и не проходит под чужим челленджем — то есть записанную подпись переиграть нельзя.
+    expect(
+      verify(
+        agentIdentity.edPub,
+        serverHandshakeTranscript(new Uint8Array(crypto.randomBytes(32)), unb64(ok.header)),
+        unb64(ok.sig!),
+      ),
+    ).toBe(false);
+  });
+
+  it('hello без челленджа клиента отвергается (иначе агенту нечем подписать hello-ok)', async () => {
+    const clientId = generateIdentity();
+    saveAuthorized([
+      {
+        name: 'nononce-laptop',
+        edPub: b64(clientId.edPub),
+        fingerprint: fingerprint(clientId.edPub),
+        addedAt: Date.now(),
+      },
+    ]);
+    const { ws, col } = await connectClient(relayHandle.port, agentId);
+    ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub) }), { binary: true });
+
+    const frame = decodeFrame(new Uint8Array((await col.next()).binary as Buffer));
+    expect(frame.type).toBe(FrameType.Error);
+    expect((JSON.parse(td.decode(frame.payload)) as { code: string }).code).toBe('bad-hello');
   });
 
   it.skipIf(!tmuxAvailable)(
@@ -299,7 +369,7 @@ describe('RelayLink — обслуживание клиента', () => {
       const { ws, col } = await connectClient(relayHandle.port, agentId);
 
       // 1. hello (plaintext DATA-фрейм)
-      ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+      ws.send(helloFrame(clientId, crypto.randomBytes(32), device.name), { binary: true });
 
       // 2. hello-ok c header push-потока агента
       const okMsg = await col.next();
@@ -344,7 +414,7 @@ describe('RelayLink — обслуживание клиента', () => {
       saveAuthorized([device]);
 
       const { ws, col } = await connectClient(relayHandle.port, agentId);
-      ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+      ws.send(helloFrame(clientId, crypto.randomBytes(32), device.name), { binary: true });
       const okMsg = await col.next();
       const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
         header: string;
@@ -382,7 +452,7 @@ describe('RelayLink — обслуживание клиента', () => {
     saveAuthorized([device]);
 
     const { ws, col } = await connectClient(relayHandle.port, agentId);
-    ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), device.name), { binary: true });
     const okMsg = await col.next();
     const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
       header: string;
@@ -416,7 +486,7 @@ describe('RelayLink — обслуживание клиента', () => {
 
     // ── Сеанс 1: записываем ровно то, что уходит от клиента (как это видит relay).
     const first = await connectClient(relayHandle.port, agentId);
-    const recHello = dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name });
+    const recHello = helloFrame(clientId, crypto.randomBytes(32), device.name);
     first.ws.send(recHello, { binary: true });
     const ok1 = JSON.parse(td.decode(decodeFrame(new Uint8Array((await first.col.next()).binary as Buffer)).payload)) as {
       header: string;
@@ -473,7 +543,7 @@ describe('RelayLink — обслуживание клиента', () => {
     saveAuthorized([device]);
 
     const { ws, col } = await connectClient(relayHandle.port, agentId);
-    ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: device.name }), { binary: true });
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), device.name), { binary: true });
     const okMsg = await col.next();
     const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array(okMsg.binary as Buffer)).payload)) as {
       header: string;
@@ -580,7 +650,7 @@ describe('RelayLink — мультиплекс каналов и idle-тайма
       const { ws, col } = await connectClient(relayHandle.port, muxId);
 
       // Хендшейк hello → hello-ok → hello-fin → два secretstream-потока.
-      ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub), name: 'mux-laptop' }), { binary: true });
+      ws.send(helloFrame(clientId, crypto.randomBytes(32), 'mux-laptop'), { binary: true });
       const okFrame = decodeFrame(new Uint8Array((await col.next()).binary as Buffer));
       const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');
@@ -671,7 +741,7 @@ describe('RelayLink — hardening (pending-cap, revoke)', () => {
 
       // Один pending завершает handshake до streaming → освобождает pending-слот.
       const promoter = pending[0]!;
-      promoter.ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub) }), { binary: true });
+      promoter.ws.send(helloFrame(clientId, crypto.randomBytes(32)), { binary: true });
       const okFrame = decodeFrame(new Uint8Array((await promoter.col.next()).binary as Buffer));
       const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');
@@ -712,7 +782,7 @@ describe('RelayLink — hardening (pending-cap, revoke)', () => {
       const { ws, col } = await connectClient(relayHandle.port, revokeId);
 
       // Хендшейк до streaming.
-      ws.send(dataJsonFrame({ t: 'hello', edPub: b64(clientId.edPub) }), { binary: true });
+      ws.send(helloFrame(clientId, crypto.randomBytes(32)), { binary: true });
       const okFrame = decodeFrame(new Uint8Array((await col.next()).binary as Buffer));
       const ok = JSON.parse(td.decode(okFrame.payload)) as { t: string; header: string; nonce: string };
       expect(ok.t).toBe('hello-ok');

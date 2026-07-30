@@ -5,10 +5,11 @@
 
 import http from 'node:http';
 import crypto from 'node:crypto';
+import net from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { verify, fingerprint } from '@termhub/protocol';
+import { verify, fingerprint, isPairRoomId } from '@termhub/protocol';
 import { Rooms, type AgentConn, MAX_PAIR_ATTEMPTS } from './rooms.js';
 import { serveStatic } from './static.js';
 
@@ -39,7 +40,8 @@ export interface RelayOptions {
   rateLimit?: { max: number; windowMs: number };
   /** Доверять заголовку X-Forwarded-For (за TLS-прокси). По умолчанию — env
    *  RELAY_TRUST_PROXY==='1'. Влияет на IP для rate-limit: при доверии берём
-   *  первый IP из XFF, иначе — req.socket.remoteAddress (защита от спуфинга). */
+   *  последний IP из XFF (его дописал сам прокси), иначе — req.socket.remoteAddress
+   *  (защита от спуфинга). */
   trustProxy?: boolean;
   /** Заглушить stdout-логирование (тесты). */
   silent?: boolean;
@@ -185,15 +187,24 @@ class RelayServer {
     this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, ip));
   }
 
-  /** IP клиента для rate-limit. За доверенным прокси (trustProxy) — первый IP из
+  /** IP клиента для rate-limit. За доверенным прокси (trustProxy) — ПОСЛЕДНИЙ IP из
    *  X-Forwarded-For; иначе — адрес сокета. XFF от прямого клиента НЕ доверяем
-   *  (спуфинг), поэтому по умолчанию trustProxy выключен. */
+   *  (спуфинг), поэтому по умолчанию trustProxy выключен.
+   *
+   *  Почему последний, а не первый: и nginx ($proxy_add_x_forwarded_for), и Caddy
+   *  (reverse_proxy) ДОПИСЫВАЮТ наблюдённый адрес справа к тому, что прислал клиент.
+   *  Левый элемент — целиком под контролем клиента: меняя его на каждом коннекте,
+   *  атакующий получал свежую корзину лимита (обход) либо мог занять корзину чужого
+   *  IP (отказ в обслуживании конкретному пользователю). Правый элемент — то, что
+   *  видел сам доверенный прокси. Значение проверяем через net.isIP: иначе
+   *  произвольная строка становилась ключом в this.rate (рост памяти). */
   private clientIp(req: IncomingMessage): string {
     if (this.trustProxy) {
       const xff = req.headers['x-forwarded-for'];
-      const raw = Array.isArray(xff) ? xff[0] : xff;
-      const first = raw?.split(',')[0]?.trim();
-      if (first) return first;
+      const raw = Array.isArray(xff) ? xff.join(',') : xff;
+      const hops = raw?.split(',') ?? [];
+      const last = hops[hops.length - 1]?.trim();
+      if (last && net.isIP(last)) return last;
     }
     return req.socket.remoteAddress ?? 'unknown';
   }
@@ -367,7 +378,11 @@ class RelayServer {
   }
 
   private onPairOpen(ws: WebSocket, state: ConnState, msg: Record<string, unknown>): void {
-    if (typeof msg.roomId !== 'string' || !msg.roomId) {
+    // roomId приходит по неаутентифицированному сокету и дальше попадает в лог и в
+    // ключ комнаты, поэтому проверяем форму кода ДО использования: иначе переводы
+    // строк подделывали строки лога, а неограниченная длина (до maxPayload) раздувала
+    // и лог, и удерживаемые в памяти ключи.
+    if (typeof msg.roomId !== 'string' || !isPairRoomId(msg.roomId)) {
       send(ws, { t: 'error', code: 'bad-pair-open' });
       return;
     }
@@ -383,7 +398,7 @@ class RelayServer {
   }
 
   private onPairJoin(ws: WebSocket, state: ConnState, msg: Record<string, unknown>): void {
-    if (typeof msg.roomId !== 'string') {
+    if (typeof msg.roomId !== 'string' || !isPairRoomId(msg.roomId)) {
       send(ws, { t: 'error', code: 'bad-pair-join' });
       ws.close(1008, 'bad pair-join');
       return;

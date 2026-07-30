@@ -63,6 +63,17 @@ export function generatePairingCode(): { code: string; roomId: string; secret: s
   return { code, roomId, secret };
 }
 
+/** Проверяет, что строка — синтаксически корректный roomId пейринга.
+ *  Нужен relay: он принимает roomId по неаутентифицированному сокету и обязан
+ *  отбраковать всё, что не имеет формы кода, ДО использования строки как ключа
+ *  комнаты и в логах (иначе туда попадают переводы строк, escape-последовательности
+ *  и многомегабайтные значения). */
+export function isPairRoomId(value: string): boolean {
+  if (value.length !== ROOM_ID_LEN) return false;
+  for (const ch of value) if (!PAIR_ALPHABET.includes(ch)) return false;
+  return true;
+}
+
 /** Нормализует введённый код (регистр, дефисы, пробелы) и делит на roomId/secret. */
 export function parsePairingCode(code: string): { roomId: string; secret: string } {
   const clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -180,6 +191,33 @@ export function handshakeTranscript(
   const out = new Uint8Array(HANDSHAKE_DOMAIN.length + challenge.length + clientHeader.length + serverHeader.length);
   let at = 0;
   for (const part of [HANDSHAKE_DOMAIN, challenge, clientHeader, serverHeader]) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}
+
+/** Домен-разделитель транскрипта, который подписывает АГЕНТ. Отличается от клиентского:
+ *  иначе подпись одной стороны можно было бы предъявить как подпись другой. */
+const SERVER_HANDSHAKE_DOMAIN = utf8.encode('termhub-handshake-server-v1');
+
+/**
+ * Транскрипт, который агент подписывает своим долговременным ключом в hello-ok:
+ * (домен ‖ челлендж КЛИЕНТА ‖ header агента).
+ *
+ * Зачем: подпись клиента (handshakeTranscript) закрывает только направление
+ * «клиент → агент». В обратную сторону сессионные ключи так же детерминированы, а
+ * hello-ok ничем не подтверждён, поэтому недоверенный relay мог переиграть клиенту
+ * записанный поток агента — с выключенным агентом — и клиент отрисовывал его как
+ * живую сессию. Свежий челлендж клиента делает записанную подпись негодной, а
+ * привязка header'а агента не даёт подставить к валидной подписи чужой поток.
+ * Считается ОДИНАКОВО на всех трёх сторонах (агент, web-клиент, CLI-клиент) —
+ * при правке меняй все три.
+ */
+export function serverHandshakeTranscript(clientChallenge: Uint8Array, serverHeader: Uint8Array): Uint8Array {
+  const out = new Uint8Array(SERVER_HANDSHAKE_DOMAIN.length + clientChallenge.length + serverHeader.length);
+  let at = 0;
+  for (const part of [SERVER_HANDSHAKE_DOMAIN, clientChallenge, serverHeader]) {
     out.set(part, at);
     at += part.length;
   }

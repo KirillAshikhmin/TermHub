@@ -73,12 +73,18 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
     }
 }
 ```
+
+Обратите внимание: `$remote_addr`, а не `$proxy_add_x_forwarded_for`. Второй
+*дописывает* наблюдённый адрес к тому, что прислал клиент, — заголовок приходит
+частично подконтрольным атакующему. Relay именно поэтому читает крайний правый
+хоп, но замена заголовка вместо дописывания не оставляет места для ошибки:
+rate-limit — единственная защита от злоупотреблений на публичном `/relay`.
 
 Продление сертификата дальше работает как раньше (certbot сам перезагружает
 nginx).

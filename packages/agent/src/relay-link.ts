@@ -14,6 +14,7 @@ import {
   sign,
   verify,
   handshakeTranscript,
+  serverHandshakeTranscript,
   fingerprint,
   fromB64,
   generatePairingCode,
@@ -72,8 +73,9 @@ interface FilesCtl {
 }
 import { attachTerminal, type TerminalHandle } from './bridge.js';
 import { runRepoAction } from './vcs.js';
+import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
-import type { VcsService } from './vcs.js';
+import { VcsService } from './vcs.js';
 
 /** TTL кода пейринга — 5 минут (совпадает с relay). */
 const PAIR_TTL_MS = 5 * 60 * 1000;
@@ -266,15 +268,21 @@ export class RelayLink {
    *  недостаточно: «поделиться ОДНОЙ сессией» не должно открывать все sessionRoots,
    *  а раньше гость с files:true видел весь файловый браузер (ограничение было в UI). */
   private async assertScopedPath(s: ClientSession, root: string, subpath: string): Promise<void> {
-    const scope = s.scope;
-    if (!scope) return;
-    const sess = (await this.sessions.list()).find((x) => x.name === scope.session);
-    if (!sess) throw new Error('shared session not found');
-    const realDir = await fsp.realpath(sess.path);
+    const realDir = await this.scopedDir(s);
+    if (!realDir) return;
     const abs = path.resolve(root, subpath);
     const real = await fsp.realpath(abs).catch(() => abs);
     if (real !== realDir && !real.startsWith(realDir + path.sep))
       throw new Error('path outside shared session');
+  }
+
+  /** Реальный каталог расшаренной сессии для гостя со scope; null — ограничений нет. */
+  private async scopedDir(s: ClientSession): Promise<string | null> {
+    const scope = s.scope;
+    if (!scope) return null;
+    const sess = (await this.sessions.list()).find((x) => x.name === scope.session);
+    if (!sess) throw new Error('shared session not found');
+    return await fsp.realpath(sess.path);
   }
 
   /** Рвёт соединения устройств, которых больше нет в authorized. */
@@ -475,7 +483,10 @@ export class RelayLink {
     if (edPub.length !== ED25519_PUB_BYTES) return;
 
     const device: AuthorizedDevice = {
-      name: hello.name,
+      // Имя выбирает присоединяющаяся сторона, а попадает оно в лог агента и в вывод
+      // `termhub devices`. Обеззараживаем на границе сохранения: иначе управляющие
+      // символы подделывали строки лога и стирали строку устройства в списке отзыва.
+      name: sanitizeDeviceName(hello.name),
       edPub: hello.edPub,
       fingerprint: fingerprint(edPub),
       addedAt: Date.now(),
@@ -556,9 +567,15 @@ export class RelayLink {
     // Клиент шлёт ТОЛЬКО edPub — это адресация (аналог connId): по нему находим
     // authorized-запись. Имя устройства берём из неё (сохранено при пейринге), из
     // hello его больше не принимаем — недоверенный relay не должен видеть hostname.
-    const hello = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; edPub?: unknown };
+    const hello = JSON.parse(utf8dec.decode(frame.payload)) as { t?: unknown; edPub?: unknown; nonce?: unknown };
     if (hello.t !== 'hello' || typeof hello.edPub !== 'string')
       return this.rejectClient(s, 'bad-hello', 'malformed hello');
+    // Челлендж клиента обязателен: им мы подписываем hello-ok, и только это защищает
+    // клиента от переигрывания записанного потока агента недоверенным relay.
+    if (typeof hello.nonce !== 'string') return this.rejectClient(s, 'bad-hello', 'missing client challenge');
+    const clientChallenge = fromB64(hello.nonce);
+    if (clientChallenge.length !== CHALLENGE_BYTES)
+      return this.rejectClient(s, 'bad-hello', 'bad client challenge length');
 
     const edPub = fromB64(hello.edPub);
     if (edPub.length !== ED25519_PUB_BYTES) return this.rejectClient(s, 'bad-hello', 'bad edPub length');
@@ -583,12 +600,17 @@ export class RelayLink {
     // привязывает сессию ко времени: без свежей подписи клиента в streaming не пускаем.
     s.challenge = randomBytes(CHALLENGE_BYTES);
     s.edPub = edPub;
+    // Симметрично подписываем свой header челленджем клиента: клиент обязан проверить
+    // эту подпись закреплённым agentEdPub до входа в streaming, иначе записанный
+    // hello-ok + чанки переигрывались бы клиенту без всякого участия агента.
+    const serverSig = sign(this.identity.edSec, serverHandshakeTranscript(clientChallenge, s.encryptor.header));
     this.sendPlain(
       s.connId,
       jsonFrame(FrameType.Data, 0, {
         t: 'hello-ok',
         header: toB64(s.encryptor.header),
         nonce: toB64(s.challenge),
+        sig: toB64(serverSig),
       }),
     );
     s.state = 'fin';
@@ -840,7 +862,22 @@ export class RelayLink {
       // гостю «только для просмотра» это недоступно.
       if (req.fetch === true && s.scope && !s.scope.write) throw new Error('no write permission');
       await this.assertScopedPath(s, String(req.root ?? ''), String(req.path ?? ''));
-      const result = await runRepoAction(this.vcs, req);
+      // Для гостя со scope перевешиваем ВЕСЬ запрос на каталог расшаренной сессии.
+      // Проверки одних лишь root/path не хватало: detectAt поднимался от них вверх до
+      // whitelist-корня, а file/files и все команды резолвились относительно найденной
+      // вершины репозитория — гость «только просмотр» читал .env соседних проектов и
+      // видел историю всего монорепо. Ограничив roots каталогом сессии, мы разом
+      // прижимаем и поиск маркера репозитория, и проверку вложенности файлов.
+      const shared = await this.scopedDir(s);
+      let vcs = this.vcs;
+      let call = req;
+      if (shared) {
+        const abs = path.resolve(String(req.root ?? ''), String(req.path ?? ''));
+        const real = await fsp.realpath(abs).catch(() => abs);
+        vcs = new VcsService({ roots: [shared] });
+        call = { ...req, root: shared, path: path.relative(shared, real) };
+      }
+      const result = await runRepoAction(vcs, call);
       this.sendFrameBytes(s, jsonFrame(FrameType.RepoResult, 0, { id, result }));
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.RepoResult, 0, { id, error: (err as Error).message }));

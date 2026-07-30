@@ -54,12 +54,23 @@ transmitted to the agent only inside the encrypted pairing channel.
   signature.
 - **A normal session:** X25519 key exchange (`crypto_kx`) → a pair of session
   keys → all traffic in both directions goes through
-  `crypto_secretstream_xchacha20poly1305`. The agent additionally sends a fresh
-  32-byte challenge, and the client signs the handshake transcript
-  (challenge ‖ client stream header ‖ agent stream header) with its long-term
-  Ed25519 key. Without a valid signature the agent never enters the streaming
-  state, so a recorded session **cannot be replayed** — otherwise an untrusted
-  relay could replay everything you once typed.
+  `crypto_secretstream_xchacha20poly1305`. Freshness is proven **in both
+  directions**, because session keys come from static keys alone and a recorded
+  stream would otherwise decrypt again:
+  - The client sends a fresh 32-byte challenge in `hello`; the agent signs
+    (its own stream header ‖ that challenge) with its long-term Ed25519 key, and
+    the client refuses to enter the streaming state without a valid signature
+    from the *pinned* agent key. This is what stops an untrusted relay from
+    replaying a recorded agent session back at you — a fake terminal, a stale
+    session list — with the agent offline.
+  - The agent sends a fresh 32-byte challenge in `hello-ok`; the client signs
+    the transcript (challenge ‖ client stream header ‖ agent stream header), and
+    without a valid signature the agent never enters the streaming state. This
+    is what stops a relay from replaying everything you once typed.
+
+  So a recorded session **cannot be replayed in either direction**. The two
+  signatures use different domain separators, so neither can be presented as the
+  other.
 - **Trust follows the TOFU principle** (trust on first use): once successfully
   paired, a device stays trusted until it is explicitly revoked. There is no
   certificate authority — only keys and the fact of pairing.

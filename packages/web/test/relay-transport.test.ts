@@ -15,6 +15,8 @@ import {
   makeDecryptor,
   makeEncryptor,
   sessionKeys,
+  sign,
+  serverHandshakeTranscript,
   type Identity,
 } from '@termhub/protocol';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -107,24 +109,39 @@ function makeTransport(clientIdentity: Identity, agentIdentity: Identity): Relay
   return transport;
 }
 
-/** connect → {connected} → клиент шлёт plaintext hello. Возвращает edPub клиента из hello. */
-function driveToHelloSent(ws: FakeWebSocket): Uint8Array {
+/** Разобранный клиентский hello: edPub для ECDH и челлендж, которым агент обязан
+ *  подписать свой hello-ok. */
+interface ClientHello {
+  edPub: Uint8Array;
+  nonce: Uint8Array;
+}
+
+/** connect → {connected} → клиент шлёт plaintext hello. Возвращает edPub и челлендж. */
+function driveToHelloSent(ws: FakeWebSocket): ClientHello {
   ws.triggerOpen();
   ws.deliverText(JSON.stringify({ t: 'connected' }));
   const frame = decodeFrame(ws.sent[ws.sent.length - 1] as Uint8Array);
-  const hello = JSON.parse(td.decode(frame.payload)) as { t: string; edPub: string };
+  const hello = JSON.parse(td.decode(frame.payload)) as { t: string; edPub: string; nonce: string };
   expect(hello.t).toBe('hello');
-  return unb64(hello.edPub);
+  return { edPub: unb64(hello.edPub), nonce: unb64(hello.nonce) };
+}
+
+/** hello-ok, ПОДПИСАННЫЙ агентом челленджем клиента. Без валидной подписи клиент в
+ *  streaming не входит — это и защищает его от переигрывания записанного потока. */
+function helloOkFrame(agentIdentity: Identity, serverHeader: Uint8Array, clientNonce: Uint8Array): Uint8Array {
+  return jsonFrame(FrameType.Data, 0, {
+    t: 'hello-ok',
+    header: b64(serverHeader),
+    nonce: b64(NONCE),
+    sig: b64(sign(agentIdentity.edSec, serverHandshakeTranscript(clientNonce, serverHeader))),
+  });
 }
 
 /** «Агент» отвечает hello-ok. Возвращает rx для расшифровки того, что клиент зашлёт дальше. */
-function respondHelloOk(ws: FakeWebSocket, agentIdentity: Identity, clientEdPub: Uint8Array): Uint8Array {
-  const { rx, tx } = sessionKeys('server', agentIdentity, clientEdPub);
+function respondHelloOk(ws: FakeWebSocket, agentIdentity: Identity, hello: ClientHello): Uint8Array {
+  const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
   const agentEncryptor = makeEncryptor(tx);
-  // nonce — челлендж свежести (анти-replay): клиент обязан подписать транскрипт.
-  ws.deliverBinary(
-    jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEncryptor.header), nonce: b64(NONCE) }),
-  );
+  ws.deliverBinary(helloOkFrame(agentIdentity, agentEncryptor.header, hello.nonce));
   return rx;
 }
 
@@ -138,7 +155,7 @@ describe('RelayTransport — onStreamReady: re-OPEN уходит раньше ou
     const transport = makeTransport(clientIdentity, agentIdentity);
     const ws = sockets[0]!;
 
-    const clientEdPub = driveToHelloSent(ws);
+    const hello = driveToHelloSent(ws);
 
     // Пользователь открывает терминал и печатает ДО завершения хендшейка — канал
     // ещё не был OPEN-нут агенту, поэтому DATA осядет в outbox (state !== 'streaming').
@@ -146,7 +163,7 @@ describe('RelayTransport — onStreamReady: re-OPEN уходит раньше ou
     term.write(te.encode('ls\n'));
     const sentBeforeStreaming = ws.sent.length;
 
-    const rx = respondHelloOk(ws, agentIdentity, clientEdPub);
+    const rx = respondHelloOk(ws, agentIdentity, hello);
 
     // hello-fin (plaintext) — первый кадр после hello-ok.
     const finFrame = decodeFrame(ws.sent[sentBeforeStreaming] as Uint8Array);
@@ -236,10 +253,72 @@ describe('RelayTransport — list() пока поток не установле�
     const ws = sockets[0]!;
 
     expect(transport.isStreaming).toBe(false);
-    const clientEdPub = driveToHelloSent(ws);
+    const hello = driveToHelloSent(ws);
     expect(transport.isStreaming).toBe(false);
-    respondHelloOk(ws, agentIdentity, clientEdPub);
+    respondHelloOk(ws, agentIdentity, hello);
     expect(transport.isStreaming).toBe(true);
+  });
+
+  // Ключи выводятся из статических Ed25519, поэтому записанный поток агента
+  // расшифровался бы повторно. Единственное, что отличает живого агента от relay,
+  // переигрывающего запись, — свежая подпись под НАШИМ челленджем.
+  it('hello-ok без подписи агента → в streaming не входим', () => {
+    const clientIdentity = generateIdentity();
+    const agentIdentity = generateIdentity();
+    const transport = makeTransport(clientIdentity, agentIdentity);
+    const ws = sockets[0]!;
+
+    const hello = driveToHelloSent(ws);
+    const { tx } = sessionKeys('server', agentIdentity, hello.edPub);
+    const agentEnc = makeEncryptor(tx);
+    ws.deliverBinary(jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header), nonce: b64(NONCE) }));
+    expect(transport.isStreaming).toBe(false);
+  });
+
+  it('переигранный hello-ok (подпись под ЧУЖИМ челленджем) → в streaming не входим', () => {
+    const clientIdentity = generateIdentity();
+    const agentIdentity = generateIdentity();
+    const transport = makeTransport(clientIdentity, agentIdentity);
+    const ws = sockets[0]!;
+
+    const hello = driveToHelloSent(ws);
+    const { tx } = sessionKeys('server', agentIdentity, hello.edPub);
+    const agentEnc = makeEncryptor(tx);
+    // Запись прошлой сессии: настоящая подпись агента, но под челленджем ТОЙ сессии.
+    const recorded = new Uint8Array(32).fill(3);
+    ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, recorded));
+    expect(transport.isStreaming).toBe(false);
+  });
+
+  it('hello-ok, подписанный НЕ агентом (ключ relay), → в streaming не входим', () => {
+    const clientIdentity = generateIdentity();
+    const agentIdentity = generateIdentity();
+    const rogue = generateIdentity();
+    const transport = makeTransport(clientIdentity, agentIdentity);
+    const ws = sockets[0]!;
+
+    const hello = driveToHelloSent(ws);
+    const { tx } = sessionKeys('server', agentIdentity, hello.edPub);
+    const agentEnc = makeEncryptor(tx);
+    ws.deliverBinary(helloOkFrame(rogue, agentEnc.header, hello.nonce));
+    expect(transport.isStreaming).toBe(false);
+  });
+
+  it('челлендж клиента различается между подключениями (иначе подпись переиспользуема)', () => {
+    vi.useFakeTimers();
+    const clientIdentity = generateIdentity();
+    const agentIdentity = generateIdentity();
+    const transport = makeTransport(clientIdentity, agentIdentity);
+
+    const first = driveToHelloSent(sockets[0]!);
+    respondHelloOk(sockets[0]!, agentIdentity, first);
+    expect(transport.isStreaming).toBe(true);
+
+    sockets[0]!.close();
+    vi.advanceTimersByTime(1000);
+    const second = driveToHelloSent(sockets[1]!);
+
+    expect(b64(second.nonce)).not.toBe(b64(first.nonce));
   });
 });
 
@@ -255,11 +334,11 @@ describe('RelayTransport — сопоставление ответов по id, 
     const agentIdentity = generateIdentity();
     const transport = makeTransport(clientIdentity, agentIdentity);
     const ws = sockets[0]!;
-    const clientEdPub = driveToHelloSent(ws);
-    const { rx, tx } = sessionKeys('server', agentIdentity, clientEdPub);
+    const hello = driveToHelloSent(ws);
+    const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
     const agentEnc = makeEncryptor(tx);
     const before = ws.sent.length;
-    ws.deliverBinary(jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header), nonce: b64(NONCE) }));
+    ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, hello.nonce));
     const fin = JSON.parse(td.decode(decodeFrame(ws.sent[before] as Uint8Array).payload)) as { header: string };
     return { transport, ws, agentEnc, agentDec: makeDecryptor(rx, unb64(fin.header)) };
   }
@@ -318,12 +397,10 @@ describe('RelayTransport — create() дожидается подтвержде�
     const agentIdentity = generateIdentity();
     const transport = makeTransport(clientIdentity, agentIdentity);
     const ws = sockets[0]!;
-    const clientEdPub = driveToHelloSent(ws);
-    const { tx } = sessionKeys('server', agentIdentity, clientEdPub);
+    const hello = driveToHelloSent(ws);
+    const { tx } = sessionKeys('server', agentIdentity, hello.edPub);
     const agentEnc = makeEncryptor(tx);
-    ws.deliverBinary(
-      jsonFrame(FrameType.Data, 0, { t: 'hello-ok', header: b64(agentEnc.header), nonce: b64(NONCE) }),
-    );
+    ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, hello.nonce));
     expect(transport.isStreaming).toBe(true);
     return { transport, ws, agentEnc };
   }
