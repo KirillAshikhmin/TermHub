@@ -183,6 +183,8 @@ export class RelayLink {
   private readonly files?: FilesCtl;
   private readonly vcs?: VcsService;
   private readonly socketName?: string;
+  /** Адреса прямого доступа к агенту (минуя relay); отдаются по кадру Addresses. */
+  private readonly localUrls?: () => string[];
   private readonly attach: typeof attachTerminal;
   private readonly helloTimeoutMs: number;
 
@@ -220,6 +222,8 @@ export class RelayLink {
     files?: FilesCtl;
     vcs?: VcsService;
     socketName?: string;
+    /** Адреса прямого доступа (минуя relay) — их клиент кладёт в список серверов. */
+    localUrls?: () => string[];
     /** Тайм-аут pre-hello клиента (по умолчанию 5 с); в тестах занижается. */
     helloTimeoutMs?: number;
     /** Инжектируется в тестах; по умолчанию — реальный attachTerminal. */
@@ -234,6 +238,7 @@ export class RelayLink {
     this.files = opts.files;
     this.vcs = opts.vcs;
     this.socketName = opts.socketName;
+    this.localUrls = opts.localUrls;
     this.helloTimeoutMs = opts.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
     this.attach = opts.attach ?? attachTerminal;
   }
@@ -761,6 +766,15 @@ export class RelayLink {
         return;
       case FrameType.Caffeinate:
         return this.doCaffeinate(s, frame);
+      case FrameType.Addresses:
+        // Клиент из браузера не может найти агента в локальной сети сам — говорим ему
+        // адреса. Гостю не отдаём: прямой адрес обходит relay, а с ним и ограничение
+        // scope, которое живёт в этом мосте.
+        this.sendFrameBytes(
+          s,
+          jsonFrame(FrameType.AddressesResult, 0, { urls: s.scope ? [] : (this.localUrls?.() ?? []) }),
+        );
+        return;
       case FrameType.PushKey:
         this.sendFrameBytes(s, jsonFrame(FrameType.PushKeyResult, 0, { key: this.push?.vapidPublicKey() ?? '' }));
         return;

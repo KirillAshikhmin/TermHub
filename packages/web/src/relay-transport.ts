@@ -95,6 +95,12 @@ interface PendingPushKey {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingAddresses {
+  resolve: (urls: string[]) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /** Ожидающий DIRS_RESULT (FIFO). */
 interface PendingDirs {
   resolve: (groups: DirGroup[]) => void;
@@ -194,6 +200,7 @@ export class RelayTransport implements Transport {
   private pendingCreate: PendingCreate[] = [];
   private pendingCaffeinate: PendingCaffeinate[] = [];
   private pendingPushKey: PendingPushKey[] = [];
+  private pendingAddresses: PendingAddresses[] = [];
   // Сопоставление ответов по id, а НЕ по порядку (FIFO): агент обрабатывает кадры
   // асинхронно, время ответа зависит от размера каталога/файла, а таймаут вырезал
   // ожидающего из середины очереди — дальше все ответы съезжали на один. Для чанков
@@ -508,6 +515,20 @@ export class RelayTransport implements Transport {
         pending.resolve(key);
         return;
       }
+      case FrameType.AddressesResult: {
+        const pending = this.pendingAddresses.shift();
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        let urls: string[] = [];
+        try {
+          const got = frameJson<{ urls?: unknown }>(frame).urls;
+          urls = Array.isArray(got) ? got.filter((u): u is string => typeof u === 'string') : [];
+        } catch {
+          urls = [];
+        }
+        pending.resolve(urls);
+        return;
+      }
       case FrameType.DirsResult: {
         const pending = this.takePending(this.pendingDirs, frame);
         if (!pending) return;
@@ -701,6 +722,7 @@ export class RelayTransport implements Transport {
       ...this.pendingCreate,
       ...this.pendingCaffeinate,
       ...this.pendingPushKey,
+      ...this.pendingAddresses,
 
       ...this.pendingShare,
       ...this.pendingDevices,
@@ -713,6 +735,7 @@ export class RelayTransport implements Transport {
     this.pendingCreate = [];
     this.pendingCaffeinate = [];
     this.pendingPushKey = [];
+    this.pendingAddresses = [];
 
     this.pendingShare = [];
     this.pendingDevices = [];
@@ -1065,6 +1088,20 @@ export class RelayTransport implements Transport {
       }, LIST_TIMEOUT_MS);
       this.pendingPushKey.push({ resolve, reject, timer });
       this.sendFrame(encodeFrame({ type: FrameType.PushKey, channel: CONTROL_CHANNEL, payload: new Uint8Array(0) }));
+    });
+  }
+
+  /** Адреса прямого доступа к агенту (минуя relay) — их сообщает сам агент, потому
+   *  что браузер не может найти его в локальной сети. Гостю агент отдаёт пустой список. */
+  addresses(): Promise<string[]> {
+    if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    return new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAddresses = this.pendingAddresses.filter((p) => p.timer !== timer);
+        reject(new Error('addresses timeout'));
+      }, LIST_TIMEOUT_MS);
+      this.pendingAddresses.push({ resolve, reject, timer });
+      this.sendFrame(encodeFrame({ type: FrameType.Addresses, channel: CONTROL_CHANNEL, payload: new Uint8Array(0) }));
     });
   }
 

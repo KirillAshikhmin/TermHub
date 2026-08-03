@@ -261,6 +261,24 @@ export function renderHeader(
   return { el: header, teardown: menu.teardown };
 }
 
+// Открыватель списка серверов регистрирует remote-режим (он один знает про агентов).
+// Реестр нужен, чтобы экран терминала мог показать список по клику на кружок статуса,
+// не импортируя remote/keys: те тянут libsodium, которому нельзя попасть в LAN-бандл.
+let serverPicker: (() => void) | null = null;
+
+export function setServerPicker(open: (() => void) | null): void {
+  serverPicker = open;
+}
+
+/** Есть ли кому показать список серверов (в LAN-режиме сервер один — некому). */
+export function hasServerPicker(): boolean {
+  return serverPicker !== null;
+}
+
+export function openServerPicker(): void {
+  serverPicker?.();
+}
+
 /** Полоса вкладок «Сессии | Проводник» под шапкой (общая для дашборда и
  *  проводника). Навигация — нативные ссылки на hash-роуты, чтобы кнопка «Назад»
  *  браузера работала. Вкладка «Проводник» скрыта у гостя без доступа к файлам. */

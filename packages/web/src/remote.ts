@@ -10,14 +10,15 @@ import { mountDashboard } from './dashboard';
 import { mountFiles } from './files';
 import { mountRepo } from './repo';
 import { t } from './i18n';
-import { addAgent, listAgents, loadClientName, loadIdentity, removeAgent } from './keys';
+import { addAgent, listAgents, loadClientName, loadIdentity, removeAgent, saveAgentLocalUrls } from './keys';
 import type { KnownAgent } from './keys';
 import { mountPairing } from './pairing';
 import { RelayTransport } from './relay-transport';
 import type { LinkStatus } from './relay-transport';
 import type { Transport } from './transport';
 import { openTerminal } from './term';
-import { iconButton, renderHeader, svgIcon, toast } from './ui';
+import { iconButton, renderHeader, setServerPicker, svgIcon, toast } from './ui';
+import { openServersModal } from './servers';
 
 /** Роут, распознанный роутером main.ts. */
 export type RemoteRoute =
@@ -110,6 +111,24 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
       firstOnlineDone = true;
       opts.rerender();
     }
+    // Каждый выход в online — повод освежить адреса прямого доступа: агент мог
+    // переехать в другую сеть. Молча игнорируем отказ (старый агент кадра не знает,
+    // гостю отдаётся пустой список) — это удобство, а не условие работы.
+    if (status === 'online') void refreshLocalUrls();
+  };
+
+  /** Спрашивает у агента его локальные адреса и запоминает их у известного агента. */
+  const refreshLocalUrls = async (): Promise<void> => {
+    const t = transport;
+    const id = activeAgentId;
+    if (!t || !id) return;
+    try {
+      const urls = await t.addresses();
+      await saveAgentLocalUrls(id, urls);
+      agents = await listAgents();
+    } catch {
+      // Нет ответа — оставляем то, что знали раньше.
+    }
   };
 
   const LAST_AGENT_KEY = 'termhub.lastAgent';
@@ -145,12 +164,29 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
     opts.rerender();
   };
 
-  // «Выбор агента» из меню дашборда: отключаемся и показываем экран выбора.
+  // «Выбор сервера» из меню дашборда и по кружку статуса на экране терминала:
+  // модалка со списком агентов и их прямыми адресами.
   const showPicker = (): void => {
-    dropTransport();
-    location.hash = '#/';
-    opts.rerender();
+    openServersModal({
+      entries: agents.map((a) => ({
+        id: a.agentId,
+        name: a.name,
+        state: a.agentId === activeAgentId ? 'current' : 'known',
+        localUrls: a.localUrls ?? [],
+      })),
+      onSelect: (id) => {
+        const agent = agents.find((a) => a.agentId === id);
+        if (agent) selectAgent(agent);
+      },
+      onAdd: () => {
+        location.hash = '#/pair';
+        opts.rerender();
+      },
+    });
   };
+  // Кружок статуса на экране терминала живёт в LAN-бандле и про агентов не знает —
+  // отдаём ему открыватель через реестр (см. ui.setServerPicker).
+  setServerPicker(showPicker);
 
   // Автовыбор последнего агента — при обновлении страницы не спрашиваем заново.
   const lastId = readLastAgent();

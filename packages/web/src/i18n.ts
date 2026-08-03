@@ -99,6 +99,15 @@ const ru: Dict = {
     unauthorized: 'Агент отклонил устройство. Выполните сопряжение заново.',
     outdated: 'Версия приложения не совпадает с версией агента. Обновите страницу.',
   },
+  servers: {
+    title: 'Выбор сервера',
+    current: 'текущий',
+    known: 'известен',
+    direct: 'Прямой доступ',
+    directHint:
+      'Прямой адрес открывается вне приложения — во встроенном браузере. Это другой сервер со своим входом; при первом заходе браузер спросит про сертификат.',
+    empty: 'Пока нет ни одного сервера. Добавьте первый по коду сопряжения.',
+  },
   pair: {
     title: 'Сопряжение по коду',
     subtitle: 'Введите одноразовый код, показанный агентом',
@@ -379,6 +388,15 @@ const en: Dict = {
     removeAgent: 'Remove agent',
     unauthorized: 'The agent rejected this device. Pair again.',
     outdated: 'This app version does not match the agent. Reload the page.',
+  },
+  servers: {
+    title: 'Choose a server',
+    current: 'current',
+    known: 'known',
+    direct: 'Direct access',
+    directHint:
+      'A direct address opens outside the app, in the in-app browser. It is a separate server with its own login, and the browser will ask about its certificate on the first visit.',
+    empty: 'No servers yet. Add your first one with a pairing code.',
   },
   pair: {
     title: 'Pair by code',

@@ -24,6 +24,12 @@ export interface KnownAgent {
   /** Публичный ключ агента (base64) — для sessionKeys. */
   edPub: string;
   addedAt: number;
+  /** Адреса прямого доступа к агенту (минуя relay), которые он сам сообщил.
+   *  Браузер не может найти агента в локальной сети сам, поэтому список приходит
+   *  от агента по E2E-каналу и запоминается здесь для экрана выбора сервера. */
+  localUrls?: string[];
+  /** Когда список адресов обновлялся последний раз (для показа «данные устарели»). */
+  localUrlsAt?: number;
 }
 
 /** identity клиента в сериализованном виде (base64). */
@@ -111,6 +117,17 @@ export async function addAgent(agent: KnownAgent): Promise<void> {
   const agents = (await get<KnownAgent[]>(KEY_AGENTS)) ?? [];
   const others = Array.isArray(agents) ? agents.filter((a) => a.agentId !== agent.agentId) : [];
   await put(KEY_AGENTS, [...others, agent]);
+}
+
+/** Обновляет адреса прямого доступа у известного агента. Незнакомый agentId
+ *  игнорируем: агент мог быть удалён, пока ответ был в полёте. */
+export async function saveAgentLocalUrls(agentId: string, localUrls: string[]): Promise<void> {
+  const agents = (await get<KnownAgent[]>(KEY_AGENTS)) ?? [];
+  if (!Array.isArray(agents)) return;
+  const found = agents.find((a) => a.agentId === agentId);
+  if (!found) return;
+  const others = agents.filter((a) => a.agentId !== agentId);
+  await put(KEY_AGENTS, [...others, { ...found, localUrls, localUrlsAt: Date.now() }]);
 }
 
 /** Удаляет агента по agentId. */

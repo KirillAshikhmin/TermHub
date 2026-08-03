@@ -28,7 +28,7 @@ import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
 import { currentTheme } from './theme';
 import type { TermChannel, TermConnState, Transport } from './transport';
-import { iconButton, renderHoloBar, spinner, toast, wireToolbar } from './ui';
+import { hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
 const FONT_MIN = 10;
 const FONT_MAX = 22;
@@ -376,6 +376,21 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   // этот экран лишь отражает статус и рисует данные/оверлеи.
   let channel: TermChannel | null = null;
   let endedOverlay: HTMLElement | null = null;
+
+  // Кружок статуса — вход в выбор сервера (в LAN-режиме выбирать не из чего, там
+  // реестр пуст и кружок остаётся просто индикатором).
+  if (hasServerPicker()) {
+    dot.classList.add('is-clickable');
+    dot.setAttribute('role', 'button');
+    dot.tabIndex = 0;
+    dot.addEventListener('click', () => openServerPicker());
+    dot.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openServerPicker();
+      }
+    });
+  }
 
   const setDot = (state: TermConnState): void => {
     dot.classList.remove('is-connected', 'is-reconnecting', 'is-closed');

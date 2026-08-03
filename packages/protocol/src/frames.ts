@@ -40,6 +40,9 @@ export enum FrameType {
   FileOpResult = 36,
   RenameSession = 37,
   CreateOk = 38,
+  /** Запрос адресов, по которым агент доступен напрямую (минуя relay). */
+  Addresses = 39,
+  AddressesResult = 40,
 }
 
 export interface Frame {

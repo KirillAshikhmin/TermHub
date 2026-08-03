@@ -18,6 +18,7 @@ import { connectCommand } from './connect-cmd.js';
 import { runDevices, runRevoke } from './devices-cmd.js';
 import { serviceCommand } from './service.js';
 import { runDoctor } from './doctor.js';
+import { localUrls } from './local-urls.js';
 
 function usage(cmd: string | undefined): string {
   const header = cmd ? `Unknown command: ${cmd}` : 'No command specified';
@@ -48,6 +49,7 @@ async function runStart(): Promise<number> {
       files,
       vcs,
       socketName: TMUX_SOCKET,
+      localUrls: () => localUrls({ port: config.port, tls: config.tls !== null }),
     });
   }
   const link = relayLink;
