@@ -204,7 +204,11 @@ export class VcsService {
           : ctx.vcs === 'hg'
             ? await Promise.all([this.hgLog(ctx.top), this.hgHead(ctx.top)])
             : await Promise.all([this.svnLog(ctx.top), this.svnHead(ctx.top)]);
-      return { vcs: ctx.vcs, head, commits };
+      if (ctx.vcs !== 'git') return { vcs: ctx.vcs, head, commits };
+      // Лог идёт по всем веткам, поэтому без явной отметки непонятно, где ты стоишь;
+      // ahead/behind отвечают на вопрос «надо ли пушить или тянуть».
+      const [branch, tracking] = await Promise.all([this.gitCurrentBranch(ctx.top), this.gitAheadBehind(ctx.top)]);
+      return { vcs: ctx.vcs, head, commits, branch, ahead: tracking.ahead, behind: tracking.behind };
     } catch {
       // Репозиторий есть, но лога нет (пустой репо / нет доступа к серверу svn).
       return { vcs: ctx.vcs, head: '', commits: [] };
@@ -371,17 +375,46 @@ export class VcsService {
     const out = await this.run(top, 'git', [
       'log',
       '--all', // все ветки, включая remote-tracking (после fetch) — виден внешний репо
+      // Топологический порядок обязателен для графа: по умолчанию git сортирует по
+      // дате, и коммиты параллельных веток чередуются — линии выходят спутанными.
+      '--topo-order',
       '-n',
       String(LOG_LIMIT),
-      `--pretty=format:%H${US}%h${US}%an${US}%at${US}%s`,
+      `--pretty=format:%H${US}%h${US}%an${US}%at${US}%P${US}%D${US}%s`,
     ]);
     return out
       .split('\n')
       .filter(Boolean)
       .map((line) => {
-        const [rev, short, author, at, subject] = line.split(US);
-        return { rev: rev!, short: short ?? rev!, author: author ?? '', date: Number(at) * 1000, subject: subject ?? '' };
+        // %s идёт последним: тема может содержать что угодно, кроме перевода строки,
+        // поэтому режем на фиксированное число полей и остаток отдаём теме.
+        const parts = line.split(US);
+        const [rev, short, author, at, parents, decor] = parts;
+        return {
+          rev: rev!,
+          short: short ?? rev!,
+          author: author ?? '',
+          date: Number(at) * 1000,
+          parents: (parents ?? '').split(' ').filter(Boolean),
+          refs: parseDecoration(decor ?? ''),
+          subject: parts.slice(6).join(US),
+        };
       });
+  }
+
+  /** Имя текущей ветки; пусто в detached HEAD (git печатает «HEAD»). */
+  private async gitCurrentBranch(top: string): Promise<string> {
+    const name = (await this.runAllowFail(top, 'git', ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    return name === 'HEAD' ? '' : name;
+  }
+
+  /** Насколько текущая ветка впереди/позади своего upstream. null — upstream не задан
+   *  (или его не удалось прочитать), и тогда сравнивать попросту не с чем. */
+  private async gitAheadBehind(top: string): Promise<{ ahead: number | null; behind: number | null }> {
+    const out = (await this.runAllowFail(top, 'git', ['rev-list', '--left-right', '--count', '@{upstream}...HEAD'])).trim();
+    const [behind, ahead] = out.split(/\s+/).map(Number);
+    if (!Number.isFinite(behind) || !Number.isFinite(ahead)) return { ahead: null, behind: null };
+    return { ahead: ahead!, behind: behind! };
   }
 
   private async gitHead(top: string): Promise<string> {
@@ -628,6 +661,20 @@ export async function runRepoAction(vcs: VcsService, req: Record<string, unknown
     default:
       throw new Error('Unknown repository action');
   }
+}
+
+/** Разбирает %D («HEAD -> main, origin/main, tag: v1») в список меток.
+ *  «HEAD ->» срезаем: это не имя ссылки, а указание, куда смотрит HEAD, и в списке
+ *  меток оно выглядело бы отдельной несуществующей веткой. */
+export function parseDecoration(decor: string): string[] {
+  const out: string[] = [];
+  for (const raw of decor.split(',')) {
+    const item = raw.trim();
+    if (!item) continue;
+    const arrow = item.indexOf('-> ');
+    out.push(arrow >= 0 ? item.slice(arrow + 3).trim() : item);
+  }
+  return [...new Set(out)].filter(Boolean);
 }
 
 /** svn: репо-относительный путь (/base/apps/x) → wc-относительный (apps/x). */

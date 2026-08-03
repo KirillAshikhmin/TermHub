@@ -8,6 +8,8 @@ import { t } from './i18n';
 import { parseSessionSub, repoHash, srepoHash } from './routes';
 import { resolveSessionPath } from './session-path';
 import { mountSessionBar } from './tabs';
+import { layoutGraph } from './git-graph';
+import type { GraphRow } from './git-graph';
 import { iconButton, openModal, renderHeader, renderHoloBar, renderTabs, spinner, toast, wireToolbar, errorScreen } from './ui';
 import type {
   RepoBranches,
@@ -418,6 +420,39 @@ function openBranchMenu(
 }
 
 /** Монтирует экран «Репозиторий». */
+/** Ширина одной дорожки графа в пикселях. */
+const LANE_W = 14;
+/** Высота строки коммита — линии графа обязаны совпасть с ней, иначе будут разрывы. */
+const ROW_H = 52;
+
+/** SVG-колонка графа для одной строки: линии-рёбра + точка коммита. */
+function graphCell(row: GraphRow, width: number): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'th-repo__graph');
+  svg.setAttribute('width', String(width * LANE_W));
+  svg.setAttribute('height', String(ROW_H));
+  svg.setAttribute('aria-hidden', 'true'); // декорация: смысл несут метки и текст
+  const x = (lane: number): number => lane * LANE_W + LANE_W / 2;
+  for (const edge of row.edges) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    // Кубическая кривая, а не ломаная: переход между дорожками читается мягче и не
+    // сливается с соседними вертикалями.
+    path.setAttribute(
+      'd',
+      `M ${x(edge.from)} 0 C ${x(edge.from)} ${ROW_H / 2}, ${x(edge.to)} ${ROW_H / 2}, ${x(edge.to)} ${ROW_H}`,
+    );
+    path.setAttribute('class', `th-repo__edge th-repo__edge--l${edge.from % 6}`);
+    svg.append(path);
+  }
+  const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  dot.setAttribute('cx', String(x(row.lane)));
+  dot.setAttribute('cy', String(ROW_H / 2));
+  dot.setAttribute('r', row.merge ? '5' : '3.5');
+  dot.setAttribute('class', `th-repo__node th-repo__edge--l${row.lane % 6}${row.merge ? ' is-merge' : ''}`);
+  svg.append(dot);
+  return svg;
+}
+
 export function mountRepo(root: HTMLElement, transport: Transport, session?: string): () => void {
   resetCacheIfForeign(transport);
   const sub = session ? parseSessionSub('srepo') : null;
@@ -588,6 +623,26 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
     }
     content.append(panel);
 
+    // Лента идёт по ВСЕМ веткам, поэтому явно говорим, где стоит рабочая копия и
+    // разошлась ли она с upstream — иначе список коммитов читается как каша.
+    if (log.branch) {
+      const state = document.createElement('div');
+      state.className = 'th-repo__branchbar';
+      const chip = document.createElement('span');
+      chip.className = 'th-repo__ref is-current';
+      chip.textContent = log.branch;
+      state.append(chip);
+      const parts: string[] = [];
+      if (typeof log.ahead === 'number' && log.ahead > 0) parts.push(t('repo.ahead', { n: log.ahead }));
+      if (typeof log.behind === 'number' && log.behind > 0) parts.push(t('repo.behind', { n: log.behind }));
+      const note = document.createElement('span');
+      note.className = 'th-repo__branchnote';
+      note.textContent =
+        parts.length > 0 ? parts.join(' · ') : log.ahead === null ? t('repo.noUpstream') : t('repo.inSync');
+      state.append(note);
+      content.append(state);
+    }
+
     if (log.commits.length === 0) {
       const note = document.createElement('p');
       note.className = 'th-repo__note';
@@ -597,7 +652,15 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
     }
     const list = document.createElement('div');
     list.className = 'th-repo__log';
+    // Граф считаем один раз на весь список: раскладка зависит от всей ленты сразу.
+    const graph = layoutGraph(log.commits);
+    const byRev = new Map(graph.rows.map((r) => [r.rev, r]));
     for (const commit of log.commits) {
+      const item = document.createElement('div');
+      item.className = 'th-repo__item';
+      const node = byRev.get(commit.rev);
+      if (node) item.append(graphCell(node, graph.width));
+
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'th-repo__commit';
@@ -605,13 +668,22 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
       if (isHead) row.classList.add('is-head'); // текущий коммит рабочей копии
       const subject = document.createElement('span');
       subject.className = 'th-repo__subject';
-      subject.textContent = commit.subject || '(no message)';
+      // Метки веток/тегов — рядом с темой: без них лента по всем веткам нечитаема.
+      for (const ref of commit.refs ?? []) {
+        const chip = document.createElement('span');
+        chip.className = 'th-repo__ref';
+        if (ref === log.branch) chip.classList.add('is-current');
+        chip.textContent = ref;
+        subject.append(chip);
+      }
+      subject.append(document.createTextNode(commit.subject || '(no message)'));
       const meta = document.createElement('span');
       meta.className = 'th-repo__commitmeta';
       meta.textContent = `${isHead ? `● ${t('repo.head')} · ` : ''}${commit.short} · ${commit.author} · ${fmtDate(commit.date)}`;
       row.append(subject, meta);
       row.addEventListener('click', () => openCommitModal(transport, curRoot, curPath, commit));
-      list.append(row);
+      item.append(row);
+      list.append(item);
     }
     content.append(list);
   };

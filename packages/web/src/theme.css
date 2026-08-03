@@ -2544,3 +2544,70 @@ main.th-files {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Граф истории: колонка линий слева от списка коммитов. */
+.th-repo__item {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.th-repo__graph {
+  flex: none;
+  overflow: visible;
+}
+
+.th-repo__edge {
+  fill: none;
+  stroke-width: 2;
+  stroke: var(--muted);
+}
+
+.th-repo__node {
+  stroke-width: 2;
+  fill: var(--bg);
+}
+
+.th-repo__node.is-merge {
+  fill: var(--muted);
+}
+
+/* Шесть цветов дорожек — дальше повторяются по кругу, как в git-клиентах. */
+.th-repo__edge--l0 { stroke: var(--accent); }
+.th-repo__edge--l1 { stroke: var(--claude); }
+.th-repo__edge--l2 { stroke: #7c9cf5; }
+.th-repo__edge--l3 { stroke: #d08bd0; }
+.th-repo__edge--l4 { stroke: #66c2b0; }
+.th-repo__edge--l5 { stroke: #c9a227; }
+
+/* Метки веток и тегов рядом с темой коммита. */
+.th-repo__ref {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  vertical-align: 1px;
+}
+
+.th-repo__ref.is-current {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-tint);
+}
+
+/* Строка состояния ветки над лентой коммитов. */
+.th-repo__branchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px 10px;
+}
+
+.th-repo__branchnote {
+  font-size: 12px;
+  color: var(--muted);
+}
