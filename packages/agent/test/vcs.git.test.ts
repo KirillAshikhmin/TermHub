@@ -207,3 +207,126 @@ describe('VcsService — ограничение гостя каталогом р
     expect(log.vcs).toBeNull();
   });
 });
+
+describe('VcsService — граф, ветка и операции слияния', () => {
+  it('log отдаёт родителей, метки, текущую ветку и ahead/behind', async () => {
+    const log = await svc.log(root, 'proj');
+    expect(log.branch).toBe('main');
+    // Линейная история: у верхнего коммита ровно один родитель, у корневого — ноль.
+    expect(log.commits[0]!.parents).toHaveLength(1);
+    expect(log.commits.at(-1)!.parents).toEqual([]);
+    // Метка ветки стоит на HEAD.
+    expect(log.commits[0]!.refs).toContain('main');
+    // upstream не настроен — сравнивать не с чем.
+    expect(log.ahead).toBeNull();
+    expect(log.behind).toBeNull();
+  });
+
+  it('merge создаёт коммит с двумя родителями — он и рисуется как слияние', async () => {
+    const repo = path.join(root, 'proj');
+    await git(['switch', '-c', 'feature'], repo);
+    await fsp.writeFile(path.join(repo, 'f.txt'), 'from feature\n');
+    await git(['add', 'f.txt'], repo);
+    await git(['commit', '-q', '-m', 'feature work'], repo);
+    await git(['switch', 'main'], repo);
+    // Разводим ветки: без коммита на main слияние было бы перемоткой, и коммита
+    // с двумя родителями просто не возникло бы.
+    await fsp.writeFile(path.join(repo, 'm.txt'), 'from main\n');
+    await git(['add', 'm.txt'], repo);
+    await git(['commit', '-q', '-m', 'main work'], repo);
+
+    await svc.merge(root, 'proj', 'feature');
+    const log = await svc.log(root, 'proj');
+    const merge = log.commits.find((c) => (c.parents ?? []).length === 2);
+    expect(merge).toBeTruthy();
+    expect(await fsp.readFile(path.join(repo, 'f.txt'), 'utf8')).toContain('from feature');
+  });
+
+  it('конфликт merge оставляет репозиторий в состоянии merging, abort его снимает', async () => {
+    const repo = path.join(root, 'conflict');
+    await fsp.mkdir(repo);
+    await git(['init', '-q', '-b', 'main'], repo);
+    await git(['config', 'user.email', 't@t'], repo);
+    await git(['config', 'user.name', 'T'], repo);
+    await fsp.writeFile(path.join(repo, 'x.txt'), 'base\n');
+    await git(['add', 'x.txt'], repo);
+    await git(['commit', '-q', '-m', 'base'], repo);
+    await git(['switch', '-c', 'other'], repo);
+    await fsp.writeFile(path.join(repo, 'x.txt'), 'theirs\n');
+    await git(['commit', '-q', '-am', 'theirs'], repo);
+    await git(['switch', 'main'], repo);
+    await fsp.writeFile(path.join(repo, 'x.txt'), 'ours\n');
+    await git(['commit', '-q', '-am', 'ours'], repo);
+
+    await expect(svc.merge(root, 'conflict', 'other')).rejects.toThrow();
+    const st = await svc.status(root, 'conflict');
+    expect(st.state).toBe('merging');
+    expect(st.conflicts).toContain('x.txt');
+
+    await svc.abort(root, 'conflict');
+    const after = await svc.status(root, 'conflict');
+    expect(after.state).toBe('clean');
+    expect(after.conflicts).toEqual([]);
+  });
+
+  it('discard возвращает файл к HEAD', async () => {
+    const repo = path.join(root, 'proj');
+    const file = path.join(repo, 'a.txt');
+    // Эталон — состояние HEAD, а не текущая копия: предыдущие тесты могли оставить
+    // файл изменённым, и сравнение с ним проверяло бы не то.
+    await svc.discard(root, 'proj', ['a.txt']);
+    const head = await fsp.readFile(file, 'utf8');
+    await fsp.writeFile(file, 'trash\n');
+    await svc.discard(root, 'proj', ['a.txt']);
+    expect(await fsp.readFile(file, 'utf8')).toBe(head);
+  });
+
+  it('stash: отложить → список непуст → вернуть', async () => {
+    const repo = path.join(root, 'proj');
+    const file = path.join(repo, 'a.txt');
+    const before = await fsp.readFile(file, 'utf8');
+    await fsp.writeFile(file, `${before}stashed\n`);
+
+    await svc.stashPush(root, 'proj', 'wip');
+    expect(await fsp.readFile(file, 'utf8')).toBe(before); // изменения убраны
+    const list = await svc.stashList(root, 'proj');
+    expect(list.length).toBeGreaterThan(0);
+    expect(list[0]!.ref).toMatch(/^stash@\{\d+\}$/);
+
+    await svc.stashPop(root, 'proj', list[0]!.ref);
+    expect(await fsp.readFile(file, 'utf8')).toContain('stashed');
+    await svc.discard(root, 'proj', ['a.txt']); // прибираем за собой
+  });
+
+  it('битая ссылка stash отвергается до вызова git', async () => {
+    await expect(svc.stashPop(root, 'proj', 'stash@{0}; rm -rf /')).rejects.toThrow(/stash reference/i);
+    await expect(svc.stashDrop(root, 'proj', '--all')).rejects.toThrow(/stash reference/i);
+  });
+
+  it('rebase переносит ветку на выбранную', async () => {
+    const repo = path.join(root, 'rb');
+    await fsp.mkdir(repo);
+    await git(['init', '-q', '-b', 'main'], repo);
+    await git(['config', 'user.email', 't@t'], repo);
+    await git(['config', 'user.name', 'T'], repo);
+    await fsp.writeFile(path.join(repo, 'r.txt'), 'base\n');
+    await git(['add', 'r.txt'], repo);
+    await git(['commit', '-q', '-m', 'base'], repo);
+    await git(['switch', '-c', 'side'], repo);
+    await fsp.writeFile(path.join(repo, 'side.txt'), 'side\n');
+    await git(['add', 'side.txt'], repo);
+    await git(['commit', '-q', '-m', 'side work'], repo);
+    await git(['switch', 'main'], repo);
+    await fsp.writeFile(path.join(repo, 'main.txt'), 'main\n');
+    await git(['add', 'main.txt'], repo);
+    await git(['commit', '-q', '-m', 'main work'], repo);
+    await git(['switch', 'side'], repo);
+
+    await svc.rebase(root, 'rb', 'main');
+    const log = await svc.log(root, 'rb');
+    // После перебазирования «side work» стоит поверх «main work» — линейно.
+    expect(log.commits[0]!.subject).toBe('side work');
+    expect(log.commits[1]!.subject).toBe('main work');
+    expect(log.commits[0]!.parents).toHaveLength(1);
+  });
+});

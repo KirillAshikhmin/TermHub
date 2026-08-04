@@ -14,6 +14,8 @@ import type {
   RepoCommitRef,
   RepoFileChange,
   RepoLog,
+  PullOpts,
+  RepoStashEntry,
   RepoStatus,
   VcsKind,
 } from '@termhub/protocol';
@@ -221,17 +223,181 @@ export class VcsService {
     else if (ctx.vcs === 'hg') await this.runAllowFail(ctx.top, 'hg', ['pull']);
   }
 
-  /** Стянуть изменения из удалённого репозитория в рабочую копию (pull ↓). */
-  async pull(root: string, subpath: string): Promise<void> {
+  /** Явный fetch: обновить представление об удалённом репозитории, не трогая рабочую
+   *  копию. Раньше был доступен только как побочный эффект log(fetch=true). */
+  async fetch(root: string, subpath: string): Promise<void> {
     const ctx = await this.ctx(root, subpath);
     if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs === 'svn') throw new Error('SVN has no fetch: use pull');
     try {
-      if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['pull', '--ff-only']);
-      else if (ctx.vcs === 'hg') await this.run(ctx.top, 'hg', ['pull', '-u']);
-      else await this.run(ctx.top, 'svn', ['update', '--accept', 'postpone']);
+      if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['fetch', '--all', '--prune']);
+      else await this.run(ctx.top, 'hg', ['pull']);
     } catch (e) {
       throw cleanErr(e);
     }
+  }
+
+  /**
+   * Стянуть изменения в рабочую копию (pull ↓).
+   *
+   * `branch` пуст — тянем upstream текущей ветки. Стратегия по умолчанию `ff` (как
+   * было): она никогда не создаёт коммит и не переписывает историю, поэтому остаётся
+   * безопасным поведением кнопки. `merge`/`rebase` выбираются явно.
+   */
+  async pull(root: string, subpath: string, opts: PullOpts = {}): Promise<void> {
+    const branch = opts.branch ?? '';
+    if (branch) checkBranch(branch);
+    const strategy = opts.strategy ?? 'ff';
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    try {
+      if (ctx.vcs === 'git') {
+        const how = strategy === 'rebase' ? ['--rebase'] : strategy === 'merge' ? ['--no-rebase'] : ['--ff-only'];
+        // Ветку передаём как `<remote> <branch>`: git pull с одним аргументом ждёт
+        // remote, а не ветку, и «pull origin/foo» молча делал бы не то.
+        const target = branch ? splitRemoteBranch(branch) : [];
+        await this.run(ctx.top, 'git', ['pull', ...how, ...target]);
+      } else if (ctx.vcs === 'hg') {
+        await this.run(ctx.top, 'hg', branch ? ['pull', '-u', '-b', branch] : ['pull', '-u']);
+      } else {
+        await this.run(ctx.top, 'svn', ['update', '--accept', 'postpone']);
+      }
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Влить ветку в текущую (git/hg). Конфликт оставляет репозиторий в состоянии
+   *  слияния — его показывает status(), оттуда же доступен abort(). */
+  async merge(root: string, subpath: string, branch: string): Promise<void> {
+    checkBranch(branch);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs === 'svn') throw new Error('SVN merge is not supported here');
+    try {
+      if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['merge', '--no-edit', branch]);
+      else await this.run(ctx.top, 'hg', ['merge', branch]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Перебазировать текущую ветку на выбранную (только git). */
+  async rebase(root: string, subpath: string, branch: string): Promise<void> {
+    checkBranch(branch);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Rebase is only supported for git');
+    try {
+      await this.run(ctx.top, 'git', ['rebase', branch]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Прервать незавершённое слияние/перебазирование и вернуть рабочую копию как было. */
+  async abort(root: string, subpath: string): Promise<void> {
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Abort is only supported for git');
+    const state = await this.gitOpState(ctx.top);
+    if (state === 'rebasing') await this.run(ctx.top, 'git', ['rebase', '--abort']);
+    else if (state === 'merging') await this.run(ctx.top, 'git', ['merge', '--abort']);
+    else throw new Error('Nothing to abort');
+  }
+
+  /** Продолжить слияние/перебазирование после того, как конфликты разрешены в
+   *  терминале. Индексацию разрешённых файлов делает пользователь — мы не решаем
+   *  за него, что конфликт улажен. */
+  async continueOp(root: string, subpath: string): Promise<void> {
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Continue is only supported for git');
+    const state = await this.gitOpState(ctx.top);
+    if (state === 'rebasing') await this.run(ctx.top, 'git', ['rebase', '--continue']);
+    else if (state === 'merging') await this.run(ctx.top, 'git', ['commit', '--no-edit']);
+    else throw new Error('Nothing to continue');
+  }
+
+  /** Откатить изменения файлов до состояния HEAD. Разрушительно и необратимо —
+   *  подтверждение обязано быть на стороне UI. */
+  async discard(root: string, subpath: string, files: string[]): Promise<void> {
+    if (files.length === 0) throw new Error('No files to discard');
+    for (const f of files) checkFile(f);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    try {
+      if (ctx.vcs === 'git') await this.run(ctx.top, 'git', ['checkout', 'HEAD', '--', ...files]);
+      else if (ctx.vcs === 'hg') await this.run(ctx.top, 'hg', ['revert', '--no-backup', '--', ...files]);
+      else await this.run(ctx.top, 'svn', ['revert', '--', ...files]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Список отложенных изменений (git stash). */
+  async stashList(root: string, subpath: string): Promise<RepoStashEntry[]> {
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx || ctx.vcs !== 'git') return [];
+    const out = await this.runAllowFail(ctx.top, 'git', ['stash', 'list', `--pretty=format:%gd${US}%at${US}%s`]);
+    return out
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [ref, at, subject] = line.split(US);
+        return { ref: ref!, date: Number(at) * 1000, subject: subject ?? '' };
+      });
+  }
+
+  /** Отложить текущие изменения. */
+  async stashPush(root: string, subpath: string, message: string): Promise<void> {
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Stash is only supported for git');
+    const msg = message.trim().slice(0, 200);
+    try {
+      // -u: без него неотслеживаемые файлы остаются в рабочей копии, и «отложил всё»
+      // оказывается неправдой ровно тогда, когда откладывают перед сменой ветки.
+      await this.run(ctx.top, 'git', msg ? ['stash', 'push', '-u', '-m', msg] : ['stash', 'push', '-u']);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Вернуть отложенное в рабочую копию (и убрать из списка). */
+  async stashPop(root: string, subpath: string, ref: string): Promise<void> {
+    checkStashRef(ref);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Stash is only supported for git');
+    try {
+      await this.run(ctx.top, 'git', ['stash', 'pop', ref]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Выбросить отложенное без применения. */
+  async stashDrop(root: string, subpath: string, ref: string): Promise<void> {
+    checkStashRef(ref);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Stash is only supported for git');
+    try {
+      await this.run(ctx.top, 'git', ['stash', 'drop', ref]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Незавершённая операция репозитория — по служебным каталогам .git. */
+  private async gitOpState(top: string): Promise<'clean' | 'merging' | 'rebasing'> {
+    const gitDir = (await this.runAllowFail(top, 'git', ['rev-parse', '--git-dir'])).trim() || '.git';
+    const dir = path.isAbsolute(gitDir) ? gitDir : path.join(top, gitDir);
+    if ((await exists(path.join(dir, 'rebase-merge'))) || (await exists(path.join(dir, 'rebase-apply'))))
+      return 'rebasing';
+    if (await exists(path.join(dir, 'MERGE_HEAD'))) return 'merging';
+    return 'clean';
   }
 
   /** Отправить локальные коммиты в удалённый репозиторий (push ↑). */
@@ -326,7 +492,12 @@ export class VcsService {
         : ctx.vcs === 'hg'
           ? await this.hgStatus(ctx.top)
           : await this.svnStatus(ctx.top);
-    return { vcs: ctx.vcs, files };
+    if (ctx.vcs !== 'git') return { vcs: ctx.vcs, files };
+    // Незавершённое слияние/перебазирование и конфликтующие файлы: без этого merge с
+    // конфликтом выглядел бы как «ошибка и ничего не произошло», хотя репозиторий
+    // остался в промежуточном состоянии и требует решения.
+    const [state, conflicts] = await Promise.all([this.gitOpState(ctx.top), this.gitConflicts(ctx.top)]);
+    return { vcs: ctx.vcs, files, state, conflicts };
   }
 
   /** Дифф файла: рабочий (rev пуст) или внутри коммита rev. */
@@ -415,6 +586,18 @@ export class VcsService {
     const [behind, ahead] = out.split(/\s+/).map(Number);
     if (!Number.isFinite(behind) || !Number.isFinite(ahead)) return { ahead: null, behind: null };
     return { ahead: ahead!, behind: behind! };
+  }
+
+  /** Файлы с неразрешённым конфликтом (git: «U» в любой позиции статуса). */
+  private async gitConflicts(top: string): Promise<string[]> {
+    const out = await this.runAllowFail(top, 'git', ['status', '--porcelain']);
+    const files: string[] = [];
+    for (const line of out.split('\n')) {
+      if (!line) continue;
+      const code = line.slice(0, 2);
+      if (code.includes('U') || code === 'AA' || code === 'DD') files.push(line.slice(3).trim());
+    }
+    return files;
   }
 
   private async gitHead(top: string): Promise<string> {
@@ -640,7 +823,30 @@ export async function runRepoAction(vcs: VcsService, req: Record<string, unknown
     case 'cat':
       return vcs.cat(root, sub, String(req.file ?? ''));
     case 'pull':
-      return vcs.pull(root, sub);
+      return vcs.pull(root, sub, {
+        branch: req.branch ? String(req.branch) : undefined,
+        strategy: req.strategy === 'merge' || req.strategy === 'rebase' ? req.strategy : 'ff',
+      });
+    case 'fetch':
+      return vcs.fetch(root, sub);
+    case 'merge':
+      return vcs.merge(root, sub, String(req.branch ?? ''));
+    case 'rebase':
+      return vcs.rebase(root, sub, String(req.branch ?? ''));
+    case 'abort':
+      return vcs.abort(root, sub);
+    case 'continue':
+      return vcs.continueOp(root, sub);
+    case 'discard':
+      return vcs.discard(root, sub, Array.isArray(req.files) ? req.files.map(String) : []);
+    case 'stash-list':
+      return vcs.stashList(root, sub);
+    case 'stash-push':
+      return vcs.stashPush(root, sub, String(req.message ?? ''));
+    case 'stash-pop':
+      return vcs.stashPop(root, sub, String(req.ref ?? ''));
+    case 'stash-drop':
+      return vcs.stashDrop(root, sub, String(req.ref ?? ''));
     case 'push':
       return vcs.push(root, sub);
     case 'branches':
@@ -661,6 +867,19 @@ export async function runRepoAction(vcs: VcsService, req: Record<string, unknown
     default:
       throw new Error('Unknown repository action');
   }
+}
+
+/** Ссылка на элемент stash: только та форма, которую печатает сам git. */
+function checkStashRef(ref: string): void {
+  if (!/^stash@\{\d{1,4}\}$/.test(ref)) throw new Error('Invalid stash reference');
+}
+
+/** `origin/feature` → `['origin', 'feature']`, `feature` → `['feature']`.
+ *  git pull ждёт remote отдельным аргументом, иначе трактует имя как remote. */
+function splitRemoteBranch(branch: string): string[] {
+  const at = branch.indexOf('/');
+  if (at <= 0) return [branch];
+  return [branch.slice(0, at), branch.slice(at + 1)];
 }
 
 /** Разбирает %D («HEAD -> main, origin/main, tag: v1») в список меток.

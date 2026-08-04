@@ -2611,3 +2611,38 @@ main.th-files {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Баннер незавершённого слияния/перебазирования. */
+.th-repo__conflict {
+  border: 1px solid color-mix(in srgb, #d29922 55%, transparent);
+  background: color-mix(in srgb, #d29922 12%, transparent);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.th-repo__conflicttitle {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.th-repo__conflictfiles {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.th-repo__conflictactions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.th-btn--sm {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.th-sheet__item.is-current {
+  color: var(--accent);
+}

@@ -152,10 +152,36 @@ export interface RepoCommitDetail {
   files: RepoFileChange[];
 }
 
+/** Незавершённая операция репозитория: пока она не `clean`, обычная работа
+ *  (коммит, смена ветки) заблокирована до разрешения или отмены. */
+export type RepoOpState = 'clean' | 'merging' | 'rebasing';
+
 /** Рабочие изменения (для диалога коммита). */
 export interface RepoStatus {
   vcs: VcsKind | null;
   files: RepoFileChange[];
+  /** Состояние незавершённой операции (git); отсутствует у hg/svn. */
+  state?: RepoOpState;
+  /** Файлы с неразрешённым конфликтом. */
+  conflicts?: string[];
+}
+
+/** Как тянуть изменения: `ff` — только перемотка (ничего не переписывает),
+ *  `merge` — слиянием, `rebase` — перебазированием. */
+export type PullStrategy = 'ff' | 'merge' | 'rebase';
+
+export interface PullOpts {
+  /** Ветка-источник; пусто — upstream текущей ветки. */
+  branch?: string;
+  strategy?: PullStrategy;
+}
+
+/** Элемент списка отложенных изменений (git stash). */
+export interface RepoStashEntry {
+  /** Ссылка вида `stash@{0}`. */
+  ref: string;
+  date: number;
+  subject: string;
 }
 
 /** Ветки репозитория: текущая + список (git — локальные+удалённые по коротким именам;

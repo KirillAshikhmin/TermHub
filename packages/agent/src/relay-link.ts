@@ -867,7 +867,26 @@ export class RelayLink {
       // commit/pull/push/переключение-создание-удаление веток меняют данные —
       // только с правом записи (для гостя со scope).
       if (
-        ['commit', 'pull', 'push', 'checkout', 'create-branch', 'delete-branch'].includes(String(req.action)) &&
+        // Всё, что меняет рабочую копию или историю, требует права записи. Список
+        // расширяется вместе с runRepoAction — забыть действие здесь значит отдать
+        // гостю «только просмотр» возможность переписать репозиторий.
+        [
+          'commit',
+          'pull',
+          'push',
+          'checkout',
+          'create-branch',
+          'delete-branch',
+          'fetch',
+          'merge',
+          'rebase',
+          'abort',
+          'continue',
+          'discard',
+          'stash-push',
+          'stash-pop',
+          'stash-drop',
+        ].includes(String(req.action)) &&
         s.scope &&
         !s.scope.write
       )

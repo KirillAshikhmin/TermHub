@@ -13,6 +13,7 @@ import type { GraphRow } from './git-graph';
 import { iconButton, openModal, renderHeader, renderHoloBar, renderTabs, spinner, toast, wireToolbar, errorScreen } from './ui';
 import type {
   RepoBranches,
+  RepoStashEntry,
   RepoCommitDetail,
   RepoCommitRef,
   RepoFileChange,
@@ -453,6 +454,135 @@ function graphCell(row: GraphRow, width: number): SVGSVGElement {
   return svg;
 }
 
+/** Выбор ветки из списка репозитория — общий для pull/merge/rebase. */
+function pickBranch(
+  transport: Transport,
+  root: string,
+  path: string,
+  title: string,
+  onPick: (branch: string) => void,
+): void {
+  openModal((close) => {
+    const box = document.createElement('div');
+    box.className = 'th-sheet';
+    const head = document.createElement('div');
+    head.className = 'th-sheet__head';
+    const cap = document.createElement('div');
+    cap.className = 'th-sheet__title';
+    cap.textContent = title;
+    head.append(cap, iconButton('close', t('common.close'), close));
+    box.append(head);
+
+    const list = document.createElement('div');
+    list.append(spinner());
+    box.append(list);
+
+    transport.repo<RepoBranches>('branches', { root, path }).then(
+      (data) => {
+        list.replaceChildren();
+        if (data.branches.length === 0) {
+          const note = document.createElement('p');
+          note.className = 'th-repo__note';
+          note.textContent = t('repo.noBranches');
+          list.append(note);
+          return;
+        }
+        for (const b of data.branches) {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'th-sheet__item';
+          item.textContent = b;
+          if (b === data.current) item.classList.add('is-current');
+          item.addEventListener('click', () => {
+            close();
+            onPick(b);
+          });
+          list.append(item);
+        }
+      },
+      () => {
+        list.replaceChildren();
+        const note = document.createElement('p');
+        note.className = 'th-repo__note';
+        note.textContent = t('repo.error');
+        list.append(note);
+      },
+    );
+    return box;
+  });
+}
+
+/** Список отложенных изменений с действиями «вернуть» и «выбросить». */
+function openStashSheet(transport: Transport, root: string, path: string, onDone: () => void): void {
+  openModal((close) => {
+    const box = document.createElement('div');
+    box.className = 'th-sheet';
+    const head = document.createElement('div');
+    head.className = 'th-sheet__head';
+    const cap = document.createElement('div');
+    cap.className = 'th-sheet__title';
+    cap.textContent = t('repo.stashList');
+    head.append(cap, iconButton('close', t('common.close'), close));
+    box.append(head);
+
+    const list = document.createElement('div');
+    list.append(spinner());
+    box.append(list);
+
+    const act = (action: string, ref: string, okKey: string): void => {
+      transport.repo<void>(action, { root, path, ref }).then(
+        () => {
+          close();
+          toast(t(okKey), 'info');
+          onDone();
+        },
+        (err) => toast(err instanceof Error ? err.message : t('repo.error'), 'error'),
+      );
+    };
+
+    transport.repo<RepoStashEntry[]>('stash-list', { root, path }).then(
+      (entries) => {
+        list.replaceChildren();
+        if (entries.length === 0) {
+          const note = document.createElement('p');
+          note.className = 'th-repo__note';
+          note.textContent = t('repo.stashEmpty');
+          list.append(note);
+          return;
+        }
+        for (const entry of entries) {
+          const row = document.createElement('div');
+          row.className = 'th-branch__row';
+          const label = document.createElement('span');
+          label.className = 'th-branch__name';
+          label.textContent = entry.subject || entry.ref;
+          row.append(label);
+          const pop = document.createElement('button');
+          pop.type = 'button';
+          pop.className = 'th-btn th-btn--sm';
+          pop.textContent = t('repo.stashPop');
+          pop.addEventListener('click', () => act('stash-pop', entry.ref, 'repo.stashPopped'));
+          const drop = document.createElement('button');
+          drop.type = 'button';
+          drop.className = 'th-btn th-btn--sm th-btn--ghost';
+          drop.textContent = t('repo.stashDrop');
+          drop.addEventListener('click', () => act('stash-drop', entry.ref, 'repo.stashDropped'));
+          row.append(pop, drop);
+          list.append(row);
+        }
+      },
+      () => {
+        list.replaceChildren();
+        const note = document.createElement('p');
+        note.className = 'th-repo__note';
+        note.textContent = t('repo.error');
+        list.append(note);
+      },
+    );
+    return box;
+  });
+}
+
 export function mountRepo(root: HTMLElement, transport: Transport, session?: string): () => void {
   resetCacheIfForeign(transport);
   const sub = session ? parseSessionSub('srepo') : null;
@@ -615,6 +745,13 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
     panel.append(refreshBtn);
 
     if (canWrite) {
+      // Операции, меняющие историю, спрятаны в меню: на телефоне их легко задеть,
+      // а цена промаха у rebase несопоставима с ценой промаха у «обновить».
+      const opsBtn = iconButton('dots', t('repo.ops'), () => openOpsSheet());
+      panel.append(opsBtn);
+    }
+
+    if (canWrite) {
       const commitBtn = iconButton('commit', t('repo.commit'), () =>
         openCommitDialog(transport, curRoot, curPath, () => void load()),
       );
@@ -622,6 +759,11 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
       panel.append(commitBtn);
     }
     content.append(panel);
+
+    // Незавершённое слияние/перебазирование — самое важное на экране: пока оно висит,
+    // ни коммит, ни смена ветки не пройдут. Показываем сразу под панелью действий.
+    const banner = lastStatus ? conflictBanner(lastStatus) : null;
+    if (banner) content.append(banner);
 
     // Лента идёт по ВСЕМ веткам, поэтому явно говорим, где стоит рабочая копия и
     // разошлась ли она с upstream — иначе список коммитов читается как каша.
@@ -688,6 +830,141 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
     content.append(list);
   };
 
+  /** Последний прочитанный статус — источник для баннера конфликта. */
+  let lastStatus: RepoStatus | null = null;
+
+  /** Выполняет действие репозитория и перерисовывает экран. */
+  const runAction = (action: string, req: Record<string, unknown>, okKey: string): void => {
+    transport.repo<void>(action, { root: curRoot, path: curPath, ...req }).then(
+      () => {
+        toast(t(okKey), 'info');
+        void load();
+      },
+      (err) => {
+        // Конфликт — не «ошибка и ничего не произошло»: репозиторий остался в
+        // промежуточном состоянии, поэтому обязательно перерисовываем, чтобы
+        // показать баннер с продолжить/прервать.
+        toast(err instanceof Error ? err.message : t('repo.error'), 'error');
+        void load();
+      },
+    );
+  };
+
+  /** Меню операций: fetch, pull со стратегией, merge, rebase, stash. */
+  const openOpsSheet = (): void => {
+    openModal((close) => {
+      const box = document.createElement('div');
+      box.className = 'th-sheet';
+      const head = document.createElement('div');
+      head.className = 'th-sheet__head';
+      const cap = document.createElement('div');
+      cap.className = 'th-sheet__title';
+      cap.textContent = t('repo.ops');
+      head.append(cap, iconButton('close', t('common.close'), close));
+      box.append(head);
+
+      const item = (label: string, run: () => void): void => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'th-sheet__item';
+        btn.textContent = label;
+        btn.addEventListener('click', () => {
+          close();
+          run();
+        });
+        box.append(btn);
+      };
+
+      item(t('repo.fetch'), () => runAction('fetch', {}, 'repo.fetched'));
+      item(t('repo.pullFrom'), () =>
+        pickBranch(transport, curRoot, curPath, t('repo.pickBranch'), (branch) => {
+          pickStrategy((strategy) => runAction('pull', { branch, strategy }, 'repo.pulled'));
+        }),
+      );
+      item(t('repo.merge'), () =>
+        pickBranch(transport, curRoot, curPath, t('repo.pickBranch'), (branch) =>
+          runAction('merge', { branch }, 'repo.merged'),
+        ),
+      );
+      item(t('repo.rebase'), () =>
+        pickBranch(transport, curRoot, curPath, t('repo.pickBranch'), (branch) =>
+          runAction('rebase', { branch }, 'repo.rebased'),
+        ),
+      );
+      item(t('repo.stash'), () => runAction('stash-push', { message: '' }, 'repo.stashed'));
+      item(t('repo.stashList'), () => openStashSheet(transport, curRoot, curPath, () => void load()));
+      return box;
+    });
+  };
+
+  /** Выбор стратегии для pull: перемотка / слияние / перебазирование. */
+  const pickStrategy = (onPick: (strategy: string) => void): void => {
+    openModal((close) => {
+      const box = document.createElement('div');
+      box.className = 'th-sheet';
+      const head = document.createElement('div');
+      head.className = 'th-sheet__head';
+      const cap = document.createElement('div');
+      cap.className = 'th-sheet__title';
+      cap.textContent = t('repo.pullFrom');
+      head.append(cap, iconButton('close', t('common.close'), close));
+      box.append(head);
+      for (const [value, key] of [
+        ['ff', 'repo.strategyFf'],
+        ['merge', 'repo.strategyMerge'],
+        ['rebase', 'repo.strategyRebase'],
+      ] as const) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'th-sheet__item';
+        btn.textContent = t(key);
+        btn.addEventListener('click', () => {
+          close();
+          onPick(value);
+        });
+        box.append(btn);
+      }
+      return box;
+    });
+  };
+
+  /** Баннер незавершённой операции: что застряло, какие файлы и что с этим делать. */
+  const conflictBanner = (status: RepoStatus): HTMLElement | null => {
+    if (!status.state || status.state === 'clean') return null;
+    const box = document.createElement('div');
+    box.className = 'th-repo__conflict';
+    const title = document.createElement('div');
+    title.className = 'th-repo__conflicttitle';
+    title.textContent = status.state === 'rebasing' ? t('repo.conflictRebasing') : t('repo.conflictMerging');
+    box.append(title);
+    const files = status.conflicts ?? [];
+    if (files.length > 0) {
+      const list = document.createElement('div');
+      list.className = 'th-repo__conflictfiles';
+      list.textContent = t('repo.conflictFiles', { files: files.join(', ') });
+      box.append(list);
+    }
+    const hint = document.createElement('div');
+    hint.className = 'th-repo__conflictfiles';
+    hint.textContent = t('repo.conflictHint');
+    box.append(hint);
+    const actions = document.createElement('div');
+    actions.className = 'th-repo__conflictactions';
+    const cont = document.createElement('button');
+    cont.type = 'button';
+    cont.className = 'th-btn th-btn--sm';
+    cont.textContent = t('repo.continueOp');
+    cont.addEventListener('click', () => runAction('continue', {}, 'repo.continued'));
+    const abort = document.createElement('button');
+    abort.type = 'button';
+    abort.className = 'th-btn th-btn--sm th-btn--ghost';
+    abort.textContent = t('repo.abortOp');
+    abort.addEventListener('click', () => runAction('abort', {}, 'repo.aborted'));
+    actions.append(cont, abort);
+    box.append(actions);
+    return box;
+  };
+
   const load = async (fetch = false): Promise<void> => {
     if (!session) lastRepoLoc = { root: curRoot, path: curPath }; // запоминаем (вне session-режима)
     content.replaceChildren(spinner());
@@ -695,6 +972,12 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
       const log = await transport.repo<RepoLog>('log', { root: curRoot, path: curPath, fetch });
       if (stopped) return;
       if (log.vcs) {
+        // Статус нужен только ради состояния незавершённой операции; его отказ не
+        // должен ронять экран истории, поэтому берём best-effort.
+        lastStatus = await transport
+          .repo<RepoStatus>('status', { root: curRoot, path: curPath })
+          .catch(() => null);
+        if (stopped) return;
         renderRepo(log);
       } else {
         // Не репозиторий — показываем папки для навигации к репозиторию.
