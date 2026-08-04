@@ -2646,3 +2646,16 @@ main.th-files {
 .th-sheet__item.is-current {
   color: var(--accent);
 }
+
+/* Откат изменений файла и тумблер дополнения коммита. */
+.th-repo__discard {
+  margin-left: auto;
+}
+
+.th-repo__amend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}

@@ -886,6 +886,9 @@ export class RelayLink {
           'stash-push',
           'stash-pop',
           'stash-drop',
+          'amend',
+          'tag-create',
+          'tag-delete',
         ].includes(String(req.action)) &&
         s.scope &&
         !s.scope.write

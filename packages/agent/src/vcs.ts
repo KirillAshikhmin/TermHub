@@ -335,6 +335,49 @@ export class VcsService {
     }
   }
 
+  /** Переписать последний коммит: сообщение и/или добавить файлы (git amend).
+   *  Историю переписывает, поэтому уместно только до публикации — предупреждение
+   *  на стороне UI. */
+  async amend(root: string, subpath: string, files: string[], message: string): Promise<void> {
+    for (const f of files) checkFile(f);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Amend is only supported for git');
+    const msg = message.trim();
+    try {
+      if (files.length > 0) await this.run(ctx.top, 'git', ['add', '--', ...files]);
+      await this.run(ctx.top, 'git', msg ? ['commit', '--amend', '-m', msg] : ['commit', '--amend', '--no-edit']);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Поставить тег на текущий коммит. */
+  async tagCreate(root: string, subpath: string, name: string): Promise<void> {
+    checkBranch(name); // те же ограничения на имя ссылки
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Tags are only supported for git');
+    try {
+      await this.run(ctx.top, 'git', ['tag', '--', name]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
+  /** Удалить тег. */
+  async tagDelete(root: string, subpath: string, name: string): Promise<void> {
+    checkBranch(name);
+    const ctx = await this.ctx(root, subpath);
+    if (!ctx) throw new Error('Not a repository');
+    if (ctx.vcs !== 'git') throw new Error('Tags are only supported for git');
+    try {
+      await this.run(ctx.top, 'git', ['tag', '-d', '--', name]);
+    } catch (e) {
+      throw cleanErr(e);
+    }
+  }
+
   /** Список отложенных изменений (git stash). */
   async stashList(root: string, subpath: string): Promise<RepoStashEntry[]> {
     const ctx = await this.ctx(root, subpath);
@@ -839,6 +882,12 @@ export async function runRepoAction(vcs: VcsService, req: Record<string, unknown
       return vcs.continueOp(root, sub);
     case 'discard':
       return vcs.discard(root, sub, Array.isArray(req.files) ? req.files.map(String) : []);
+    case 'amend':
+      return vcs.amend(root, sub, Array.isArray(req.files) ? req.files.map(String) : [], String(req.message ?? ''));
+    case 'tag-create':
+      return vcs.tagCreate(root, sub, String(req.name ?? ''));
+    case 'tag-delete':
+      return vcs.tagDelete(root, sub, String(req.name ?? ''));
     case 'stash-list':
       return vcs.stashList(root, sub);
     case 'stash-push':

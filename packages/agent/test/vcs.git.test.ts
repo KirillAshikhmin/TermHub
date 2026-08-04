@@ -330,3 +330,37 @@ describe('VcsService — граф, ветка и операции слияния
     expect(log.commits[0]!.parents).toHaveLength(1);
   });
 });
+
+describe('VcsService — amend и теги', () => {
+  it('amend переписывает сообщение последнего коммита, не добавляя новый', async () => {
+    const repo = path.join(root, 'am');
+    await fsp.mkdir(repo);
+    await git(['init', '-q', '-b', 'main'], repo);
+    await git(['config', 'user.email', 't@t'], repo);
+    await git(['config', 'user.name', 'T'], repo);
+    await fsp.writeFile(path.join(repo, 'a.txt'), 'one\n');
+    await git(['add', 'a.txt'], repo);
+    await git(['commit', '-q', '-m', 'typo here'], repo);
+
+    const before = await svc.log(root, 'am');
+    await svc.amend(root, 'am', [], 'fixed message');
+    const after = await svc.log(root, 'am');
+    expect(after.commits).toHaveLength(before.commits.length); // новый коммит не появился
+    expect(after.commits[0]!.subject).toBe('fixed message');
+  });
+
+  it('тег ставится, виден в метках лога и удаляется', async () => {
+    await svc.tagCreate(root, 'proj', 'v1.0.0');
+    const tagged = await svc.log(root, 'proj');
+    expect(tagged.commits[0]!.refs?.some((r) => r.includes('v1.0.0'))).toBe(true);
+
+    await svc.tagDelete(root, 'proj', 'v1.0.0');
+    const cleared = await svc.log(root, 'proj');
+    expect(cleared.commits[0]!.refs?.some((r) => r.includes('v1.0.0'))).toBe(false);
+  });
+
+  it('имя тега проверяется до вызова git', async () => {
+    await expect(svc.tagCreate(root, 'proj', '--delete')).rejects.toThrow(/branch name/i);
+    await expect(svc.tagDelete(root, 'proj', 'a b; rm -rf /')).rejects.toThrow(/branch name/i);
+  });
+});

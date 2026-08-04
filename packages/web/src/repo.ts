@@ -116,6 +116,8 @@ function changeRow(opts: {
   loadDiff: () => Promise<string>;
   loadFile?: () => Promise<string>;
   checkbox?: { onToggle: (checked: boolean) => void };
+  /** Откат изменений файла. Передаётся только там, где это уместно (диалог коммита). */
+  onDiscard?: () => void;
 }): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'th-repo__change';
@@ -142,6 +144,16 @@ function changeRow(opts: {
   pathBtn.textContent = opts.change.path;
 
   head.append(status, pathBtn);
+
+  if (opts.onDiscard) {
+    // Откат необратим, поэтому спрашиваем подтверждение прямо здесь — на телефоне
+    // кнопка рядом с чекбоксом слишком легко ловится пальцем.
+    const discard = iconButton('refresh', t('repo.discard'), () => {
+      if (confirm(t('repo.confirmDiscard', { name: opts.change.path }))) opts.onDiscard?.();
+    });
+    discard.classList.add('th-repo__discard');
+    head.append(discard);
+  }
 
   const panel = document.createElement('div');
   panel.className = 'th-repo__diff';
@@ -280,20 +292,31 @@ function openCommitDialog(transport: Transport, root: string, path: string, onDo
     submit.type = 'button';
     submit.className = 'th-btn th-btn--primary';
     submit.textContent = t('repo.doCommit');
+    // Дополнение переписывает последний коммит, поэтому это осознанный тумблер, а не
+    // отдельная кнопка рядом с обычным коммитом.
+    const amendWrap = document.createElement('label');
+    amendWrap.className = 'th-repo__amend';
+    const amend = document.createElement('input');
+    amend.type = 'checkbox';
+    amendWrap.append(amend, document.createTextNode(t('repo.amend')));
+    amendWrap.title = t('repo.amendHint');
     const refresh = (): void => {
-      submit.disabled = selected.size === 0 || !msg.value.trim();
+      // При дополнении сообщение можно оставить прежним, а файлы — не трогать.
+      submit.disabled = amend.checked ? false : selected.size === 0 || !msg.value.trim();
+      submit.textContent = amend.checked ? t('repo.amend') : t('repo.doCommit');
     };
     msg.addEventListener('input', refresh);
-    foot.append(msg, submit);
+    amend.addEventListener('change', refresh);
+    foot.append(msg, amendWrap, submit);
 
     submit.addEventListener('click', () => {
       submit.disabled = true;
       transport
-        .repo<void>('commit', { root, path, files: [...selected], message: msg.value })
+        .repo<void>(amend.checked ? 'amend' : 'commit', { root, path, files: [...selected], message: msg.value })
         .then(
           () => {
             close();
-            toast(t('repo.committed'), 'info');
+            toast(t(amend.checked ? 'repo.amended' : 'repo.committed'), 'info');
             onDone();
           },
           (err) => {
@@ -327,6 +350,16 @@ function openCommitDialog(transport: Transport, root: string, path: string, onDo
                   else selected.delete(change.path);
                   refresh();
                 },
+              },
+              onDiscard: () => {
+                transport.repo<void>('discard', { root, path, files: [change.path] }).then(
+                  () => {
+                    close();
+                    toast(t('repo.discarded'), 'info');
+                    onDone();
+                  },
+                  (err) => toast(err instanceof Error ? err.message : t('repo.error'), 'error'),
+                );
               },
             }),
           );
@@ -891,6 +924,14 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
           runAction('rebase', { branch }, 'repo.rebased'),
         ),
       );
+      item(t('repo.tagCreate'), () => {
+        const name = prompt(t('repo.tagName'));
+        if (name && name.trim()) runAction('tag-create', { name: name.trim() }, 'repo.tagCreated');
+      });
+      item(t('repo.tagDelete'), () => {
+        const name = prompt(t('repo.tagName'));
+        if (name && name.trim()) runAction('tag-delete', { name: name.trim() }, 'repo.tagDeleted');
+      });
       item(t('repo.stash'), () => runAction('stash-push', { message: '' }, 'repo.stashed'));
       item(t('repo.stashList'), () => openStashSheet(transport, curRoot, curPath, () => void load()));
       return box;
