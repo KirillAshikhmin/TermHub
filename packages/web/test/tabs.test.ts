@@ -251,6 +251,29 @@ describe('mountSessionTabs', () => {
 
   // Панель и дашборд должны показывать ОДНО И ТО ЖЕ: карточку со всеми полями, а не
   // упрощённую строку. Проверяем по признакам карточки дашборда.
+  // Переключение вкладки перемонтирует экран терминала. Без кэша полоса схлопывалась
+  // до одной текущей вкладки и собиралась заново только после полла — на глаз это
+  // выглядело как «все вкладки пропали и вернулись».
+  it('при пере-монтировании вкладки видны сразу, до первого полла', async () => {
+    const first = stubTransport([[sessionFixture('a'), sessionFixture('b'), sessionFixture('c')]]);
+    const t1 = mountSessionTabs({ ...baseOpts, transport: first.transport, current: 'a' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.el.querySelectorAll('.th-tab')).toHaveLength(3);
+    t1.teardown();
+
+    // Тот же транспорт (как при смене hash), новый монтаж — ДО любого ожидания.
+    const t2 = mountSessionTabs({ ...baseOpts, transport: first.transport, current: 'b' });
+    expect(t2.el.querySelectorAll('.th-tab')).toHaveLength(3);
+    t2.teardown();
+  });
+
+  it('чужой транспорт кэш не подхватывает', () => {
+    const other = stubTransport([[sessionFixture('x')]]);
+    const t = mountSessionTabs({ ...baseOpts, transport: other.transport, current: 'x' });
+    expect(t.el.querySelectorAll('.th-tab')).toHaveLength(1); // только текущая
+    t.teardown();
+  });
+
   it('панель рисует карточки дашборда: каталог, команда, звонок', async () => {
     const { transport } = stubTransport([
       [sessionFixture('a'), sessionFixture('b', { command: 'claude', bell: true })],

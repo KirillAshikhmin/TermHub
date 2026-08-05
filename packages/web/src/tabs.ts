@@ -18,6 +18,13 @@ import { updateAppBadge } from './app-badge';
 
 const POLL_INTERVAL = 3000;
 
+// Последний известный список сессий, переживающий пере-монтирование экрана.
+// Переключение вкладки меняет hash → экран терминала собирается заново, и без кэша
+// полоса каждый раз схлопывалась до одной текущей вкладки, а остальные возвращались
+// только после первого полла (до трёх секунд мигания). WeakMap — чтобы кэш уходил
+// вместе с транспортом, а не держал его живым.
+const tabsCache = new WeakMap<Transport, SessionInfo[]>();
+
 /** Сосед для перехода при закрытии текущей вкладки: тот, что был слева; если
  *  закрыли самую левую — новый первый (сосед справа). null, если вкладок не
  *  осталось (тогда вызывающий уходит на дашборд). */
@@ -334,6 +341,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // горизонтальный скролл полосы и фокус.
   const render = (input: SessionInfo[]): void => {
     latest = input; // снимок для панели быстрого переключения
+    tabsCache.set(opts.transport, input); // переживёт пере-монтирование экрана
     const sessions = sortSessions(input, sortMode, bellUnseen, readManualOrder());
     // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
     // крестики-закрытия табов.
@@ -410,6 +418,11 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     if (document.visibilityState === 'visible') void refresh();
   };
   const timer = window.setInterval(tick, POLL_INTERVAL);
+  // Сразу рисуем прошлый список: вкладки остаются на месте при переключении, а полл
+  // ниже их лишь обновит. Данные могут быть слегка устаревшими — это честнее, чем
+  // схлопнуть полосу до одной вкладки и собрать её заново через секунды.
+  const cached = tabsCache.get(opts.transport);
+  if (cached && cached.length > 0) render(cached);
   void refresh();
 
   return {
