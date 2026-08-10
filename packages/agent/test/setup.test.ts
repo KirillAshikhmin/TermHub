@@ -80,6 +80,32 @@ describe('setup pure helpers', () => {
     expect(block).toContain('\\360\\237\\224\\224');
     // Заголовок, совпавший с именем (с точностью до индикатора), не дублируется.
     expect(block).toContain('rest == name');
+  });
+
+  it('tmc — отдельный экран закрытия: рамка, цикл и kill по точному имени', () => {
+    const block = zshAliasBlock();
+    expect(block).toContain('tmc() {');
+    // Список собирается тем же кодом, что и в tml, — экраны не разъедутся.
+    expect(block).toContain('_th_rows() {');
+    expect(block).toContain('_th_show() {');
+    // Цикл: после закрытия остаёмся на том же экране.
+    expect(block).toContain('while :; do');
+    // Список перечитывается внутри цикла — иначе номера съезжают после закрытия.
+    expect(block.indexOf('while :; do')).toBeLessThan(block.lastIndexOf('_th_all=$(_th_rows)'));
+    // Префикс «=» отключает fuzzy-матчинг: без него `Sprut` попал бы в `Sprut1`.
+    expect(block).toContain(`kill-session -t "=$1"`);
+    expect(block).toContain(`tmux -L ${TMUX_SOCKET} kill-session`);
+  });
+
+  it('tml закрывает по отрицательному номеру и только с подтверждением', () => {
+    const block = zshAliasBlock();
+    expect(block).toContain('-N closes');
+    // Минус снимается, дальше номер разбирается как обычный.
+    expect(block).toContain('_th_neg=1');
+    expect(block).toContain('${_th_pick#-}');
+    // Подтверждение обязательно: в tml идут подключаться, промах дорог.
+    expect(block).toContain('[y/N]');
+    expect(block).toContain(`Cancelled.`);
     // Ввод номера и защита от нечислового ввода.
     expect(block).toContain('read -r _th_pick');
     expect(block).toContain('*[!0-9]*');
