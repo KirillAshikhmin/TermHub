@@ -69,8 +69,17 @@ describe('setup pure helpers', () => {
     expect(block).toContain('#{session_path}');
     expect(block).toContain('#{session_name}');
     // Текущий каталог получает нулевой ключ сортировки, то есть идёт первой группой.
-    expect(block).toContain('($1 == cur ? 0 : 1)');
+    expect(block).toContain('(p == cur ? 0 : 1)');
     expect(block).toContain('(current)');
+    // Заголовок панели — то же, что в заголовке вкладки веба.
+    expect(block).toContain('#{pane_title}');
+    // Звонок — из флага окна, тем же источником, что и у агента.
+    expect(block).toContain('#{window_bell_flag}');
+    expect(block).toContain('list-windows');
+    // 🔔 в UTF-8 октальными кодами: awk на macOS не понимает \u-escape.
+    expect(block).toContain('\\360\\237\\224\\224');
+    // Заголовок, совпавший с именем (с точностью до индикатора), не дублируется.
+    expect(block).toContain('rest == name');
     // Ввод номера и защита от нечислового ввода.
     expect(block).toContain('read -r _th_pick');
     expect(block).toContain('*[!0-9]*');

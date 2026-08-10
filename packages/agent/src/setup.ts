@@ -32,45 +32,69 @@ const TM_FUNCTION = `tm() { tmux -L ${TMUX_SOCKET} new -As "\${1:-\$(basename "\
 // другого каталога функция сперва переходит туда, иначе `tm` без аргументов в
 // следующий раз создал бы сессию с именем не того каталога.
 //
+// Рядом с именем — заголовок панели (#{pane_title}), то же, что стоит в заголовке
+// вкладки веб-интерфейса, вместе с ведущим индикатором Claude Code (брайлевый
+// спиннер = работает, ✳ = ждёт реакции). Индикатор не срезаем: отдельной
+// анимированной точки в статичном списке нет, и сам по себе он несёт смысл.
+// Заголовок, совпавший с именем сессии, не дублируем.
+//
+// Звонок — из #{window_bell_flag} по окнам, тем же источником, что и у агента:
+// #{session_alerts} не подходит, он не отличает звонок от активности и тишины.
+// Строки B/S склеиваются в один поток, чтобы обойтись двумя вызовами tmux.
+//
 // Это функция, а не алиас: нужен и ввод, и `cd`, меняющий каталог вызывающего шелла
 // (в подоболочке переход бы потерялся). Переменные с префиксом `_th_` — в POSIX sh
 // нет `local`, а блок обязан работать и в bash, и в zsh.
 // Разделитель — табуляция: она не встречается в путях tmux, в отличие от пробела.
 const TML_FUNCTION = [
-  'tml() {',
-  '  _th_tab=$(printf \'\\t\')',
-  `  _th_raw=$(tmux -L ${TMUX_SOCKET} list-sessions -F "#{session_path}\${_th_tab}#{session_name}" 2>/dev/null)`,
-  '  if [ -z "$_th_raw" ]; then printf \'No termhub sessions.\\n\'; return 0; fi',
-  '  _th_rows=$(printf \'%s\\n\' "$_th_raw" |',
-  '    awk -F\'\\t\' -v cur="$PWD" \'{ printf "%d\\t%s\\t%s\\n", ($1 == cur ? 0 : 1), $1, $2 }\' |',
-  '    sort -t"$_th_tab" -k1,1n -k2,2 -k3,3 | cut -f2-)',
-  '  _th_i=0',
-  '  _th_prev=',
-  '  while IFS="$_th_tab" read -r _th_dir _th_name; do',
-  '    [ -z "$_th_name" ] && continue',
-  '    if [ "$_th_dir" != "$_th_prev" ]; then',
-  '      if [ "$_th_dir" = "$PWD" ]; then printf \'\\n%s (current)\\n\' "$_th_dir";',
-  '      else printf \'\\n%s\\n\' "$_th_dir"; fi',
-  '      _th_prev=$_th_dir',
-  '    fi',
-  '    _th_i=$((_th_i + 1))',
-  '    printf \'  %2d) %s\\n\' "$_th_i" "$_th_name"',
-  '  done <<_THEOF',
-  '$_th_rows',
-  '_THEOF',
-  '  printf \'\\nSession number (Enter to cancel): \'',
-  '  read -r _th_pick',
-  '  [ -z "$_th_pick" ] && return 0',
-  '  case "$_th_pick" in *[!0-9]*) printf \'Enter a number.\\n\'; return 1;; esac',
-  '  _th_sel=$(printf \'%s\\n\' "$_th_rows" | sed -n "${_th_pick}p")',
-  '  if [ -z "$_th_sel" ]; then printf \'No session with that number.\\n\'; return 1; fi',
-  '  _th_dir=${_th_sel%%"$_th_tab"*}',
-  '  _th_name=${_th_sel#*"$_th_tab"}',
-  '  if [ "$_th_dir" != "$PWD" ]; then',
-  '    cd "$_th_dir" || { printf \'Cannot enter %s\\n\' "$_th_dir"; return 1; }',
-  '  fi',
-  '  tm "$_th_name"',
-  '}',
+  "tml() {",
+  "  _th_tab=$(printf '\\t')",
+  `  _th_w=$(tmux -L ${TMUX_SOCKET} list-windows -a -F "#{session_name}\${_th_tab}#{window_bell_flag}" 2>/dev/null)`,
+  `  _th_s=$(tmux -L ${TMUX_SOCKET} list-sessions -F "#{session_path}\${_th_tab}#{session_name}\${_th_tab}#{pane_title}" 2>/dev/null)`,
+  "  if [ -z \"$_th_s\" ]; then printf 'No termhub sessions.\\n'; return 0; fi",
+  "  _th_rows=$(",
+  "    { printf '%s\\n' \"$_th_w\" | sed 's/^/B/'; printf '%s\\n' \"$_th_s\" | sed 's/^/S/'; } |",
+  "    awk -v tab=\"$_th_tab\" -v cur=\"$PWD\" '",
+  "      BEGIN { FS = tab }",
+  "      /^B/ { n = substr($1, 2); if ($2 == \"1\") bell[n] = 1; next }",
+  "      /^S/ {",
+  "        p = substr($1, 2); name = $2; title = $3;",
+  "        label = sprintf(\"%-16s\", name);",
+  "        rest = title; sub(/^[^ ]+ /, \"\", rest);",
+  "        if (rest == name && title != name) label = label \"  \" substr(title, 1, index(title, \" \") - 1);",
+  "        else if (title != \"\" && title != name) label = label \"  \" title;",
+  "        if (bell[name]) label = label \"  \\360\\237\\224\\224\";",
+  "        printf \"%d%s%s%s%s%s%s\\n\", (p == cur ? 0 : 1), tab, p, tab, name, tab, label;",
+  "      }' |",
+  "    sort -t\"$_th_tab\" -k1,1n -k2,2 -k3,3 | cut -f2-)",
+  "  _th_i=0",
+  "  _th_prev=",
+  "  while IFS=\"$_th_tab\" read -r _th_dir _th_name _th_label; do",
+  "    [ -z \"$_th_name\" ] && continue",
+  "    if [ \"$_th_dir\" != \"$_th_prev\" ]; then",
+  "      if [ \"$_th_dir\" = \"$PWD\" ]; then printf '\\n%s (current)\\n' \"$_th_dir\"",
+  "      else printf '\\n%s\\n' \"$_th_dir\"; fi",
+  "      _th_prev=$_th_dir",
+  "    fi",
+  "    _th_i=$((_th_i + 1))",
+  "    printf '  %2d) %s\\n' \"$_th_i\" \"$_th_label\"",
+  "  done <<_THEOF",
+  "$_th_rows",
+  "_THEOF",
+  "  printf '\\nSession number (Enter to cancel): '",
+  "  read -r _th_pick",
+  "  [ -z \"$_th_pick\" ] && return 0",
+  "  case \"$_th_pick\" in *[!0-9]*) printf 'Enter a number.\\n'; return 1;; esac",
+  "  _th_sel=$(printf '%s\\n' \"$_th_rows\" | sed -n \"${_th_pick}p\")",
+  "  if [ -z \"$_th_sel\" ]; then printf 'No session with that number.\\n'; return 1; fi",
+  "  _th_dir=${_th_sel%%\"$_th_tab\"*}",
+  "  _th_rest=${_th_sel#*\"$_th_tab\"}",
+  "  _th_name=${_th_rest%%\"$_th_tab\"*}",
+  "  if [ \"$_th_dir\" != \"$PWD\" ]; then",
+  "    cd \"$_th_dir\" || { printf 'Cannot enter %s\\n' \"$_th_dir\"; return 1; }",
+  "  fi",
+  "  tm \"$_th_name\"",
+  "}",
 ].join('\n');
 
 /** Строки, которые setup добавляет в ~/.tmux.conf (только отсутствующие). */
