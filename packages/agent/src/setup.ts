@@ -26,8 +26,52 @@ const VAPID_SUBJECT = 'mailto:termhub@localhost';
 // аргумента, иначе — из имени текущего каталога, поэтому это функция, а не alias.
 // Сокет -L TMUX_SOCKET — тот же, что использует агент (см. config.TMUX_SOCKET).
 const TM_FUNCTION = `tm() { tmux -L ${TMUX_SOCKET} new -As "\${1:-\$(basename "\$PWD")}"; }`;
-// `tml` — список сессий на выделенном сокете: ровно то, что видит дашборд TermHub.
-const TML_ALIAS = `alias tml='tmux -L ${TMUX_SOCKET} ls'`;
+// `tml` — выбор сессии из списка на выделенном сокете (то же, что видит дашборд).
+// Сессии сгруппированы по рабочему каталогу: сначала группа текущего каталога,
+// затем остальные по алфавиту пути. Номер выбирается вводом; при выборе сессии из
+// другого каталога функция сперва переходит туда, иначе `tm` без аргументов в
+// следующий раз создал бы сессию с именем не того каталога.
+//
+// Это функция, а не алиас: нужен и ввод, и `cd`, меняющий каталог вызывающего шелла
+// (в подоболочке переход бы потерялся). Переменные с префиксом `_th_` — в POSIX sh
+// нет `local`, а блок обязан работать и в bash, и в zsh.
+// Разделитель — табуляция: она не встречается в путях tmux, в отличие от пробела.
+const TML_FUNCTION = [
+  'tml() {',
+  '  _th_tab=$(printf \'\\t\')',
+  `  _th_raw=$(tmux -L ${TMUX_SOCKET} list-sessions -F "#{session_path}\${_th_tab}#{session_name}" 2>/dev/null)`,
+  '  if [ -z "$_th_raw" ]; then printf \'No termhub sessions.\\n\'; return 0; fi',
+  '  _th_rows=$(printf \'%s\\n\' "$_th_raw" |',
+  '    awk -F\'\\t\' -v cur="$PWD" \'{ printf "%d\\t%s\\t%s\\n", ($1 == cur ? 0 : 1), $1, $2 }\' |',
+  '    sort -t"$_th_tab" -k1,1n -k2,2 -k3,3 | cut -f2-)',
+  '  _th_i=0',
+  '  _th_prev=',
+  '  while IFS="$_th_tab" read -r _th_dir _th_name; do',
+  '    [ -z "$_th_name" ] && continue',
+  '    if [ "$_th_dir" != "$_th_prev" ]; then',
+  '      if [ "$_th_dir" = "$PWD" ]; then printf \'\\n%s (current)\\n\' "$_th_dir";',
+  '      else printf \'\\n%s\\n\' "$_th_dir"; fi',
+  '      _th_prev=$_th_dir',
+  '    fi',
+  '    _th_i=$((_th_i + 1))',
+  '    printf \'  %2d) %s\\n\' "$_th_i" "$_th_name"',
+  '  done <<_THEOF',
+  '$_th_rows',
+  '_THEOF',
+  '  printf \'\\nSession number (Enter to cancel): \'',
+  '  read -r _th_pick',
+  '  [ -z "$_th_pick" ] && return 0',
+  '  case "$_th_pick" in *[!0-9]*) printf \'Enter a number.\\n\'; return 1;; esac',
+  '  _th_sel=$(printf \'%s\\n\' "$_th_rows" | sed -n "${_th_pick}p")',
+  '  if [ -z "$_th_sel" ]; then printf \'No session with that number.\\n\'; return 1; fi',
+  '  _th_dir=${_th_sel%%"$_th_tab"*}',
+  '  _th_name=${_th_sel#*"$_th_tab"}',
+  '  if [ "$_th_dir" != "$PWD" ]; then',
+  '    cd "$_th_dir" || { printf \'Cannot enter %s\\n\' "$_th_dir"; return 1; }',
+  '  fi',
+  '  tm "$_th_name"',
+  '}',
+].join('\n');
 
 /** Строки, которые setup добавляет в ~/.tmux.conf (только отсутствующие). */
 export const TMUX_CONF_LINES = [
@@ -72,9 +116,9 @@ export function missingTmuxLines(existing: string): string[] {
 /** Маркер-комментарий блока termhub в ~/.zshrc. */
 export const ZSH_MARKER = '# termhub';
 
-/** Блок для ~/.zshrc: маркер + функция tm + алиас tml. */
+/** Блок для ~/.zshrc: маркер + функции tm и tml. */
 export function zshAliasBlock(): string {
-  return `${ZSH_MARKER}\n${TM_FUNCTION}\n${TML_ALIAS}\n`;
+  return `${ZSH_MARKER}\n${TM_FUNCTION}\n${TML_FUNCTION}\n`;
 }
 
 /** Есть ли уже блок termhub в rc-файле. */
@@ -83,7 +127,7 @@ export function hasZshMarker(existing: string): boolean {
 }
 
 /** rc-файл для алиасов по текущему шеллу ($SHELL). zsh → ~/.zshrc; bash и прочее → ~/.bashrc.
- *  Синтаксис блока (функция tm + alias tml) POSIX-совместим — годится и для bash, и для zsh. */
+ *  Синтаксис блока (функции tm и tml) POSIX-совместим — годится и для bash, и для zsh. */
 export function shellRcFile(shell: string | undefined, home: string): { path: string; label: string } {
   const name = (shell ?? '').split('/').pop() ?? '';
   if (name === 'zsh') return { path: path.join(home, '.zshrc'), label: '~/.zshrc' };
@@ -163,7 +207,9 @@ async function maybePatchShellRc(rl: readline.Interface): Promise<void> {
     console.log(`${label}: tm alias already configured (marker # termhub).`);
     return;
   }
-  console.log(`\nSuggested additions to ${label}:\n  ${TM_FUNCTION}\n  ${TML_ALIAS}`);
+  // Полное тело tml длинное — в предложении показываем только назначение, сам блок
+  // всё равно записывается целиком.
+  console.log(`\nSuggested additions to ${label}:\n  ${TM_FUNCTION}\n  tml() { ... }  # pick a session, grouped by directory`);
   if (!(await askYesNo(rl, 'Add?', true))) return;
   appendToFile(file, zshAliasBlock());
   console.log(`✓ ${label} updated (restart your shell or run \`source ${label}\`).`);

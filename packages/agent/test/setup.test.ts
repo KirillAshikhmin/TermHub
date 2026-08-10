@@ -61,14 +61,34 @@ describe('setup pure helpers', () => {
     expect(hasZshMarker(`export FOO=1\n${ZSH_MARKER}\nalias tm='...'\n`)).toBe(true);
   });
 
+  it('tml — функция выбора сессии: группировка, нумерация, ввод и переход в каталог', () => {
+    const block = zshAliasBlock();
+    // Функция, а не алиас: нужен ввод и cd, меняющий каталог вызывающего шелла.
+    expect(block).toContain('tml() {');
+    // Список запрашивается вместе с рабочим каталогом — по нему и группируем.
+    expect(block).toContain('#{session_path}');
+    expect(block).toContain('#{session_name}');
+    // Текущий каталог получает нулевой ключ сортировки, то есть идёт первой группой.
+    expect(block).toContain('($1 == cur ? 0 : 1)');
+    expect(block).toContain('(current)');
+    // Ввод номера и защита от нечислового ввода.
+    expect(block).toContain('read -r _th_pick');
+    expect(block).toContain('*[!0-9]*');
+    // Сессия из другого каталога: сперва переход, затем восстановление через tm.
+    expect(block).toContain('cd "$_th_dir"');
+    expect(block).toContain('tm "$_th_name"');
+    // Тот же выделенный сокет, что у агента.
+    expect(block).toContain(`tmux -L ${TMUX_SOCKET} list-sessions`);
+  });
+
   it('zshAliasBlock содержит маркер, функцию tm и алиас tml на выделенном сокете', () => {
     const block = zshAliasBlock();
     expect(block.includes(ZSH_MARKER)).toBe(true);
     // Функция, а не alias: имя из аргумента ($1) или из basename текущего каталога.
     expect(block.includes('tm() {')).toBe(true);
     expect(block.includes(`tmux -L ${TMUX_SOCKET} new -As "${'${1:-$(basename "$PWD")}'}"`)).toBe(true);
-    // tml — список сессий на том же выделенном сокете, что и агент.
-    expect(block.includes(`alias tml='tmux -L ${TMUX_SOCKET} ls'`)).toBe(true);
+    // tml — на том же выделенном сокете, что и агент (подробности — в тесте выше).
+    expect(block.includes(`tmux -L ${TMUX_SOCKET} list-sessions`)).toBe(true);
     expect(hasZshMarker(block)).toBe(true);
   });
 
