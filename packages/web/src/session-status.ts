@@ -1,27 +1,14 @@
-// Состояние сессии из заголовка активной панели (tmux pane_title). Claude Code
-// кодирует его в заголовок: брайлевый спиннер (⠂/⠐/…) = работает, ✳ = ждёт
-// реакции пользователя. Чистые функции — тестируются отдельно.
+// Состояние сессии из заголовка панели (tmux pane_title).
+//
+// Само правило живёт в @termhub/protocol/session-title — общее с агентом, иначе
+// смена спиннера в Claude Code ломает обе стороны по отдельности (уже случалось).
+// Импорт идёт подпутём, а не из корня пакета: корневой index тянет libsodium,
+// которому нельзя попадать в LAN-бандл.
 
-/** Брайлевый спиннер в начале заголовка = Claude работает (думает/делает). */
-const WORKING_RE = /^\s*[⠀-⣿]/u;
-/** Брайль или ✳ в начале = сессией управляет Claude Code (есть title-сигнал);
- *  для таких сессий индикатор берём из заголовка, а не из session_activity. */
-const MANAGED_RE = /^\s*[⠀-⣿✳]/u;
-
-/** Claude в сессии сейчас работает (брайлевый спиннер в заголовке). */
-export function sessionWorking(title: string): boolean {
-  return WORKING_RE.test(title);
-}
-
-/** Сессией управляет Claude Code (заголовок несёт статус ⠂/✳). Для не-managed
- *  сессий «работает ли» определяется fallback'ом по session_activity. */
-export function sessionManaged(title: string): boolean {
-  return MANAGED_RE.test(title);
-}
-
-/** Текст заголовка терминала без ведущего индикатора активности (брайль/✳): сам
- *  индикатор показывается отдельной точкой активности, в имени его не дублируем.
- *  Пустая строка, если заголовок — только индикатор либо его нет. */
-export function sessionTitleText(title: string): string {
-  return title.replace(/^\s*[⠀-⣿✳]+\s*/u, '').trim();
-}
+export {
+  sessionManaged,
+  sessionTitleText,
+  sessionWaiting,
+  sessionWorking,
+  titleIndicator,
+} from '@termhub/protocol/session-title';

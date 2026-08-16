@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionInfo } from '@termhub/protocol';
+import { sessionWorking, sessionTitleText } from '@termhub/protocol';
 
 const POLL_INTERVAL_MS = 2000;
 const EXEC_MAX_BUFFER = 4 * 1024 * 1024;
@@ -15,10 +16,11 @@ const SESSION_FORMAT =
   '#{session_name}\t#{session_path}\t#{session_activity}\t#{session_attached}\t#{pane_title}';
 const PANE_FORMAT = '#{session_name}\t#{pane_current_command}\t#{window_bell_flag}';
 
-/** Брайлевый спиннер в начале pane_title = Claude работает; текст после него —
- *  задача (для пуша «сессия: задача»). ✳ (ожидание) НЕ считаем звонком: это
- *  дефолтное состояние idle-сессии, висит даже на свежей, где ничего не вводили. */
-const TITLE_WORKING_RE = /^\s*[⠀-⣿]/u;
+// «Работает ли» определяется общим с вебом правилом (protocol/session-title):
+// индикатор в начале pane_title, кроме ✳. Своя копия регулярки тут уже приводила
+// к расхождению — Claude Code сменил спиннер, и агент с вебом сломались порознь.
+// ✳ (ожидание) НЕ считаем звонком: это дефолтное состояние idle-сессии, висит
+// даже на свежей, где ничего не вводили.
 
 /** Команды-оболочки: их не считаем «командой сессии» (см. выбор command). */
 const SHELL_COMMANDS = new Set(['zsh', 'bash', 'sh', '-zsh', 'login']);
@@ -250,9 +252,11 @@ export class SessionService {
     const seen = new Set<string>();
     for (const s of sessions) {
       seen.add(s.name);
-      // Пока сессия работает (брайлевый заголовок) — запоминаем задачу для пуша.
-      if (TITLE_WORKING_RE.test(s.title)) {
-        const task = s.title.replace(/^\s*[⠀-⣿]\s*/u, '').trim();
+      // Пока сессия работает — запоминаем задачу из заголовка для тела пуша.
+      // Индикатор срезаем тем же общим правилом, что и веб: захардкоженный глиф
+      // тут уже переживал смену спиннера в Claude Code и оставлял его в тексте.
+      if (sessionWorking(s.title)) {
+        const task = sessionTitleText(s.title);
         if (task) this.lastTask.set(s.name, task);
       }
       const prev = this.prevBell.get(s.name) ?? false;

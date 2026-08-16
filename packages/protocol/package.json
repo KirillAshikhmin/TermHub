@@ -11,6 +11,10 @@
     "./frames": {
       "types": "./dist/frames.d.ts",
       "default": "./dist/frames.js"
+    },
+    "./session-title": {
+      "types": "./dist/session-title.d.ts",
+      "default": "./dist/session-title.js"
     }
   },
   "scripts": {
