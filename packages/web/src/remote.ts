@@ -8,6 +8,7 @@ import type { Identity } from '@termhub/protocol';
 
 import { mountDashboard } from './dashboard';
 import { mountFiles } from './files';
+import { mountGradle } from './gradle';
 import { mountRepo } from './repo';
 import { t } from './i18n';
 import { addAgent, listAgents, loadClientName, loadIdentity, removeAgent, saveAgentLocalUrls } from './keys';
@@ -28,6 +29,7 @@ export type RemoteRoute =
   | { name: 'files' }
   | { name: 'sfiles'; session: string }
   | { name: 'srepo'; session: string }
+  | { name: 'sgradle'; session: string }
   | { name: 'diag' }
   | { name: 'pair' };
 
@@ -309,6 +311,11 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
       }
       if (route.name === 'srepo') {
         if (transport) return mountRepo(root, transport, route.session);
+        location.hash = '#/';
+        return mountAgentPicker(root);
+      }
+      if (route.name === 'sgradle') {
+        if (transport) return mountGradle(root, transport, route.session);
         location.hash = '#/';
         return mountAgentPicker(root);
       }

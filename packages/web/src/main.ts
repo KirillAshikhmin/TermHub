@@ -56,6 +56,14 @@ function parseRoute(): RemoteRoute {
       return { name: 'dashboard' };
     }
   }
+  const sgradle = /^#\/sgradle\/([^/]*)/.exec(hash);
+  if (sgradle) {
+    try {
+      return { name: 'sgradle', session: decodeURIComponent(sgradle[1]!) };
+    } catch {
+      return { name: 'dashboard' };
+    }
+  }
   const term = /^#\/term\/(.+)$/.exec(hash);
   if (term) {
     try {

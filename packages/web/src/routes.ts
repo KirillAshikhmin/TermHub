@@ -21,6 +21,11 @@ export function srepoHash(session: string, path: string): string {
   return `#/srepo/${encodeURIComponent(session)}/${path ? encodeURIComponent(path) : ''}`;
 }
 
+/** Вкладка Gradle сессии: #/sgradle/<session> (подпути нет — вкладка одна на сессию). */
+export function sgradleHash(session: string): string {
+  return `#/sgradle/${encodeURIComponent(session)}`;
+}
+
 /** Подпуть из session-scoped hash; null — сегмент подпути отсутствует (открыть по
  *  умолчанию — по пути сессии). Имя сессии берётся роутером отдельно. */
 export function parseSessionSub(prefix: 'sfiles' | 'srepo'): string | null {

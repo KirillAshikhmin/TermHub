@@ -215,3 +215,47 @@ export interface GradleRunRequest {
 - Веб: `Transport.gradle<T>(action, params)` в обеих реализациях + `api.gradle`.
   Тайм-аут relay-запроса — `GRADLE_TIMEOUT_MS = 190_000` (у `tasks` на агенте свой
   потолок 180 с; общий 10-секундный обрывал бы первое открытие вкладки).
+
+### Дописано таском 04 (`web/gradle.ts`, `ui.ts`, `workspace.ts`, `routes.ts`, `main.ts`, `remote.ts`)
+
+- `mountGradle(root, transport, session): () => void` — как заявлено (обёртка для роутера).
+  Рядом — `mountGradleTab(root, transport, session): GradleTab`, где
+  `GradleTab = { listPanel: HTMLElement; run(opts): Promise<GradleRunState | null>; teardown(): void }`:
+  так поведение вкладки проверяется тестом, а таск 05 получает шов, не переписывая монтирование.
+  `listPanel` — `section.th-gradle__list` (сейчас с `p.th-gradle__placeholder`, её и заменяет список);
+  `run({tasks, args?, subdir?, force?})` сам переподключает `openTerm` после `run` (сессия
+  пересоздаётся под ТЕМ ЖЕ именем — без явного detach окно осталось бы на мёртвом канале),
+  чистит xterm и обновляет шапку; `phase: 'running'` без `force` — «сборка уже идёт»
+  (диалог истории 16 за вызывающим); `null` — ошибка, тост уже показан.
+- Кэш детекта живёт в `ui.ts`: `detectGradle(transport, session): Promise<GradleProject | null>`
+  — сбой запроса ПРОБРАСЫВАЕТСЯ и не кэшируется (`null` = «обычная папка» → уход на терминал,
+  ошибка → вкладка остаётся с сообщением и «Повторить») и синхронный
+  `knownGradle(transport, session): GradleProject | null | undefined`. Второй нужен
+  `workspace.show()`: вид смонтирован один раз, и без синхронной проверки повторный
+  переход на `#/sgradle/<не-Gradle>` показал бы пустой вид вместо ухода на терминал.
+- `routes.sgradleHash(session)` — без подпути (вкладка одна на сессию).
+  `RemoteRoute` пополнен `{ name: 'sgradle'; session }`, `WsTab` — `'gradle'`.
+- Раскладка: `localStorage['termhub.gradleSplit']` (проценты высоты списка, 15..85) и
+  `['termhub.gradleExpanded']` ('1' — вывод на всю вкладку).
+- Палитра ANSI в `web/gradle.ts` — копия из `term.ts`: общий вынос означал бы правку
+  `term.ts`, которая этому таску запрещена.
+
+### Для таска 05 (из ревью таска 04)
+
+- **Таск 05 работает ВНУТРИ `packages/web/src/gradle.ts`.** Роутер по-прежнему зовёт
+  `mountGradle` и получает только teardown — это менять не надо. Панель списка таск 05
+  подключает к `listPanel` (`section.th-gradle__list`, сейчас с заглушкой) и к запуску
+  `run({tasks, args?, subdir?, force?})`; обе точки отдаёт `mountGradleTab` — тот же
+  монтаж, но с хэндлом (`GradleTab`), на котором стоят тесты вкладки.
+- Маркера `void startBuild;` больше нет: шов перестал быть мёртвым кодом, когда стал
+  полем хэндла (`GradleTab.run`). Снимать нечего.
+- **Палитру ANSI в `gradle.ts` таск 05 не трогает.** Она продублирована из `term.ts`
+  сознательно: тому таску `term.ts` был запрещён. Вынос в общий модуль — дело
+  первого таска, которому `term.ts` разрешён (записано в отложенные).
+- Окно вывода: тач-скролл (`enableTouchScroll`), индикатор состояния канала
+  (`span.th-gradle__conn`, строки `term.reconnecting`/`term.statusClosed`), окно поиска
+  строки `[termhub] gradle exit=N` — 64 КБ хвоста, берётся ПОСЛЕДНЕЕ вхождение
+  (перерисовка экрана при attach иначе теряла бы итог).
+- Шов тестов вкладки — `packages/web/test/gradle-tab.test.ts` (happy-dom, xterm подменён
+  через `vi.mock`): attach при монтировании, переподключение после `run`, разбор строки exit,
+  раскладка/персист, «Стоп», teardown, увод с не-Gradle сессии.

@@ -1,6 +1,8 @@
 // Общие UI-примитивы: иконки, кнопки-иконки, шапка приложения, модалка, тосты,
 // спиннер. Держим здесь, чтобы dashboard/main не разрастались вёрсткой.
 
+import type { GradleProject } from '@termhub/protocol/frames';
+
 import { ApiError } from './api';
 import { getLang, setLang, t } from './i18n';
 import { notificationsSupported, permissionState, requestNotificationPermission } from './notify';
@@ -9,6 +11,7 @@ import { currentTheme, toggleTheme } from './theme';
 import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
+import { sgradleHash } from './routes';
 
 const ICONS: Record<string, string> = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -324,12 +327,56 @@ export function writeToolbarVisible(visible: boolean): void {
   }
 }
 
+// Детект Gradle-проекта — на сессию и на транспорт. Holo-бар рисуют три экрана,
+// и каждое переключение вкладки дёргало бы агента заново; ответ на сессию не
+// меняется, пока не сменился агент (relay: агентов несколько).
+const gradleDetects = new Map<string, Promise<GradleProject | null>>();
+const gradleKnown = new Map<string, GradleProject | null>();
+let gradleOwner: unknown = null;
+
+function resetGradleIfForeign(transport: Transport): void {
+  if (gradleOwner === transport) return;
+  gradleOwner = transport;
+  gradleDetects.clear();
+  gradleKnown.clear();
+}
+
+/** Gradle-проект сессии (кэш на сессию); `null` — обычная папка. Сбой запроса
+ *  ПРОБРАСЫВАЕТСЯ и не кэшируется: «не Gradle-проект» и «не удалось спросить» —
+ *  разные ответы, и вызывающий по ним поступает по-разному (таб не рисуем против
+ *  «остаться на вкладке и повторить»). */
+export function detectGradle(transport: Transport, session: string): Promise<GradleProject | null> {
+  resetGradleIfForeign(transport);
+  const cached = gradleDetects.get(session);
+  if (cached) return cached;
+  const req = transport.gradle<GradleProject | null>('detect', { session }).then(
+    (project) => {
+      const value = project ?? null;
+      gradleKnown.set(session, value);
+      return value;
+    },
+    (err: unknown) => {
+      gradleDetects.delete(session);
+      throw err;
+    },
+  );
+  gradleDetects.set(session, req);
+  return req;
+}
+
+/** Уже известный результат детекта, без запроса: undefined — ещё не спрашивали.
+ *  Нужен роутеру, чтобы не показывать вкладку там, где её нет (см. workspace.ts). */
+export function knownGradle(transport: Transport, session: string): GradleProject | null | undefined {
+  if (gradleOwner !== transport) return undefined;
+  return gradleKnown.get(session);
+}
+
 /** Android-Holo таб-бар рабочего пространства сессии: Сессия / Проводник / Репозиторий
- *  + «⋮» справа (сворачивает тулбар). Активный таб подчёркнут снизу цветной полосой во
- *  всю ширину. Скролла нет — табы делят ширину поровну. Проводник/Репозиторий ведут на
- *  session-scoped роуты (по пути сессии). */
+ *  (+ Gradle у Gradle-проекта) и «⋮» справа (сворачивает тулбар). Активный таб подчёркнут
+ *  снизу цветной полосой во всю ширину. Скролла нет — табы делят ширину поровну.
+ *  Проводник/Репозиторий ведут на session-scoped роуты (по пути сессии). */
 export function renderHoloBar(opts: {
-  active: 'term' | 'files' | 'repo';
+  active: 'term' | 'files' | 'repo' | 'gradle';
   session: string;
   transport?: Transport;
   onHide: () => void;
@@ -338,7 +385,7 @@ export function renderHoloBar(opts: {
   bar.className = 'th-holobar';
   bar.setAttribute('role', 'tablist');
   const enc = encodeURIComponent(opts.session);
-  const mkTab = (key: 'term' | 'files' | 'repo', label: string, hash: string): HTMLElement => {
+  const mkTab = (key: 'term' | 'files' | 'repo' | 'gradle', label: string, hash: string): HTMLElement => {
     const a = document.createElement('a');
     a.className = `th-holotab${opts.active === key ? ' is-active' : ''}`;
     a.href = hash;
@@ -362,6 +409,19 @@ export function renderHoloBar(opts: {
   hide.addEventListener('mousedown', (e) => e.preventDefault());
   hide.addEventListener('click', opts.onHide);
   bar.append(hide);
+  // Четвёртый таб — только у Gradle-проекта, и бар его не ждёт: три таба уже на
+  // экране, Gradle встаёт перед «⋮», когда детект вернул проект (история 4).
+  const transport = opts.transport;
+  if (transport && (!scope || scope.files)) {
+    void detectGradle(transport, opts.session).then(
+      (project) => {
+        if (project) bar.insertBefore(mkTab('gradle', t('holo.gradle'), sgradleHash(opts.session)), hide);
+      },
+      () => {
+        // Не спросили — таба нет; следующий рендер бара спросит снова (кэш не занят).
+      },
+    );
+  }
   return bar;
 }
 
