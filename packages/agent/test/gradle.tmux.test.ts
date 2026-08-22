@@ -158,7 +158,7 @@ describe('gradle — запуск в tmux (изолированный сокет
     process.env.SHELL = shell;
     try {
       await expect(startRun({ session, dir: bare, tasks: ['build'], socketName })).rejects.toThrow(
-        /Не нашёл ни \.\/gradlew, ни gradle/,
+        /Neither \.\/gradlew nor gradle found/,
       );
     } finally {
       if (prev === undefined) delete process.env.SHELL;

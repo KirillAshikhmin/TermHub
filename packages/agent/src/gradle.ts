@@ -197,7 +197,7 @@ function stderrTail(stderr: string, lines = 12): string {
 /** Список тасок проекта. Кэшируется по (папка → mtime build-файлов). */
 export async function listTasks(dir: string, opts: ListTasksOpts = {}): Promise<GradleTasks> {
   const project = await detectProject(dir);
-  if (!project) throw new Error('Не Gradle-проект');
+  if (!project) throw new Error('Not a Gradle project');
   const root = project.dir;
   const sig = await buildFilesSig(root);
   if (opts.refresh) tasksCache.delete(root);
@@ -209,7 +209,7 @@ export async function listTasks(dir: string, opts: ListTasksOpts = {}): Promise<
   const r = await runShell(cmd, root);
   if (r.failed) {
     const tail = stderrTail(r.stderr) || stderrTail(r.stdout);
-    throw new Error(`Gradle не отдал список тасок${tail ? `:\n${tail}` : ''}`);
+    throw new Error(`Gradle failed to list tasks${tail ? `:\n${tail}` : ''}`);
   }
   const value = parseTasksOutput(r.stdout);
   tasksCache.set(root, { sig, value });
@@ -412,14 +412,14 @@ export function isBuildSessionName(name: string): boolean {
 
 /** Имя таски: отвергаем всё, что не прошло, — не экранируем (§7 спецификации). */
 export function checkTaskName(name: string): void {
-  if (!TASK_RE.test(name)) throw new Error(`Недопустимое имя таски: ${JSON.stringify(name)}`);
+  if (!TASK_RE.test(name)) throw new Error(`Invalid task name ${JSON.stringify(name)}`);
 }
 
 /** Аргументы запуска: каждый по регулярке, не больше MAX_ARGS штук. */
 export function checkArgs(args: string[]): void {
-  if (args.length > MAX_ARGS) throw new Error(`Слишком много аргументов: ${args.length} > ${MAX_ARGS}`);
+  if (args.length > MAX_ARGS) throw new Error(`Too many arguments: ${args.length} > ${MAX_ARGS}`);
   for (const a of args) {
-    if (!ARG_RE.test(a)) throw new Error(`Недопустимый аргумент: ${JSON.stringify(a)}`);
+    if (!ARG_RE.test(a)) throw new Error(`Invalid argument ${JSON.stringify(a)}`);
   }
 }
 
@@ -551,18 +551,18 @@ async function resolveGradle(root: string, dir: string): Promise<string> {
   if (await isExecutableFile(path.join(root, 'gradlew'))) {
     const rel = path.relative(dir, path.join(root, 'gradlew'));
     if (!WRAPPER_REL_RE.test(rel))
-      throw new Error('Папка запуска вне корня проекта — wrapper оттуда не адресовать');
+      throw new Error('Run directory outside project root: gradlew is not addressable from there');
     return rel === 'gradlew' ? './gradlew' : rel;
   }
   const r = await runShell(GRADLE_LOOKUP_CMD, dir);
   if (!r.failed && r.stdout.trim().length > 0) return 'gradle';
-  throw new Error('Не нашёл ни ./gradlew, ни gradle');
+  throw new Error('Neither ./gradlew nor gradle found');
 }
 
 /** Запускает таски в отдельной tmux-сессии и возвращает её состояние. */
 export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   const args = opts.args ?? [];
-  if (opts.tasks.length === 0) throw new Error('Не выбрано ни одной таски');
+  if (opts.tasks.length === 0) throw new Error('No tasks selected');
   for (const t of opts.tasks) checkTaskName(t);
   checkArgs(args);
 
@@ -580,7 +580,7 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   await tmux(['kill-session', '-t', `=${name}`], opts.socketName);
   const created = await tmux(['new-session', '-d', '-s', name, '-c', dir], opts.socketName);
   if (created.code !== 0)
-    throw new Error(`Не удалось создать сборочную сессию: ${created.stderr.trim() || created.code}`);
+    throw new Error(`Failed to create build session: ${created.stderr.trim() || created.code}`);
   stopSent.delete(name);
 
   const startedAt = Date.now();
