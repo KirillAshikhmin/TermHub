@@ -12,7 +12,14 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { GradleProject, GradleRunConfig, GradleTask, GradleTasks } from '@termhub/protocol';
+import type {
+  GradleProject,
+  GradleRunConfig,
+  GradleRunPhase,
+  GradleRunState,
+  GradleTask,
+  GradleTasks,
+} from '@termhub/protocol';
 
 /** Маркеры Gradle-проекта в корне сессии — в порядке, в каком их перечисляем наружу. */
 const MARKERS = ['settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', 'gradlew'];
@@ -48,6 +55,18 @@ const MAX_WORKSPACE_BYTES = 4 * 1024 * 1024;
 
 // ── Детект проекта ───────────────────────────────────────────────────────────
 
+/** Есть ли исполняемый файл по пути (для ./gradlew). */
+async function isExecutableFile(p: string): Promise<boolean> {
+  try {
+    const st = await fsp.stat(p);
+    if (!st.isFile()) return false;
+    await fsp.access(p, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fsp.stat(p);
@@ -65,16 +84,7 @@ export async function detectProject(dir: string): Promise<GradleProject | null> 
     if (await exists(path.join(root, m))) markers.push(m);
   }
   if (markers.length === 0) return null;
-  let wrapper = false;
-  if (markers.includes('gradlew')) {
-    try {
-      const st = await fsp.stat(path.join(root, 'gradlew'));
-      await fsp.access(path.join(root, 'gradlew'), fs.constants.X_OK);
-      wrapper = st.isFile();
-    } catch {
-      wrapper = false;
-    }
-  }
+  const wrapper = markers.includes('gradlew') && (await isExecutableFile(path.join(root, 'gradlew')));
   return { dir: root, wrapper, markers };
 }
 
@@ -411,4 +421,195 @@ export function checkArgs(args: string[]): void {
   for (const a of args) {
     if (!ARG_RE.test(a)) throw new Error(`Недопустимый аргумент: ${JSON.stringify(a)}`);
   }
+}
+
+// ── Запуск сборки в tmux ─────────────────────────────────────────────────────
+
+/** Пользовательские опции сборочной сессии: что запущено, когда и как зовут её
+ *  оболочку в простое. Хранение в самой tmux-сессии, а не в памяти агента, —
+ *  тогда после рестарта агента статус идущей сборки читается как ни в чём не бывало. */
+const OPT_COMMAND = '@termhub_gradle_cmd';
+const OPT_STARTED = '@termhub_gradle_started';
+const OPT_SHELL = '@termhub_gradle_shell';
+
+/** Хвост командной строки: без него код выхода не увидеть — сессия остаётся в оболочке. */
+const EXIT_TAIL = "; printf '\\n[termhub] gradle exit=%s\\n' $?";
+
+/** Оболочки: если в панели одна из них, сборка уже не идёт. Запасной вариант на
+ *  случай, когда имя оболочки сессии не записалось (см. OPT_SHELL). */
+const SHELL_COMMANDS = new Set(['zsh', 'bash', 'sh', 'dash', 'fish', 'ksh', '-zsh', '-bash', '-sh', 'login']);
+
+/** Поиск gradle в PATH login-оболочки — строка КОНСТАНТНАЯ (см. шапку файла). */
+const GRADLE_LOOKUP_CMD = 'command -v gradle';
+
+/** Путь к wrapper из папки запуска: только «..» и само имя — имён каталогов в нём
+ *  нет, поэтому метасимволам оболочки взяться неоткуда. */
+const WRAPPER_REL_RE = /^(\.\.\/)*gradlew$/;
+
+/** Сколько времени после отправки строка считается «уже запущенной», даже если в
+ *  панели ещё оболочка: login-оболочка сессии успевает прочитать ~/.zshrc не мгновенно,
+ *  и без этой отсрочки только что запущенная сборка отдавалась бы как finished.
+ *  Настоящую сборку окно не задевает: gradlew занимает панель ещё на старте JVM. */
+const START_GRACE_MS = 5000;
+
+/** «Сборочной сессии нет» — каждый раз свежий объект: состояние уходит наружу и
+ *  не должно оказаться общим для всех вызовов. */
+function idleState(): GradleRunState {
+  return { phase: 'idle', session: null, command: null, startedAt: null };
+}
+
+interface TmuxResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** tmux с изолированным сокетом (если задан). Не бросает: код возврата — часть ответа. */
+function tmux(args: string[], socketName?: string): Promise<TmuxResult> {
+  const full = socketName ? ['-L', socketName, ...args] : args;
+  return new Promise((resolve) => {
+    execFile('tmux', full, { encoding: 'utf8', maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
+      const e = err as (Error & { code?: number | string }) | null;
+      resolve({
+        code: typeof e?.code === 'number' ? e.code : e ? 1 : 0,
+        stdout: String(stdout ?? ''),
+        stderr: String(stderr ?? ''),
+      });
+    });
+  });
+}
+
+/** Цель tmux для команд, принимающих target-pane: `=<имя>:` — с двоеточием.
+ *  Без двоеточия tmux ищет ПАНЕЛЬ с таким именем и не находит; «=» выключает
+ *  поиск по префиксу имени. */
+function paneTarget(name: string): string {
+  return `=${name}:`;
+}
+
+export interface RunTargetOpts {
+  /** Имя рабочей сессии — сборочная вычисляется из него. */
+  session: string;
+  /** Изолированный сокет tmux (в проде — config.TMUX_SOCKET). */
+  socketName?: string;
+}
+
+/** Сессии, которым «Стоп» уже отправлял Ctrl+C: повторный «Стоп» при всё ещё живой
+ *  команде убивает сессию совсем (история 18). Сбрасывается запуском и завершением. */
+const stopSent = new Set<string>();
+
+/** Идёт ли в панели что-то кроме оболочки. */
+function isBusy(current: string, idleShell: string): boolean {
+  if (current.length === 0) return false;
+  if (idleShell.length > 0) return current !== idleShell;
+  return !SHELL_COMMANDS.has(current);
+}
+
+/** Состояние сборки: idle — сборочной сессии нет, running — в панели идёт не
+ *  оболочка, finished — сессия жива, команда отработала (вывод на месте). */
+export async function runStatus(opts: RunTargetOpts): Promise<GradleRunState> {
+  const name = buildSessionName(opts.session);
+  const fmt = `#{pane_current_command}\t#{${OPT_COMMAND}}\t#{${OPT_STARTED}}\t#{${OPT_SHELL}}`;
+  const r = await tmux(['list-panes', '-t', paneTarget(name), '-F', fmt], opts.socketName);
+  if (r.code !== 0) {
+    stopSent.delete(name);
+    return idleState();
+  }
+  let busy = false;
+  let command = '';
+  let started = '';
+  for (const line of r.stdout.split('\n').filter((l) => l.length > 0)) {
+    const [current = '', cmd = '', at = '', shell = ''] = line.split('\t');
+    if (isBusy(current.trim(), shell.trim())) busy = true;
+    if (cmd) command = cmd;
+    if (at) started = at;
+  }
+  const at = Number(started);
+  const startedAt = Number.isFinite(at) && at > 0 ? at : null;
+  const justSent = startedAt !== null && Date.now() - startedAt < START_GRACE_MS;
+  const phase: GradleRunPhase = busy || justSent ? 'running' : 'finished';
+  if (phase !== 'running') stopSent.delete(name);
+  return { phase, session: name, command: command || null, startedAt };
+}
+
+export interface StartRunOpts extends RunTargetOpts {
+  /** Папка запуска — вызывающий уже проверил её вхождение в корень сессии. */
+  dir: string;
+  /** Корень проекта: там ищется wrapper (§6). По умолчанию — сама папка запуска. */
+  root?: string;
+  tasks: string[];
+  args?: string[];
+  /** Остановить идущую сборку и запустить новую. Без него идущая сборка не трогается. */
+  force?: boolean;
+}
+
+/** Чем запускать: gradlew из КОРНЯ проекта (первым — как в IDEA), иначе gradle из
+ *  PATH login-оболочки, иначе запускать нечем (§6 спецификации). Многомодульная
+ *  сборка держит wrapper только в корне, а запуск идёт в подпапке (`subdir`,
+ *  `externalProjectPath`) — поэтому корень адресуется относительным путём от папки
+ *  запуска: `./gradlew` из корня, `../gradlew` из `<root>/app`. */
+async function resolveGradle(root: string, dir: string): Promise<string> {
+  if (await isExecutableFile(path.join(root, 'gradlew'))) {
+    const rel = path.relative(dir, path.join(root, 'gradlew'));
+    if (!WRAPPER_REL_RE.test(rel))
+      throw new Error('Папка запуска вне корня проекта — wrapper оттуда не адресовать');
+    return rel === 'gradlew' ? './gradlew' : rel;
+  }
+  const r = await runShell(GRADLE_LOOKUP_CMD, dir);
+  if (!r.failed && r.stdout.trim().length > 0) return 'gradle';
+  throw new Error('Не нашёл ни ./gradlew, ни gradle');
+}
+
+/** Запускает таски в отдельной tmux-сессии и возвращает её состояние. */
+export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
+  const args = opts.args ?? [];
+  if (opts.tasks.length === 0) throw new Error('Не выбрано ни одной таски');
+  for (const t of opts.tasks) checkTaskName(t);
+  checkArgs(args);
+
+  const dir = path.resolve(opts.dir);
+  const bin = await resolveGradle(path.resolve(opts.root ?? opts.dir), dir);
+  const name = buildSessionName(opts.session);
+  const line = [bin, ...opts.tasks, ...args].join(' ');
+
+  // Вторую сборку поверх идущей молча не запускаем: вызывающий сам решит, гасить
+  // ли прежнюю (история 16), и придёт снова с force.
+  const current = await runStatus(opts);
+  if (current.phase === 'running' && !opts.force) return current;
+
+  // Прежняя сборочная сессия (с выводом прошлого запуска) уступает место новой.
+  await tmux(['kill-session', '-t', `=${name}`], opts.socketName);
+  const created = await tmux(['new-session', '-d', '-s', name, '-c', dir], opts.socketName);
+  if (created.code !== 0)
+    throw new Error(`Не удалось создать сборочную сессию: ${created.stderr.trim() || created.code}`);
+  stopSent.delete(name);
+
+  const startedAt = Date.now();
+  const target = paneTarget(name);
+  // Имя оболочки в простое — эталон для «идёт или закончилось» (см. isBusy).
+  const idleShell = (await tmux(['display-message', '-p', '-t', target, '#{pane_current_command}'], opts.socketName)).stdout.trim();
+  await tmux(['set-option', '-t', target, OPT_COMMAND, line], opts.socketName);
+  await tmux(['set-option', '-t', target, OPT_STARTED, String(startedAt)], opts.socketName);
+  if (idleShell) await tmux(['set-option', '-t', target, OPT_SHELL, idleShell], opts.socketName);
+  // Команда уходит в login-оболочку сессии (§3): -l шлёт строку буквально, Enter — отдельно.
+  await tmux(['send-keys', '-t', target, '-l', line + EXIT_TAIL], opts.socketName);
+  await tmux(['send-keys', '-t', target, 'Enter'], opts.socketName);
+
+  return await runStatus(opts);
+}
+
+/** «Стоп»: первый вызов шлёт Ctrl+C, второй — при всё ещё живой команде — убивает
+ *  сборочную сессию совсем (история 18). Уже завершившуюся сборку не трогаем:
+ *  её вывод пользователю ещё нужен. */
+export async function stopRun(opts: RunTargetOpts): Promise<GradleRunState> {
+  const name = buildSessionName(opts.session);
+  const state = await runStatus(opts);
+  if (state.phase !== 'running') return state;
+  if (stopSent.has(name)) {
+    await tmux(['kill-session', '-t', `=${name}`], opts.socketName);
+    stopSent.delete(name);
+    return idleState();
+  }
+  stopSent.add(name);
+  await tmux(['send-keys', '-t', paneTarget(name), 'C-c'], opts.socketName);
+  return await runStatus(opts);
 }

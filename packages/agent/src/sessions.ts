@@ -7,6 +7,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionInfo } from '@termhub/protocol';
 import { sessionWorking, sessionTitleText } from '@termhub/protocol';
+import { isBuildSessionName } from './gradle.js';
 
 const POLL_INTERVAL_MS = 2000;
 const EXEC_MAX_BUFFER = 4 * 1024 * 1024;
@@ -158,7 +159,10 @@ export class SessionService {
     } catch (err) {
       if (!isNoServerError(err)) throw err;
     }
-    return parseListOutput(sessionsOut, panesOut);
+    // Сборочные сессии Gradle наружу не отдаём: иначе они полезли бы в дашборд,
+    // в полосу вкладок и в поллинг звонков. Attach на них при этом работает —
+    // WS-роут проверяет имя, а не список.
+    return parseListOutput(sessionsOut, panesOut).filter((s) => !isBuildSessionName(s.name));
   }
 
   async create(req: { name: string; root: string; dir: string; preset: SessionPreset }): Promise<void> {
