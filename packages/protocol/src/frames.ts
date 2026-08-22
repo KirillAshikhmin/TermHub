@@ -43,6 +43,9 @@ export enum FrameType {
   /** Запрос адресов, по которым агент доступен напрямую (минуя relay). */
   Addresses = 39,
   AddressesResult = 40,
+  /** Вкладка Gradle: один фрейм на все экшены (detect/tasks/configs/run/stop/status). */
+  Gradle = 41,
+  GradleResult = 42,
 }
 
 export interface Frame {
@@ -190,6 +193,69 @@ export interface RepoBranches {
   vcs: VcsKind | null;
   current: string;
   branches: string[];
+}
+
+/** Gradle-проект, найденный в корне сессии (null — папка не Gradle-проект). */
+export interface GradleProject {
+  /** Корень проекта (= корень сессии). */
+  dir: string;
+  /** Есть ли ./gradlew (исполняемый). */
+  wrapper: boolean;
+  /** Найденные маркеры: settings.gradle[.kts] / build.gradle[.kts] / gradlew. */
+  markers: string[];
+}
+
+/** Одна таска из вывода `gradle tasks --all`. */
+export interface GradleTask {
+  /** Полное имя: `:app:assembleDebug` или `assemble` для корневого проекта. */
+  name: string;
+  /** Проект-владелец: ':' для корневого, ':app' и т.п. для подпроекта. */
+  project: string;
+  /** Группа из вывода `tasks --all` («Build tasks», «Other tasks», …); '' → «Other tasks». */
+  group: string;
+  description: string;
+}
+
+export interface GradleTasks {
+  tasks: GradleTask[];
+  /** Порядок групп в том виде, в каком их напечатал Gradle («Other tasks» — последней). */
+  groupOrder: string[];
+  /** Когда список получен (мс epoch) — для «Обновить». */
+  fetchedAt: number;
+}
+
+/** Конфигурация запуска Gradle, прочитанная из XML проекта (IDEA). */
+export interface GradleRunConfig {
+  name: string;
+  /** Таски в порядке из XML. */
+  tasks: string[];
+  /** scriptParameters как одна строка (может быть пустой). */
+  args: string;
+  /** Рабочая папка запуска (абсолютная, внутри корня сессии). */
+  dir: string;
+  /** Откуда прочитана: '.run' | 'runConfigurations' | 'workspace'. */
+  source: string;
+}
+
+export type GradleRunPhase = 'idle' | 'running' | 'finished';
+
+/** Состояние сборки в сборочной tmux-сессии. */
+export interface GradleRunState {
+  phase: GradleRunPhase;
+  /** Имя сборочной tmux-сессии (для openTerm); null — её нет. */
+  session: string | null;
+  /** Что запущено сейчас/последним. */
+  command: string | null;
+  startedAt: number | null;
+}
+
+/** Запрос на запуск сборки. */
+export interface GradleRunRequest {
+  session: string;
+  tasks: string[];
+  args: string[];
+  /** Подпапка запуска относительно корня сессии; '' — корень. */
+  subdir: string;
 }
 
 const HEADER_SIZE = 3;

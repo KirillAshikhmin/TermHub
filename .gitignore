@@ -9,3 +9,4 @@ packages/relay/static
 
 # Личные настройки Claude Code (проектный .claude/settings.json — общий)
 .claude/settings.local.json
+.autopilot/serve.*

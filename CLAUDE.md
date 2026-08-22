@@ -113,3 +113,14 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
 
 Примечание: `packages/web/src/relay-transport.ts` даёт предсуществующую tsc-придирку
 (Uint8Array/BlobPart) — не блокер, рантайму безразлично.
+
+<!-- autopilot:start -->
+## Как здесь работает Autopilot
+
+Часть работы ведётся навыком `/autopilot`. Требования, спецификация и таски —
+в `.autopilot/<фича>/`. Прогресс — `.autopilot/dashboard.html`. Правило:
+требование из `manifest.md` может снять только пользователь.
+
+Если сборка прервалась — скажи «продолжи автопилот»: состояние поднимется
+из `.autopilot/state.js`, переспрашивать ничего не нужно.
+<!-- autopilot:end -->

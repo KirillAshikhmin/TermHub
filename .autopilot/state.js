@@ -1,0 +1,55 @@
+window.STATE =
+{
+  "slug": "gradle-tab",
+  "title": "Вкладка Gradle на экране сессии",
+  "mode": "semi",
+  "depth": "normal",
+  "polish": null,
+  "tier": "T2",
+  "briefFile": "2026-08-22-brief.md",
+  "memoryFile": "CLAUDE.md",
+  "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
+  "startedAt": "2026-08-22T15:37:02+03:00",
+  "updatedAt": "2026-08-22T16:10:21+03:00",
+  "finishedAt": null,
+  "stages": [
+    { "id": "preflight", "status": "done", "finishedAt": "2026-08-22T15:37:53+03:00", "startedAt": "2026-08-22T15:37:02+03:00" },
+    { "id": "manifest",  "status": "done", "finishedAt": "2026-08-22T15:38:57+03:00", "startedAt": "2026-08-22T15:37:53+03:00" },
+    { "id": "briefing",  "status": "done", "finishedAt": "2026-08-22T15:44:38+03:00", "startedAt": "2026-08-22T15:38:57+03:00" },
+    { "id": "spec",      "status": "done", "finishedAt": "2026-08-22T15:52:01+03:00", "startedAt": "2026-08-22T15:44:38+03:00" },
+    { "id": "plan",      "status": "done", "note": "5 тасков, ярус T2", "finishedAt": "2026-08-22T15:55:40+03:00", "startedAt": "2026-08-22T15:52:01+03:00" },
+    { "id": "build",     "status": "active", "startedAt": "2026-08-22T15:55:40+03:00" },
+    { "id": "review",    "status": "pending" },
+    { "id": "final",     "status": "pending" }
+  ],
+  "requirements": {
+    "total": 17, "done": 0, "inTicket": 17, "inSpec": 0,
+    "placeholder": 0, "deferred": 0, "dropped": 0
+  },
+  "tickets": [
+    { "id": "01", "title": "Контракт Gradle и чтение проекта на агенте", "requirements": ["R03", "R04", "R05", "R06", "R10i", "R11i", "R15i", "G01", "G02"],
+      "blockedBy": [], "wave": 1, "zone": ["packages/protocol/src/", "packages/agent/src/gradle.ts"], "status": "repair", "startedAt": "2026-08-22T15:56:03+03:00",
+      "retries": 0, "repairs": 1, "handoffs": 0,
+      "repairFindings": ["конфигурация вне корня воскресала из workspace.xml — R05.4", "конфигурация без тасок уходила наружу как запускаемая", "лимиты и молчаливый отброс не покрыты ассертами"] },
+    { "id": "02", "title": "Запуск, остановка и статус сборки в tmux", "requirements": ["R07", "R08", "R09", "R12i", "R13i"],
+      "blockedBy": ["01"], "wave": 2, "zone": ["packages/agent/src/gradle.ts", "packages/agent/src/sessions.ts"], "status": "pending",
+      "retries": 0, "repairs": 0, "handoffs": 0 },
+    { "id": "03", "title": "Gradle по обоим транспортам и права гостя", "requirements": ["R14i"],
+      "blockedBy": ["02"], "wave": 3, "zone": ["packages/agent/src/server.ts", "packages/agent/src/relay-link.ts", "packages/web/src/transport.ts"], "status": "pending",
+      "retries": 0, "repairs": 0, "handoffs": 0 },
+    { "id": "04", "title": "Четвёртая вкладка: маршрут, таб, раскладка, окно вывода", "requirements": ["R01", "R02", "R03", "R08", "R09", "R12i", "R13i"],
+      "blockedBy": ["03"], "wave": 4, "zone": ["packages/web/src/gradle.ts", "packages/web/src/ui.ts", "packages/web/src/workspace.ts"], "status": "pending",
+      "retries": 0, "repairs": 0, "handoffs": 0 },
+    { "id": "05", "title": "Панель: конфигурации, дерево тасок, поиск, недавние", "requirements": ["R04", "R05", "R06", "R07", "R11i", "R15i", "G01", "G02"],
+      "blockedBy": ["04"], "wave": 5, "zone": ["packages/web/src/gradle.ts", "packages/web/src/gradle-view.ts"], "status": "pending",
+      "retries": 0, "repairs": 0, "handoffs": 0 }
+  ],
+  "singlePass": null,
+  "tests": { "passed": 497, "failed": 0 },
+  "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
+  "additions": [],
+  "coverage": { "findings": 6, "missing": 2, "half": 4, "fixed": 6, "note": "1 из 2 «пропущенных» — сужение R05 решением пользователя (G02), в спецификации помечено явно; второе (.idea/workspace.xml) закрыто чтением RunManager" },
+  "concerns": ["gradle.ts:21 — CACHE_FILES завязан на позицию gradlew в MARKERS (индекс, не имя)", "gradle.ts:128-153 — RunResult.code не читается ни одним вызывающим", "gradle.ts:348-360 — try/catch вокруг parseRunConfigXml, у которого нет пути к throw", "gradle.ts:262-283 — самозакрытый <configuration/> даёт конфигурацию с пустым tasks", "frames.ts:230 — GradleRunConfig.source: string вместо union из трёх значений", "frames.ts:46-47 — набор экшенов Gradle живёт только в комментарии, не типом", "gradle.unit.test.ts:278-331 — лимиты MAX_CONFIG_FILES и MAX_WORKSPACE_BYTES не покрыты ассертом", "gradle.unit.test.ts:84-129 — молчаливый отброс строки таски не покрыт ассертом"],
+  "reviewers": { "manifestSpec": "a548ca363619ec34b", "craft": "ad0cc9e74279f2453" },
+  "blind": null
+}
