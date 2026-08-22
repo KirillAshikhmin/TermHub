@@ -455,3 +455,223 @@ describe('listTasks', () => {
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 });
+
+describe('JDK проекта (§6): выбор источника и передача в listTasks', () => {
+  const savedGradleUserHome = process.env.GRADLE_USER_HOME;
+  let userHome: string;
+
+  /** Каталог, похожий на настоящий JDK: с исполняемым bin/java. */
+  async function fakeJdk(parent: string, ...segments: string[]): Promise<string> {
+    const home = path.join(parent, ...segments);
+    await fsp.mkdir(path.join(home, 'bin'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'bin', 'java'), '#!/bin/sh\n', { mode: 0o755 });
+    return home;
+  }
+
+  /** Папка Gradle-проекта с wrapper'ом. */
+  async function gradleProject(): Promise<string> {
+    const dir = await mkTmp();
+    await fsp.writeFile(path.join(dir, 'settings.gradle'), '');
+    await fsp.writeFile(path.join(dir, 'gradlew'), '#!/bin/sh\n', { mode: 0o755 });
+    return dir;
+  }
+
+  /** `.gradle/config.properties` проекта — то, на что ссылается `#GRADLE_LOCAL_JAVA_HOME`. */
+  async function writeConfigProperties(dir: string, javaHome: string): Promise<void> {
+    await fsp.mkdir(path.join(dir, '.gradle'), { recursive: true });
+    await fsp.writeFile(path.join(dir, '.gradle', 'config.properties'), `#Wed Nov 06 11:05:39 MSK 2024\njava.home=${javaHome}\n`);
+  }
+
+  /** Окружение и строка команды первого вызова оболочки. */
+  function firstCall(): { cmd: string; env: NodeJS.ProcessEnv | undefined } {
+    const [, args, opts] = mockExecFile.mock.calls[0] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    return { cmd: args[1], env: opts.env };
+  }
+
+  beforeEach(async () => {
+    // Настоящий ~/.gradle/gradle.properties разработчика не должен влиять на тест.
+    userHome = await mkTmp();
+    process.env.GRADLE_USER_HOME = userHome;
+  });
+
+  afterAll(() => {
+    if (savedGradleUserHome === undefined) delete process.env.GRADLE_USER_HOME;
+    else process.env.GRADLE_USER_HOME = savedGradleUserHome;
+  });
+
+  it('источник 1: org.gradle.java.home из gradle.properties проекта', async () => {
+    const dir = await gradleProject();
+    const jdk = await fakeJdk(dir, 'jdk-project');
+    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.jvmargs=-Xmx2048m\norg.gradle.java.home=${jdk}\n`);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    const call = firstCall();
+    expect(call.env?.JAVA_HOME).toBe(jdk);
+    // Перед самой командой JAVA_HOME экспортируется ещё раз — из отдельной переменной,
+    // а не из строки: профиль пользователя успевает перебить переданное окружение.
+    expect(call.env?.TERMHUB_JAVA_HOME).toBe(jdk);
+    expect(call.cmd).toBe('export JAVA_HOME="$TERMHUB_JAVA_HOME"; ./gradlew tasks --all --console=plain -q');
+  });
+
+  it('источник 2: org.gradle.java.home из ~/.gradle/gradle.properties', async () => {
+    const dir = await gradleProject();
+    const jdk = await fakeJdk(userHome, 'jdk-user');
+    await fsp.writeFile(path.join(userHome, 'gradle.properties'), `org.gradle.java.home=${jdk}\n`);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(jdk);
+  });
+
+  it('источник 3: java.home из <проект>/.gradle/config.properties', async () => {
+    const dir = await gradleProject();
+    const jdk = await fakeJdk(dir, 'jdk-config');
+    await writeConfigProperties(dir, jdk);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(jdk);
+  });
+
+  it('источник 4: без единого файла окружение login-оболочки не трогается', async () => {
+    const dir = await gradleProject();
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    const call = firstCall();
+    expect(call.env).toBeUndefined();
+    expect(call.cmd).toBe('./gradlew tasks --all --console=plain -q');
+  });
+
+  it('приоритет: проектный gradle.properties сильнее пользовательского и config.properties', async () => {
+    const dir = await gradleProject();
+    const projectJdk = await fakeJdk(dir, 'jdk-project');
+    const userJdk = await fakeJdk(userHome, 'jdk-user');
+    const configJdk = await fakeJdk(dir, 'jdk-config');
+    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.java.home=${projectJdk}\n`);
+    await fsp.writeFile(path.join(userHome, 'gradle.properties'), `org.gradle.java.home=${userJdk}\n`);
+    await writeConfigProperties(dir, configJdk);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(projectJdk);
+  });
+
+  it('приоритет: пользовательский gradle.properties сильнее config.properties', async () => {
+    const dir = await gradleProject();
+    const userJdk = await fakeJdk(userHome, 'jdk-user');
+    const configJdk = await fakeJdk(dir, 'jdk-config');
+    await fsp.writeFile(path.join(userHome, 'gradle.properties'), `org.gradle.java.home=${userJdk}\n`);
+    await writeConfigProperties(dir, configJdk);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(userJdk);
+  });
+
+  it('путь с пробелами доезжает целиком и в строку команды не попадает', async () => {
+    const dir = await gradleProject();
+    // Ровно тот случай, ради которого таск и заведён: JDK внутри Android Studio.app.
+    const jdk = await fakeJdk(dir, 'Applications', 'Android Studio.app', 'Contents', 'jbr', 'Contents', 'Home');
+    await writeConfigProperties(dir, jdk);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    const call = firstCall();
+    expect(call.env?.JAVA_HOME).toBe(jdk);
+    expect(jdk).toContain('Android Studio.app');
+    expect(call.cmd).not.toContain('Android Studio');
+  });
+
+  it('несуществующий путь из файла игнорируется — берётся следующий источник', async () => {
+    const dir = await gradleProject();
+    const userJdk = await fakeJdk(userHome, 'jdk-user');
+    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.java.home=${path.join(dir, 'no-such-jdk')}\n`);
+    await fsp.writeFile(path.join(userHome, 'gradle.properties'), `org.gradle.java.home=${userJdk}\n`);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(userJdk);
+  });
+
+  it('неисполняемый bin/java игнорируется — берётся следующий источник', async () => {
+    const dir = await gradleProject();
+    const broken = path.join(dir, 'jdk-broken');
+    await fsp.mkdir(path.join(broken, 'bin'), { recursive: true });
+    await fsp.writeFile(path.join(broken, 'bin', 'java'), '', { mode: 0o644 });
+    const configJdk = await fakeJdk(dir, 'jdk-config');
+    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.java.home=${broken}\n`);
+    await writeConfigProperties(dir, configJdk);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(configJdk);
+  });
+
+  it('ни один источник не подошёл — окружение остаётся как было', async () => {
+    const dir = await gradleProject();
+    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.java.home=${path.join(dir, 'no-such-jdk')}\n`);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env).toBeUndefined();
+  });
+
+  it('повтор ключа: побеждает ПОСЛЕДНЕЕ вхождение — как у java.util.Properties', async () => {
+    const dir = await gradleProject();
+    const first = await fakeJdk(dir, 'jdk-first');
+    const last = await fakeJdk(dir, 'jdk-last');
+    // Так свойство и дописывают: строкой в конец уже существующего файла.
+    await fsp.writeFile(
+      path.join(dir, 'gradle.properties'),
+      `org.gradle.java.home=${first}\norg.gradle.jvmargs=-Xmx2048m\norg.gradle.java.home=${last}\n`,
+    );
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(last);
+  });
+
+  it('разделителем ключа и значения может быть пробел, а не только = и :', async () => {
+    const dir = await gradleProject();
+    const jdk = await fakeJdk(dir, 'Android Studio.app', 'Contents', 'jbr', 'Contents', 'Home');
+    // Форма `ключ значение` легальна для Properties.load; пробелы внутри значения — часть пути.
+    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.java.home ${jdk}\n`);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(jdk);
+  });
+
+  it('значение, перенесённое обратным слэшем, склеивается в один путь', async () => {
+    const dir = await gradleProject();
+    const jdk = await fakeJdk(dir, 'jdk-continued');
+    const head = jdk.slice(0, -4);
+    const tail = jdk.slice(-4);
+    await writeConfigProperties(dir, `${head}\\\n    ${tail}`);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    expect(firstCall().env?.JAVA_HOME).toBe(jdk);
+  });
+
+  it('сменился JDK — список перечитывается, хотя build-файлы не тронуты', async () => {
+    const dir = await gradleProject();
+    const first = await fakeJdk(dir, 'jdk-first');
+    const second = await fakeJdk(dir, 'jdk-second');
+    await writeConfigProperties(dir, first);
+    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+
+    await listTasks(dir);
+    await listTasks(dir);
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+
+    await writeConfigProperties(dir, second);
+    await listTasks(dir);
+    expect(mockExecFile).toHaveBeenCalledTimes(2);
+    const [, args, opts] = mockExecFile.mock.calls[1] as [string, string[], { env?: NodeJS.ProcessEnv }];
+    expect(opts.env?.JAVA_HOME).toBe(second);
+    expect(args[1]).toContain('tasks --all');
+  });
+});

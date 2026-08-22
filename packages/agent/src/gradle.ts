@@ -5,12 +5,14 @@
 // проверяются регуляркой и ОТВЕРГАЮТСЯ, а не экранируются. Единственное исключение
 // по спецификации — чтение списка тасок через login-оболочку ($SHELL -lc): Gradle
 // почти всегда зависит от JAVA_HOME/sdkman/asdf из ~/.zshrc. Строка команды там
-// КОНСТАНТНАЯ, пользовательских данных в ней нет — папка задаётся через cwd.
+// КОНСТАНТНАЯ, пользовательских данных в ней нет — папка задаётся через cwd, а путь
+// к JDK проекта (§6) — отдельным значением в окружении, не внутри строки.
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type {
   GradleProject,
@@ -32,6 +34,19 @@ const TASKS_CMD_WRAPPER = './gradlew tasks --all --console=plain -q';
 const TASKS_CMD_GRADLE = 'gradle tasks --all --console=plain -q';
 const TASKS_TIMEOUT_MS = 180_000;
 const EXEC_MAX_BUFFER = 16 * 1024 * 1024;
+
+/** Где записан JDK проекта — в том же порядке, в каком его выбирает IDEA (§6). */
+const JDK_KEY_GRADLE = 'org.gradle.java.home';
+const JDK_KEY_CONFIG = 'java.home';
+const MAX_PROPS_BYTES = 256 * 1024;
+
+/** Путь к JDK едет ОТДЕЛЬНЫМ значением (env у execFile, `-e` у tmux new-session), а не
+ *  внутри строки команды: в нём бывают пробелы («/Applications/Android Studio.app/…»),
+ *  а строки команд у нас константны и не экранируются. Повторный export перед самой
+ *  командой нужен потому, что ~/.zshrc пользователя выставляет свой JAVA_HOME уже ПОСЛЕ
+ *  старта оболочки и переданное окружение иначе перебивается. */
+const JDK_ENV_VAR = 'TERMHUB_JAVA_HOME';
+const JDK_EXPORT = `export JAVA_HOME="$${JDK_ENV_VAR}"; `;
 
 /** Секция «Rules» в конце вывода `tasks --all` — это не таски, а шаблоны имён. */
 const RULES_SECTION = 'Rules';
@@ -88,6 +103,124 @@ export async function detectProject(dir: string): Promise<GradleProject | null> 
   return { dir: root, wrapper, markers };
 }
 
+// ── JDK проекта ──────────────────────────────────────────────────────────────
+
+/** Логические строки .properties: строка, оканчивающаяся НЕЧЁТНЫМ числом обратных
+ *  слэшей, продолжается следующей — у продолжения отбрасываются ведущие пробелы.
+ *  Комментарий не продолжается: он кончается на своём переводе строки. */
+function logicalLines(text: string): string[] {
+  const out: string[] = [];
+  let acc: string | null = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^[ \t\f]+/, '');
+    if (acc === null && (line.length === 0 || line.startsWith('#') || line.startsWith('!'))) continue;
+    const cur: string = (acc ?? '') + line;
+    if (/(?:^|[^\\])(?:\\\\)*\\$/.test(cur)) {
+      acc = cur.slice(0, -1);
+      continue;
+    }
+    out.push(cur);
+    acc = null;
+  }
+  if (acc !== null) out.push(acc);
+  return out;
+}
+
+/** Разбор одной логической строки: ключ кончается на первом неэкранированном `=`, `:`
+ *  ИЛИ пробеле (`java.util.Properties` признаёт разделителем и его), дальше — значение. */
+function parseProperty(line: string): { key: string; value: string } | null {
+  let i = 0;
+  let key = '';
+  for (; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '\\' && i + 1 < line.length) {
+      key += ch + line[i + 1];
+      i += 1;
+      continue;
+    }
+    if (ch === '=' || ch === ':' || ch === ' ' || ch === '\t' || ch === '\f') break;
+    key += ch;
+  }
+  if (key.length === 0) return null;
+  while (i < line.length && (line[i] === ' ' || line[i] === '\t' || line[i] === '\f')) i += 1;
+  if (i < line.length && (line[i] === '=' || line[i] === ':')) {
+    i += 1;
+    while (i < line.length && (line[i] === ' ' || line[i] === '\t' || line[i] === '\f')) i += 1;
+  }
+  // Хвостовые пробелы Properties сохраняет, но путь ими не кончается, а в файле они бывают.
+  const value = line.slice(i).replace(/(?<!\\)[ \t\f]+$/, '');
+  return { key: unescapeProperty(key), value: unescapeProperty(value) };
+}
+
+/** Значение свойства из .properties-файла. Повторённый ключ берётся ПОСЛЕДНИЙ —
+ *  так его читает `java.util.Properties`, а значит и сам Gradle: свойство чаще всего
+ *  дописывают строкой в конец файла. */
+function propertyValue(text: string, key: string): string | null {
+  let found: string | null = null;
+  for (const line of logicalLines(text)) {
+    const parsed = parseProperty(line);
+    if (parsed !== null && parsed.key === key) found = parsed.value;
+  }
+  return found;
+}
+
+/** Escape-последовательности значения: Properties.store() экранирует пробелы, `:`, `=`
+ *  и сам обратный слэш (на Windows путь пишется как `C\:\\Program Files\\…`). */
+function unescapeProperty(value: string): string {
+  let out = '';
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (ch !== '\\' || i + 1 >= value.length) {
+      out += ch;
+      continue;
+    }
+    i += 1;
+    const next = value[i];
+    if (next === 't') out += '\t';
+    else if (next === 'n') out += '\n';
+    else if (next === 'r') out += '\r';
+    else if (next === 'f') out += '\f';
+    else if (next === 'u' && /^[0-9a-fA-F]{4}$/.test(value.slice(i + 1, i + 5))) {
+      out += String.fromCharCode(parseInt(value.slice(i + 1, i + 5), 16));
+      i += 4;
+    } else out += next;
+  }
+  return out;
+}
+
+/** Каталог пользовательских настроек Gradle (его же читает и сама сборка). */
+function gradleUserHome(): string {
+  return process.env.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle');
+}
+
+/** JDK проекта — тот же выбор, что делает IDEA (§6 спецификации): свойство проекта →
+ *  то же свойство в настройках пользователя → `java.home` из `<проект>/.gradle/config.properties`
+ *  (это и есть `#GRADLE_LOCAL_JAVA_HOME` из `.idea/gradle.xml`). Путь, по которому нет
+ *  исполняемого `bin/java`, пропускается, как будто его не записали. `null` — оставить
+ *  окружение login-оболочки как есть. */
+async function resolveJavaHome(root: string): Promise<string | null> {
+  const sources: [string, string][] = [
+    [path.join(root, 'gradle.properties'), JDK_KEY_GRADLE],
+    [path.join(gradleUserHome(), 'gradle.properties'), JDK_KEY_GRADLE],
+    [path.join(root, '.gradle', 'config.properties'), JDK_KEY_CONFIG],
+  ];
+  for (const [file, key] of sources) {
+    const text = await readCapped(file, MAX_PROPS_BYTES);
+    if (text === null) continue;
+    const value = propertyValue(text, key);
+    if (value === null || value.length === 0) continue;
+    const home = path.resolve(root, value);
+    if (await isExecutableFile(path.join(home, 'bin', 'java'))) return home;
+  }
+  return null;
+}
+
+/** Окружение для команды с выбранным JDK. Обе переменные держим вместе: JAVA_HOME
+ *  читает сам gradlew, TERMHUB_JAVA_HOME — источник для повторного export (JDK_EXPORT). */
+function jdkEnv(javaHome: string): NodeJS.ProcessEnv {
+  return { ...process.env, JAVA_HOME: javaHome, [JDK_ENV_VAR]: javaHome };
+}
+
 // ── Список тасок ─────────────────────────────────────────────────────────────
 
 /** Разбирает вывод `gradle tasks --all --console=plain -q`.
@@ -142,13 +275,13 @@ interface RunResult {
   failed: boolean;
 }
 
-function runShell(cmd: string, cwd: string): Promise<RunResult> {
+function runShell(cmd: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<RunResult> {
   const shell = process.env.SHELL || '/bin/sh';
   return new Promise((resolve) => {
     execFile(
       shell,
       ['-lc', cmd],
-      { cwd, timeout: TASKS_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER, encoding: 'utf8' },
+      { cwd, env, timeout: TASKS_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER, encoding: 'utf8' },
       (err, stdout, stderr) => {
         const e = err as (Error & { code?: number | string }) | null;
         resolve({
@@ -199,14 +332,17 @@ export async function listTasks(dir: string, opts: ListTasksOpts = {}): Promise<
   const project = await detectProject(dir);
   if (!project) throw new Error('Not a Gradle project');
   const root = project.dir;
-  const sig = await buildFilesSig(root);
+  const javaHome = await resolveJavaHome(root);
+  // JDK — часть сигнатуры кэша: он сменился (правкой config.properties, например) —
+  // список тасок надо перечитать, хотя build-файлы никто не трогал.
+  const sig = `${await buildFilesSig(root)}|jdk:${javaHome ?? ''}`;
   if (opts.refresh) tasksCache.delete(root);
   else {
     const hit = tasksCache.get(root);
     if (hit && hit.sig === sig) return hit.value;
   }
   const cmd = project.wrapper ? TASKS_CMD_WRAPPER : TASKS_CMD_GRADLE;
-  const r = await runShell(cmd, root);
+  const r = javaHome === null ? await runShell(cmd, root) : await runShell(JDK_EXPORT + cmd, root, jdkEnv(javaHome));
   if (r.failed) {
     const tail = stderrTail(r.stderr) || stderrTail(r.stdout);
     throw new Error(`Gradle failed to list tasks${tail ? `:\n${tail}` : ''}`);
@@ -567,7 +703,10 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   checkArgs(args);
 
   const dir = path.resolve(opts.dir);
-  const bin = await resolveGradle(path.resolve(opts.root ?? opts.dir), dir);
+  const root = path.resolve(opts.root ?? opts.dir);
+  const bin = await resolveGradle(root, dir);
+  // JDK берём у проекта (§6): в окружении login-оболочки почти наверняка чужой.
+  const javaHome = await resolveJavaHome(root);
   const name = buildSessionName(opts.session);
   const line = [bin, ...opts.tasks, ...args].join(' ');
 
@@ -578,7 +717,10 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
 
   // Прежняя сборочная сессия (с выводом прошлого запуска) уступает место новой.
   await tmux(['kill-session', '-t', `=${name}`], opts.socketName);
-  const created = await tmux(['new-session', '-d', '-s', name, '-c', dir], opts.socketName);
+  // Путь к JDK едет отдельным argv-элементом `-e VAR=<путь>`: кавычки не нужны,
+  // пробелы в «/Applications/Android Studio.app/…» ничего не ломают.
+  const jdkArgs = javaHome === null ? [] : ['-e', `JAVA_HOME=${javaHome}`, '-e', `${JDK_ENV_VAR}=${javaHome}`];
+  const created = await tmux(['new-session', '-d', '-s', name, '-c', dir, ...jdkArgs], opts.socketName);
   if (created.code !== 0)
     throw new Error(`Failed to create build session: ${created.stderr.trim() || created.code}`);
   stopSent.delete(name);
@@ -591,7 +733,7 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   await tmux(['set-option', '-t', target, OPT_STARTED, String(startedAt)], opts.socketName);
   if (idleShell) await tmux(['set-option', '-t', target, OPT_SHELL, idleShell], opts.socketName);
   // Команда уходит в login-оболочку сессии (§3): -l шлёт строку буквально, Enter — отдельно.
-  await tmux(['send-keys', '-t', target, '-l', line + EXIT_TAIL], opts.socketName);
+  await tmux(['send-keys', '-t', target, '-l', (javaHome === null ? '' : JDK_EXPORT) + line + EXIT_TAIL], opts.socketName);
   await tmux(['send-keys', '-t', target, 'Enter'], opts.socketName);
 
   return await runStatus(opts);

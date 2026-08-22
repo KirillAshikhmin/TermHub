@@ -217,6 +217,79 @@ describe('gradle — запуск в tmux (изолированный сокет
     expect(await waitPhase('idle', 5000)).toBe('idle');
   }, 30000);
 
+  it('startRun доносит JDK проекта (путь с пробелами) до сборочной сессии', async () => {
+    // Ровно живой случай: JDK внутри Android Studio.app, записан в .gradle/config.properties.
+    const jdkProject = path.join(root, 'projectC');
+    const jdk = path.join(jdkProject, 'Android Studio.app', 'Contents', 'jbr', 'Contents', 'Home');
+    fs.mkdirSync(path.join(jdk, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(jdk, 'bin', 'java'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(jdkProject, 'settings.gradle'), '');
+    fs.mkdirSync(path.join(jdkProject, '.gradle'), { recursive: true });
+    fs.writeFileSync(path.join(jdkProject, '.gradle', 'config.properties'), `java.home=${jdk}\n`);
+    // Пустышка печатает JAVA_HOME, который реально увидела команда.
+    fs.writeFileSync(
+      path.join(jdkProject, 'gradlew'),
+      '#!/bin/sh\nprintf "JH=[%s]\\n" "$JAVA_HOME"\nexec sleep 1\n',
+      { mode: 0o755 },
+    );
+
+    const started = await startRun({ session, dir: jdkProject, tasks: ['assembleDebug'], socketName });
+    // Команда в статусе остаётся чистой: путь к JDK в неё не попадает.
+    expect(started.command).toBe('./gradlew assembleDebug');
+    // Переменная доехала до сессии значением, а не куском строки команды.
+    expect(tmux(['show-environment', '-t', `=${buildName}`, 'JAVA_HOME']).trim()).toBe(`JAVA_HOME=${jdk}`);
+
+    const until = Date.now() + 20000;
+    let pane = '';
+    for (;;) {
+      // -J склеивает перенесённые строки: путь к JDK длиннее ширины панели.
+      pane = tmux(['capture-pane', '-p', '-J', '-t', `=${buildName}:`]);
+      if (pane.includes('JH=[') || Date.now() > until) break;
+      await delay(200);
+    }
+    // JAVA_HOME, увиденный самой сборкой, — тот, что записан в проекте (а не из ~/.zshrc).
+    expect(pane).toContain(`JH=[${jdk}]`);
+  }, 40000);
+
+  it('повторный export побеждает профиль оболочки, выставивший чужой JAVA_HOME', async () => {
+    // Профиль пользователя (~/.zshrc и т.п.) читается уже ПОСЛЕ старта оболочки и
+    // перебивает окружение сессии. Здесь это не свойство машины, а свойство теста:
+    // сборочной сессии подсунута своя оболочка, которая заведомо экспортирует чужой JDK.
+    const hostileShell = path.join(root, 'hostile-shell');
+    fs.writeFileSync(hostileShell, '#!/bin/sh\nJAVA_HOME=/nonexistent/hostile-jdk\nexport JAVA_HOME\nexec /bin/sh -i\n', {
+      mode: 0o755,
+    });
+    const projectD = path.join(root, 'projectD');
+    const jdk = path.join(projectD, 'Android Studio.app', 'Contents', 'jbr', 'Contents', 'Home');
+    fs.mkdirSync(path.join(jdk, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(jdk, 'bin', 'java'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(projectD, 'settings.gradle'), '');
+    fs.mkdirSync(path.join(projectD, '.gradle'), { recursive: true });
+    fs.writeFileSync(path.join(projectD, '.gradle', 'config.properties'), `java.home=${jdk}\n`);
+    fs.writeFileSync(path.join(projectD, 'gradlew'), '#!/bin/sh\nprintf "JH=[%s]\\n" "$JAVA_HOME"\nexec sleep 1\n', {
+      mode: 0o755,
+    });
+
+    // Сервер без сессий не живёт, а set-option ему нужен живым — держим заглушкой.
+    tmux(['new-session', '-d', '-s', 'keeper', '-c', root]);
+    tmux(['set-option', '-g', 'default-command', hostileShell]);
+    let pane = '';
+    try {
+      await startRun({ session, dir: projectD, tasks: ['assembleDebug'], socketName });
+      const until = Date.now() + 20000;
+      for (;;) {
+        pane = tmux(['capture-pane', '-p', '-J', '-t', `=${buildName}:`]);
+        if (pane.includes('JH=[') || Date.now() > until) break;
+        await delay(200);
+      }
+    } finally {
+      tmux(['set-option', '-gu', 'default-command']);
+      tmux(['kill-session', '-t', '=keeper']);
+    }
+    expect(pane).toContain(`JH=[${jdk}]`);
+    expect(pane).not.toContain('JH=[/nonexistent/hostile-jdk]');
+  }, 40000);
+
   it('SessionService.list() не показывает сборочные сессии', async () => {
     fakeGradlew('exec sleep 20');
     tmux(['new-session', '-d', '-s', 'plain', '-c', projectDir]);
