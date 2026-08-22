@@ -5,9 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountGradleTab } from '../src/gradle';
 import { setLang, t } from '../src/i18n';
 import { sgradleHash } from '../src/routes';
-import { renderHoloBar } from '../src/ui';
+import { detectGradle, knownGradle, renderHoloBar } from '../src/ui';
 import type { TermChannelOpts, Transport } from '../src/transport';
-import { routeWorkspace } from '../src/workspace';
+import { mountWorkspace, routeWorkspace } from '../src/workspace';
 
 const PROJECT: GradleProject = { dir: '/p/app', wrapper: true, markers: ['gradlew'] };
 
@@ -67,6 +67,65 @@ describe('renderHoloBar: четвёртый таб Gradle', () => {
 
     expect(detectCalls()).toBe(1);
     expect(tabHrefs(bar)).toContain(sgradleHash('cached'));
+  });
+
+  it('кэш детекта не вечен: папка, ставшая Gradle-проектом, получает таб без перезагрузки', async () => {
+    let answer: GradleProject | null = null;
+    const transport = {
+      mode: 'lan',
+      clientScope: null,
+      gradle: async () => answer,
+    } as unknown as Transport;
+    const base = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(base);
+    try {
+      const first = renderHoloBar({ active: 'term', session: 'fresh', transport, onHide: () => {} });
+      await settle();
+      expect(tabHrefs(first)).toEqual(['#/term/fresh', '#/sfiles/fresh', '#/srepo/fresh']);
+
+      // `gradle init` в этой папке прямо при живой странице.
+      answer = PROJECT;
+      const cached = renderHoloBar({ active: 'term', session: 'fresh', transport, onHide: () => {} });
+      await settle();
+      expect(tabHrefs(cached)).toHaveLength(3);
+
+      clock.mockReturnValue(base + 60 * 60 * 1000);
+      const later = renderHoloBar({ active: 'term', session: 'fresh', transport, onHide: () => {} });
+      await settle();
+      expect(tabHrefs(later)).toContain(sgradleHash('fresh'));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('опоздавший ответ просроченного детекта не перебивает свежий', async () => {
+    let calls = 0;
+    let answerFirst!: (project: GradleProject | null) => void;
+    const transport = {
+      mode: 'lan',
+      clientScope: null,
+      gradle: () => {
+        calls += 1;
+        if (calls === 1) return new Promise<GradleProject | null>((resolve) => (answerFirst = resolve));
+        return Promise.resolve(null);
+      },
+    } as unknown as Transport;
+    const base = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(base);
+    try {
+      void detectGradle(transport, 'slow');
+      // Срок первого ответа вышел, пока он был в полёте: второй рендер бара
+      // спрашивает заново и узнаёт, что папка — не Gradle-проект.
+      clock.mockReturnValue(base + 60 * 60 * 1000);
+      await detectGradle(transport, 'slow');
+      expect(knownGradle(transport, 'slow')).toBeNull();
+
+      answerFirst(PROJECT);
+      await settle();
+      expect(knownGradle(transport, 'slow')).toBeNull();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('подсвечивает Gradle как активный таб', async () => {
@@ -286,6 +345,65 @@ describe('mountGradleTab: окно вывода сборки', () => {
     opened[0]!.opts.onData(new TextEncoder().encode(screen));
     expect(statusText(root)).toBe('Готово (0)');
     tab.teardown();
+  });
+
+  it('не теряет строку exit в кадре, который длиннее окна поиска', async () => {
+    const { transport, opened } = tabTransport({ detect: PROJECT, status: RUNNING });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    // Итог в начале всплеска, за ним — больше 64 КБ прокрутки: искать надо в том,
+    // что пришло, а не в окне фиксированной длины, куда итог уже не влезает.
+    const burst = `[termhub] gradle exit=0\n${'scrollback line\n'.repeat(6000)}`;
+    opened[0]!.opts.onData(new TextEncoder().encode(burst));
+    expect(statusText(root)).toBe('Готово (0)');
+    tab.teardown();
+  });
+
+  it('опознаёт строку exit, разрезанную между двумя кадрами', async () => {
+    const { transport, opened } = tabTransport({ detect: PROJECT, status: RUNNING });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    opened[0]!.opts.onData(new TextEncoder().encode('BUILD SUCCESSFUL\n[termhub] gra'));
+    expect(statusText(root)).toContain('./gradlew :app:assembleDebug');
+    opened[0]!.opts.onData(new TextEncoder().encode('dle exit=0\n'));
+    expect(statusText(root)).toBe('Готово (0)');
+    tab.teardown();
+  });
+
+  it('ждёт перевод строки: код, разрезанный между кадрами, не читается наполовину', async () => {
+    const { transport, opened } = tabTransport({ detect: PROJECT, status: RUNNING });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    opened[0]!.opts.onData(new TextEncoder().encode('[termhub] gradle exit=1'));
+    expect(statusText(root)).toContain('./gradlew :app:assembleDebug');
+    opened[0]!.opts.onData(new TextEncoder().encode('2\n'));
+    expect(statusText(root)).toBe('Ошибка (12)');
+    tab.teardown();
+  });
+
+  it('две вкладки читают каждая свой итог: состояние разбора не общее', async () => {
+    const a = tabTransport({ detect: PROJECT, status: RUNNING });
+    const tabA = mountGradleTab(root, a.transport, 'work');
+    const rootB = document.createElement('div');
+    document.body.append(rootB);
+    const b = tabTransport({ detect: PROJECT, status: RUNNING });
+    const tabB = mountGradleTab(rootB, b.transport, 'other');
+    await flush();
+
+    // Первой вкладке — длинный кадр с итогом в конце.
+    const long = `${'gradle log line\n'.repeat(500)}[termhub] gradle exit=1\n`;
+    a.opened[0]!.opts.onData(new TextEncoder().encode(long));
+    expect(statusText(root)).toBe('Ошибка (1)');
+    // Второй — короткий, итог в начале: общий на две вкладки курсор поиска
+    // (или общий хвост прошлого кадра) увёл бы разбор мимо него.
+    b.opened[0]!.opts.onData(new TextEncoder().encode('[termhub] gradle exit=0\ndone\n'));
+    expect(statusText(rootB)).toBe('Готово (0)');
+    expect(statusText(root)).toBe('Ошибка (1)');
+    tabA.teardown();
+    tabB.teardown();
   });
 
   it('показывает состояние канала: переподключение и закрытие', async () => {
@@ -579,6 +697,120 @@ describe('mountGradleTab: панель тасок и конфигураций', 
     await flush();
     expect(calls.some((c) => c.action === 'run')).toBe(false);
     tab.teardown();
+  });
+});
+
+describe('mountWorkspace: показ вкладки Gradle', () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    setLang('ru');
+    xterm.instances.length = 0;
+    localStorage.clear();
+    location.hash = '#/';
+    document.body.replaceChildren();
+    root = document.createElement('div');
+    document.body.append(root);
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe(): void {}
+      disconnect(): void {}
+    };
+  });
+
+  /** Транспорт со сценарием ответов детекта: по одному на каждый запрос подряд. */
+  function scriptedTransport(script: (GradleProject | null | 'error')[], tasks?: GradleTasks): Transport {
+    let i = 0;
+    return {
+      mode: 'lan',
+      clientScope: null,
+      list: async () => [],
+      gradle: async (action: string) => {
+        if (action === 'detect') {
+          const answer = script[Math.min(i++, script.length - 1)];
+          if (answer === 'error') throw new Error('relay down');
+          return answer;
+        }
+        if (action === 'tasks') return tasks ?? EMPTY_TASKS;
+        if (action === 'configs') return [];
+        if (action === 'status') return IDLE;
+        return null;
+      },
+      openTerm: () => ({ write: () => {}, resize: () => {}, close: () => {} }),
+      close: () => {},
+    } as unknown as Transport;
+  }
+
+  it('сбой детекта на переиспользуемом виде: «не удалось проверить» и «Повторить», а не вечная заглушка', async () => {
+    const transport = scriptedTransport([null, 'error']);
+    const ws = mountWorkspace(root, 'plain', transport);
+    const base = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(base);
+    try {
+      location.hash = '#/sgradle/plain';
+      ws.show('gradle');
+      await flush();
+      expect(location.hash).toBe('#/term/plain');
+
+      clock.mockReturnValue(base + 60 * 60 * 1000);
+      location.hash = '#/sgradle/plain';
+      ws.show('gradle');
+      await flush();
+
+      expect(root.querySelector('.th-loaderror')?.textContent).toContain(t('gradle.detectError'));
+      expect(root.textContent).not.toContain(t('gradle.loadingTasks'));
+    } finally {
+      clock.mockRestore();
+      ws.teardown();
+    }
+  });
+
+  it('сбой детекта не стирает уже загруженный список тасок', async () => {
+    const transport = scriptedTransport([PROJECT, 'error'], TASKS_ANSWER);
+    const ws = mountWorkspace(root, 'work', transport);
+    const base = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(base);
+    try {
+      ws.show('gradle');
+      await flush();
+      expect(rowNames(root, '.th-grow--task')).toEqual(['build', ':app:assembleDebug']);
+
+      clock.mockReturnValue(base + 60 * 60 * 1000);
+      ws.show('gradle');
+      await flush();
+
+      expect(rowNames(root, '.th-grow--task')).toEqual(['build', ':app:assembleDebug']);
+      expect(root.querySelector('.th-loaderror')).toBeNull();
+    } finally {
+      clock.mockRestore();
+      ws.teardown();
+    }
+  });
+
+  it('возврат к смонтированному виду с протухшим детектом уводит на терминал, а не показывает его', async () => {
+    const { transport, calls } = tabTransport({ detect: null, status: IDLE });
+    const ws = mountWorkspace(root, 'plain', transport);
+    const base = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(base);
+    try {
+      // Первая навигация — прямая ссылка: бар ещё не спрашивал, вид монтируется и уводит сам.
+      location.hash = '#/sgradle/plain';
+      ws.show('gradle');
+      await flush();
+      expect(location.hash).toBe('#/term/plain');
+
+      // Возврат по закладке спустя срок кэша: вид тот же, его askDetect уже отработал
+      // и сам не повторится — показывать этот вид нельзя, пока детект не ответил снова.
+      clock.mockReturnValue(base + 60 * 60 * 1000);
+      location.hash = '#/sgradle/plain';
+      ws.show('gradle');
+      await flush();
+
+      expect(calls.filter((c) => c.action === 'detect')).toHaveLength(2);
+      expect(location.hash).toBe('#/term/plain');
+    } finally {
+      clock.mockRestore();
+      ws.teardown();
+    }
   });
 });
 

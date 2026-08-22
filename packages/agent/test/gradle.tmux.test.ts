@@ -10,7 +10,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildSessionName, runStatus, startRun, stopRun } from '../src/gradle.js';
+import { runGradleAction } from '../src/gradle-action.js';
 import { SessionService } from '../src/sessions.js';
+import type { GradleRunState } from '@termhub/protocol';
 
 /** Доступен ли tmux. Пропускать шов нельзя: без tmux продукт не работает, и молча
  *  снятый шов оставил бы прогон зелёным на непроверенном запуске сборки. */
@@ -32,14 +34,19 @@ describe('gradle — запуск в tmux (изолированный сокет
   let root: string;
   let projectDir: string;
 
-  function tmux(args: string[]): string {
+  function tmux(args: string[], socket: string = socketName): string {
     // stderr гасим: teardown зовёт kill-session/kill-server, которых может уже не быть.
-    return execFileSync('tmux', ['-L', socketName, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return execFileSync('tmux', ['-L', socket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   }
 
   /** Содержимое панели сборочной сессии. */
   function capture(): string {
     return tmux(['capture-pane', '-p', '-t', `=${buildName}:`]);
+  }
+
+  /** Рабочая папка панели сборочной сессии — та, из которой пошла команда. */
+  function paneCwd(): string {
+    return tmux(['display-message', '-p', '-t', `=${buildName}:`, '#{pane_current_path}']).trim();
   }
 
   /** Пустышка вместо gradlew: тело задаёт тест. */
@@ -49,10 +56,10 @@ describe('gradle — запуск в tmux (изолированный сокет
 
   /** Ждёт, пока в панели ПО-НАСТОЯЩЕМУ пойдёт команда (а не «вот-вот пойдёт»):
    *  login-оболочка читает ~/.zshrc не мгновенно. */
-  async function waitBusy(timeoutMs: number): Promise<string> {
+  async function waitBusy(timeoutMs: number, socket: string = socketName): Promise<string> {
     const until = Date.now() + timeoutMs;
     for (;;) {
-      const cur = tmux(['display-message', '-p', '-t', `=${buildName}:`, '#{pane_current_command}']).trim();
+      const cur = tmux(['display-message', '-p', '-t', `=${buildName}:`, '#{pane_current_command}'], socket).trim();
       if (cur === 'sleep' || Date.now() > until) return cur;
       await delay(100);
     }
@@ -107,8 +114,10 @@ describe('gradle — запуск в tmux (изолированный сокет
     expect(started.startedAt).toBeGreaterThan(0);
     expect(started.phase).toBe('running');
 
-    // Сессия создана в папке проекта и живёт на изолированном сокете.
+    // Сессия живёт на изолированном сокете — и её панель стоит в папке проекта
+    // (папка запуска — то, что здесь легко потерять, поэтому она тоже проверяется).
     expect(tmux(['list-sessions', '-F', '#{session_name}'])).toContain(buildName);
+    expect(fs.realpathSync(paneCwd())).toBe(fs.realpathSync(projectDir));
 
     expect(await waitBusy(15000)).toBe('sleep');
     expect(await waitPhase('finished', 15000)).toBe('finished');
@@ -134,6 +143,8 @@ describe('gradle — запуск в tmux (изолированный сокет
     });
     expect(started.command).toBe('../gradlew :app:assembleDebug');
     expect(started.phase).toBe('running');
+    // Папка запуска — именно подпапка: wrapper адресуется из неё относительным путём.
+    expect(fs.realpathSync(paneCwd())).toBe(fs.realpathSync(appDir));
 
     expect(await waitBusy(15000)).toBe('sleep');
     expect(await waitPhase('finished', 15000)).toBe('finished');
@@ -289,6 +300,62 @@ describe('gradle — запуск в tmux (изолированный сокет
     expect(pane).toContain(`JH=[${jdk}]`);
     expect(pane).not.toContain('JH=[/nonexistent/hostile-jdk]');
   }, 40000);
+
+  it('«Стоп уже слали» помнится отдельно для каждого сокета tmux', async () => {
+    // Одно и то же имя рабочей сессии на двух сокетах — это две РАЗНЫЕ сборки. Общий
+    // флаг превратил бы первый «Стоп» на втором сокете во второй: убил бы сессию,
+    // не дав команде шанса завершиться по Ctrl+C.
+    const otherSocket = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
+    fakeGradlew("trap '' INT\nexec sleep 30");
+    try {
+      await startRun({ session, dir: projectDir, tasks: ['onFirst'], socketName });
+      await startRun({ session, dir: projectDir, tasks: ['onSecond'], socketName: otherSocket });
+      expect(await waitBusy(15000)).toBe('sleep');
+      expect(await waitBusy(15000, otherSocket)).toBe('sleep');
+
+      // Первый «Стоп» на первом сокете: Ctrl+C, сессия остаётся.
+      await stopRun({ session, socketName });
+      // На втором сокете это тоже ПЕРВЫЙ «Стоп» — значит тоже Ctrl+C, а не kill.
+      const second = await stopRun({ session, socketName: otherSocket });
+      expect(second.session).toBe(buildName);
+      expect(second.command).toBe('./gradlew onSecond');
+      expect(tmux(['list-sessions', '-F', '#{session_name}'], otherSocket)).toContain(buildName);
+    } finally {
+      try {
+        tmux(['kill-server'], otherSocket);
+      } catch {
+        // сервер мог не подниматься — не ошибка
+      }
+    }
+  }, 40000);
+
+  it('стоп идущей сборки не требует каталога сессии: папку удалили — сборка всё равно останавливается', async () => {
+    // Живой случай: сборка идёт, а каталог сессии переименовали или снесли. Резолв
+    // корня нужен, чтобы ЗАПУСТИТЬ сборку, — статус и стоп относятся к tmux-сессии.
+    const doomed = path.join(root, 'projectF');
+    fs.mkdirSync(doomed, { recursive: true });
+    fs.writeFileSync(path.join(doomed, 'settings.gradle'), '');
+    fs.writeFileSync(path.join(doomed, 'gradlew'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    tmux(['new-session', '-d', '-s', session, '-c', doomed]);
+    try {
+      await startRun({ session, dir: doomed, tasks: ['longRun'], socketName });
+      expect(await waitBusy(15000)).toBe('sleep');
+      fs.rmSync(doomed, { recursive: true, force: true });
+
+      const deps = { sessions: new SessionService({ roots: [root], socketName }), roots: [root], socketName };
+      const st = (await runGradleAction(deps, { action: 'status', session })) as GradleRunState;
+      expect(st.phase).toBe('running');
+      const stopped = (await runGradleAction(deps, { action: 'stop', session })) as GradleRunState;
+      expect(stopped.session).toBe(buildName);
+      expect(await waitPhase('finished', 10000)).toBe('finished');
+    } finally {
+      try {
+        tmux(['kill-session', '-t', `=${session}`]);
+      } catch {
+        // сессии могло не быть
+      }
+    }
+  }, 30000);
 
   it('SessionService.list() не показывает сборочные сессии', async () => {
     fakeGradlew('exec sleep 20');

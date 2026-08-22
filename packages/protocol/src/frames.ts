@@ -43,7 +43,7 @@ export enum FrameType {
   /** Запрос адресов, по которым агент доступен напрямую (минуя relay). */
   Addresses = 39,
   AddressesResult = 40,
-  /** Вкладка Gradle: один фрейм на все экшены (detect/tasks/configs/run/stop/status). */
+  /** Вкладка Gradle: один фрейм на все экшены (набор — тип `GradleAction` ниже). */
   Gradle = 41,
   GradleResult = 42,
 }
@@ -195,6 +195,10 @@ export interface RepoBranches {
   branches: string[];
 }
 
+/** Экшены вкладки Gradle: один фрейм (`Gradle`) на все, различаются полем `action`.
+ *  Набор — часть контракта, а не перечисление в комментарии: обе стороны сверяются с ним. */
+export type GradleAction = 'detect' | 'tasks' | 'configs' | 'run' | 'stop' | 'status';
+
 /** Gradle-проект, найденный в корне сессии (null — папка не Gradle-проект). */
 export interface GradleProject {
   /** Корень проекта (= корень сессии). */
@@ -224,6 +228,9 @@ export interface GradleTasks {
   fetchedAt: number;
 }
 
+/** Откуда прочитана конфигурация запуска — три источника §5, по убыванию старшинства. */
+export type GradleRunConfigSource = '.run' | 'runConfigurations' | 'workspace';
+
 /** Конфигурация запуска Gradle, прочитанная из XML проекта (IDEA). */
 export interface GradleRunConfig {
   name: string;
@@ -233,8 +240,7 @@ export interface GradleRunConfig {
   args: string;
   /** Рабочая папка запуска (абсолютная, внутри корня сессии). */
   dir: string;
-  /** Откуда прочитана: '.run' | 'runConfigurations' | 'workspace'. */
-  source: string;
+  source: GradleRunConfigSource;
 }
 
 export type GradleRunPhase = 'idle' | 'running' | 'finished';

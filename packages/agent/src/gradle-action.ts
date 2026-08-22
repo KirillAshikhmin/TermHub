@@ -3,12 +3,23 @@
 // разъехалась бы в правах и проверках путей. Здесь же живут две вещи, которых нет
 // в gradle.ts: резолв корня сессии с realpath-проверкой на вхождение в whitelist
 // корней (gradle.ts принимает папку на веру) и права гостя (§7 спецификации).
+// Резолв корня нужен экшенам, которые ЧИТАЮТ проект и запускают в нём команду
+// (detect/tasks/configs/run); статус и стоп работают с tmux-сессией по имени.
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import type { GradleAction } from '@termhub/protocol';
 import type { DeviceScope } from './config.js';
 import type { SessionService } from './sessions.js';
-import { detectProject, listRunConfigs, listTasks, runStatus, startRun, stopRun } from './gradle.js';
+import {
+  detectProject,
+  isInsideRoot,
+  listRunConfigs,
+  listTasks,
+  runStatus,
+  startRun,
+  stopRun,
+} from './gradle.js';
 
 export interface GradleActionDeps {
   sessions: SessionService;
@@ -20,40 +31,58 @@ export interface GradleActionDeps {
   scope?: DeviceScope;
 }
 
-/** Экшены только на чтение — гостю доступны при scope.files. */
-const READ_ACTIONS = new Set(['detect', 'tasks', 'configs', 'status']);
+/** Экшены только на чтение — гостю доступны при scope.files. Тип элементов сверяет
+ *  набор с контрактом (`GradleAction`), `ReadonlySet<string>` — пускает сырой ввод в has(). */
+const READ_ACTIONS: ReadonlySet<string> = new Set<GradleAction>(['detect', 'tasks', 'configs', 'status']);
 /** Экшены, запускающие и прерывающие сборку, — гостю только при scope.write. */
-const WRITE_ACTIONS = new Set(['run', 'stop']);
+const WRITE_ACTIONS: ReadonlySet<string> = new Set<GradleAction>(['run', 'stop']);
 
-/** realpath с честной причиной отказа: «нет такой папки» и «папка вне корня» — разные
- *  ошибки, и пользователь по ним идёт в разные места (опечатка против прав). */
+/** Причина отказа realpath словами: по «нет такой папки», «в пути файл» и «нет прав»
+ *  пользователь идёт в разные места, а один общий текст отправлял бы всех к правам. */
+const REALPATH_CAUSES: Record<string, string> = {
+  ENOENT: 'not found',
+  ENOTDIR: 'is not a directory',
+  ELOOP: 'has too many symbolic links',
+  ENAMETOOLONG: 'path is too long',
+  EACCES: 'is not readable',
+  EPERM: 'is not readable',
+};
+
+/** realpath с честной причиной отказа: «нет такой папки», «папка вне корня» и «нет
+ *  прав» — разные ошибки, и лечатся они по-разному. Незнакомый код errno не выдаём
+ *  за отказ в правах, а называем как есть. */
 async function realDir(target: string, what: string): Promise<string> {
   try {
     return await fsp.realpath(target);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`${what} not found`);
-    throw new Error(`${what} is not readable`);
+    const code = (err as NodeJS.ErrnoException).code ?? '';
+    const cause = REALPATH_CAUSES[code];
+    throw new Error(cause ? `${what} ${cause}` : `${what} cannot be resolved (${code || (err as Error).message})`);
   }
 }
 
-/** Лежит ли реальный путь внутри реального корня (или совпадает с ним). */
-function inside(real: string, realRoot: string): boolean {
-  return real === realRoot || real.startsWith(realRoot + path.sep);
-}
-
-/** Корень Gradle-проекта = каталог сессии, проверенный realpath на вхождение в
- *  whitelist корней (как в files.ts): symlink и «..» внутри имени каталога иначе
- *  увели бы запуск сборки в произвольную папку машины. */
-async function sessionRoot(deps: GradleActionDeps, session: string): Promise<string> {
+/** Реальный каталог сессии по её имени — только резолв, без разрешений. */
+async function sessionDir(deps: GradleActionDeps, session: string): Promise<string> {
   const list = await deps.sessions.list();
   const info = list.find((x) => x.name === session);
   if (!info) throw new Error('Session not found');
-  const real = await realDir(info.path, 'Session directory');
+  return await realDir(info.path, 'Session directory');
+}
+
+/** Разрешение на каталог: он обязан лежать внутри одного из whitelist-корней (как в
+ *  files.ts). Пустой список корней не разрешает ничего (fail-closed). */
+async function authorizeDir(deps: GradleActionDeps, real: string): Promise<string> {
   for (const root of deps.roots) {
     const realRoot = await fsp.realpath(root).catch(() => null);
-    if (realRoot && inside(real, realRoot)) return real;
+    if (realRoot && isInsideRoot(realRoot, real)) return real;
   }
   throw new Error('Session directory outside allowed roots');
+}
+
+/** Корень Gradle-проекта = каталог сессии, разрешённый whitelist'ом: symlink и «..»
+ *  внутри имени каталога иначе увели бы запуск сборки в произвольную папку машины. */
+async function allowedSessionRoot(deps: GradleActionDeps, session: string): Promise<string> {
+  return await authorizeDir(deps, await sessionDir(deps, session));
 }
 
 /** Папка запуска: `subdir` относительно корня, тоже через realpath (`externalProjectPath`
@@ -61,7 +90,7 @@ async function sessionRoot(deps: GradleActionDeps, session: string): Promise<str
 async function resolveRunDir(root: string, subdir: string): Promise<string> {
   if (subdir.length === 0) return root;
   const real = await realDir(path.resolve(root, subdir), 'Run directory');
-  if (!inside(real, root)) throw new Error('Run directory outside session root');
+  if (!isInsideRoot(root, real)) throw new Error('Run directory outside session root');
   return real;
 }
 
@@ -85,8 +114,15 @@ export async function runGradleAction(deps: GradleActionDeps, req: Record<string
     }
   }
 
-  const root = await sessionRoot(deps, session);
   const socketName = deps.socketName;
+  // Статус и стоп адресуют сборочную tmux-сессию по имени рабочей и каталога не
+  // касаются вовсе: папку могли переименовать или удалить прямо во время сборки —
+  // остановить её при этом всё равно надо. Резолв корня остаётся там, где от него
+  // зависит, ЧТО и ГДЕ исполнится: detect/tasks/configs/run.
+  if (action === 'status') return await runStatus({ session, socketName });
+  if (action === 'stop') return await stopRun({ session, socketName });
+
+  const root = await allowedSessionRoot(deps, session);
   switch (action) {
     case 'detect':
       return await detectProject(root);
@@ -94,10 +130,6 @@ export async function runGradleAction(deps: GradleActionDeps, req: Record<string
       return await listTasks(root, { refresh: req.refresh === true });
     case 'configs':
       return await listRunConfigs(root);
-    case 'status':
-      return await runStatus({ session, socketName });
-    case 'stop':
-      return await stopRun({ session, socketName });
     default: {
       // run: корень проекта и папка запуска передаются РАЗНЫМИ — wrapper живёт только
       // в корне многомодульной сборки, а запуск идёт в подпапке (см. §6).

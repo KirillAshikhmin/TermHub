@@ -56,11 +56,15 @@ const RECENT_LS_PREFIX = 'termhub.gradleRecent.';
 const POLL_MS = 4000;
 /** Код выхода печатает сама сборочная оболочка (см. EXIT_TAIL на агенте): в
  *  GradleRunState его нет, поэтому итог читаем из потока вывода. */
-const EXIT_RE = /\[termhub\] gradle exit=(\d+)/g;
-/** Хвост вывода, в котором ищем строку exit. Не по длине самой строки: при attach
- *  tmux перерисовывает ЦЕЛЫЙ экран одним всплеском, и короткое окно вытеснило бы
- *  итог прошлого запуска промптом, напечатанным после него. */
-const TAIL_LIMIT = 64 * 1024;
+const EXIT_MARK = '[termhub] gradle exit=';
+/** Цифры сразу за маркером и обязательный перевод строки за ними: без него код,
+ *  разрезанный между кадрами (`…exit=1` | `2\n`), прочитался бы как «1». Годится и
+ *  `\r` — в pty перевод строки едет как CRLF. Без флага `g`: регулярка со счётчиком
+ *  `lastIndex` в общей константе — это состояние, поделённое всеми вкладками. */
+const EXIT_CODE_RE = /^(\d+)[\r\n]/;
+/** Сколько символов кадра переносим в следующий: строка итога может прийти
+ *  разрезанной между двумя записями канала. Ровно её длина с запасом на код. */
+const EXIT_CARRY = EXIT_MARK.length + 16;
 
 // Палитра ANSI под тему приложения — копия из term.ts: тот файл владеет целым
 // экраном терминала, и вынос общей палитры означал бы его рефакторинг (вне рамок).
@@ -186,6 +190,10 @@ export interface GradleTab {
    *  `phase: 'running'` в ответе без `force` — «сборка уже идёт», решение за вызывающим;
    *  `null` — запуск не удался (сообщение уже показано). */
   run(opts: { tasks: string[]; args?: string[]; subdir?: string; force?: boolean }): Promise<GradleRunState | null>;
+  /** Спросить детект заново. Нужен тому, кто показывает вид повторно: свой детект
+   *  вид спрашивает один раз при монтировании, и с протухшим ответом панель не-Gradle
+   *  сессии осталась бы на загрузочной заглушке (см. workspace.ts). */
+  recheck(): void;
   teardown(): void;
 }
 
@@ -366,19 +374,26 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
   let channel: TermChannel | null = null;
   let attached: string | null = null;
   const decoder = new TextDecoder();
-  let tail = '';
+  // Хвост прошлого кадра — всё состояние разбора, и оно своё у каждой вкладки.
+  let carry = '';
 
   const scanExit = (bytes: Uint8Array): void => {
-    tail = (tail + decoder.decode(bytes, { stream: true })).slice(-TAIL_LIMIT);
+    // Поток сборки — самый горячий путь вкладки, поэтому смотрим только в том,
+    // что пришло (плюс перехлёст), а не в накопленном окне: при attach tmux
+    // перерисовывает ЦЕЛЫЙ экран одним всплеском, и окно фиксированной длины
+    // вытеснило бы итог промптом, напечатанным после него.
+    const chunk = carry + decoder.decode(bytes, { stream: true });
+    carry = chunk.slice(-EXIT_CARRY);
     // Берём ПОСЛЕДНЕЕ вхождение: в перерисованном экране их может быть несколько.
-    EXIT_RE.lastIndex = 0;
-    let m: RegExpExecArray | null = null;
-    for (let hit = EXIT_RE.exec(tail); hit; hit = EXIT_RE.exec(tail)) m = hit;
-    if (!m) return;
-    tail = '';
+    const at = chunk.lastIndexOf(EXIT_MARK);
+    if (at < 0) return;
+    const code = EXIT_CODE_RE.exec(chunk.slice(at + EXIT_MARK.length));
+    // Код ещё не дописан — ждём следующий кадр: маркер остался в перехлёсте.
+    if (!code) return;
+    carry = '';
     sawExit = true;
     phase = 'finished';
-    exitCode = Number(m[1]);
+    exitCode = Number(code[1]);
     renderStatus();
     schedulePoll();
   };
@@ -395,7 +410,7 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
     if (disposed || attached === buildSession) return;
     detach();
     attached = buildSession;
-    tail = '';
+    carry = '';
     channel = transport.openTerm(buildSession, {
       cols: term.cols,
       rows: term.rows,
@@ -581,20 +596,21 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
     return el;
   };
 
-  const armRows = (host: HTMLElement): void => {
+  // Гость без права записи видит список, но запустить не может (история 26):
+  // после каждой перерисовки строки блокируем заново — они созданы с нуля.
+  const lockRowsForGuest = (host: HTMLElement): void => {
     if (canWrite) return;
-    // Гость без права записи видит список, но запустить не может (история 26).
     for (const btn of host.querySelectorAll('button')) btn.disabled = true;
   };
 
   const renderConfigs = (): void => {
     configsSec.list.replaceChildren(...configs.map((cfg) => renderConfigRow(cfg)));
-    armRows(configsSec.list);
+    lockRowsForGuest(configsSec.list);
   };
 
   const renderRecents = (): void => {
     recentSec.list.replaceChildren(...recents.map((entry) => renderRecentRow(entry)));
-    armRows(recentSec.list);
+    lockRowsForGuest(recentSec.list);
   };
 
   const renderTree = (): void => {
@@ -641,7 +657,7 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
       nodes.push(box);
     }
     tasksSec.list.replaceChildren(...nodes);
-    armRows(tasksSec.list);
+    lockRowsForGuest(tasksSec.list);
   };
 
   search.addEventListener('input', renderTree);
@@ -808,6 +824,9 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
       },
       () => {
         if (disposed) return;
+        // Панель уже полна списком проекта — обрыв на перепроверке её не стирает:
+        // прятать рабочий список на время обрыва незачем.
+        if (projectDir !== '') return;
         listPanel.replaceChildren(errorScreen(t('gradle.detectError'), askDetect));
       },
     );
@@ -837,5 +856,5 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
     root.replaceChildren();
   };
 
-  return { listPanel, run: startBuild, teardown };
+  return { listPanel, run: startBuild, recheck: askDetect, teardown };
 }

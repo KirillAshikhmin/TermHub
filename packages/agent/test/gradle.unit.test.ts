@@ -10,9 +10,14 @@ import {
   detectProject,
   isBuildSessionName,
   listRunConfigs,
+  jdkSources,
   listTasks,
+  parseRunConfigXml,
   parseTasksOutput,
+  propertyValue,
 } from '../src/gradle.js';
+import { runGradleAction } from '../src/gradle-action.js';
+import type { SessionService } from '../src/sessions.js';
 
 // Единственная внешняя команда модуля — чтение тасок; подменяем её целиком.
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
@@ -292,6 +297,70 @@ const WORKSPACE_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </project>
 `;
 
+describe('parseRunConfigXml', () => {
+  it('битый номер символа в сущности не роняет разбор файла', () => {
+    // `&#99999999;` вне диапазона Unicode: раньше он бросал RangeError, и файл
+    // пропадал целиком вместе с исправными конфигурациями рядом.
+    const xml = `<component name="ProjectRunConfigurationManager">
+  <configuration name="Bad &#99999999; entity" type="GradleRunConfiguration" factoryName="Gradle">
+    <ExternalSystemSettings>
+      <option name="taskNames"><list><option value="build" /></list></option>
+    </ExternalSystemSettings>
+  </configuration>
+</component>`;
+    const configs = parseRunConfigXml(xml, { projectDir: '/tmp/proj', source: '.run' });
+    expect(configs).toHaveLength(1);
+    expect(configs[0].name).toContain('&#99999999;');
+    expect(configs[0].tasks).toEqual(['build']);
+  });
+});
+
+describe('propertyValue (.properties по правилам java.util.Properties)', () => {
+  it('разделителем ключа и значения служат «=», «:» и пробел', () => {
+    expect(propertyValue('org.gradle.java.home=/opt/jdk\n', 'org.gradle.java.home')).toBe('/opt/jdk');
+    expect(propertyValue('org.gradle.java.home:/opt/jdk\n', 'org.gradle.java.home')).toBe('/opt/jdk');
+    expect(propertyValue('org.gradle.java.home /opt/jdk\n', 'org.gradle.java.home')).toBe('/opt/jdk');
+    expect(propertyValue('org.gradle.java.home = /opt/jdk  \n', 'org.gradle.java.home')).toBe('/opt/jdk');
+  });
+
+  it('пробелы внутри значения сохраняются, а хвостовые отбрасываются', () => {
+    expect(propertyValue('java.home=/Applications/Android Studio.app/Contents/jbr  \n', 'java.home')).toBe(
+      '/Applications/Android Studio.app/Contents/jbr',
+    );
+  });
+
+  it('комментарии «#» и «!» и пустые строки пропускаются', () => {
+    const text = '#Wed Nov 06 11:05:39 MSK 2024\n\n!java.home=/wrong\n  java.home=/right\n';
+    expect(propertyValue(text, 'java.home')).toBe('/right');
+  });
+
+  it('повторённый ключ берётся ПОСЛЕДНИЙ', () => {
+    expect(propertyValue('k=first\nother=x\nk=last\n', 'k')).toBe('last');
+  });
+
+  it('значение, перенесённое хвостовым «\\», склеивается без ведущих пробелов продолжения', () => {
+    expect(propertyValue('java.home=/opt/jdk-\\\n    21\n', 'java.home')).toBe('/opt/jdk-21');
+    // Чётное число слэшей — это экранированный слэш, а не перенос.
+    expect(propertyValue('java.home=/opt/jdk\\\\\nk=v\n', 'java.home')).toBe('/opt/jdk\\');
+  });
+
+  it('escape-последовательности значения разворачиваются (в том числе windows-путь)', () => {
+    expect(propertyValue('java.home=C\\:\\\\Program Files\\\\jdk\n', 'java.home')).toBe('C:\\Program Files\\jdk');
+    expect(propertyValue('k=a\\tb\\u0041\n', 'k')).toBe('a\tbA');
+  });
+
+  it('экранированный разделитель остаётся частью ключа', () => {
+    expect(propertyValue('a\\ b=v\n', 'a b')).toBe('v');
+    expect(propertyValue('a\\ b=v\n', 'a')).toBeNull();
+  });
+
+  it('ключ без значения даёт пустую строку, отсутствующий — null', () => {
+    expect(propertyValue('java.home=\n', 'java.home')).toBe('');
+    expect(propertyValue('java.home\n', 'java.home')).toBe('');
+    expect(propertyValue('other=1\n', 'java.home')).toBeNull();
+  });
+});
+
 describe('listRunConfigs', () => {
   it('читает три источника, фильтрует по типу, схлопывает дубли и режет выход за корень', async () => {
     const base = await mkTmp();
@@ -380,6 +449,36 @@ describe('listRunConfigs', () => {
     const root = await mkTmp();
     await fsp.writeFile(path.join(root, 'build.gradle'), '');
     expect(await listRunConfigs(root)).toEqual([]);
+  });
+});
+
+describe('runGradleAction — резолв путей', () => {
+  /** Список сессий агента без tmux: обработчику нужен только name → path. */
+  function stubSessions(name: string, dir: string): SessionService {
+    return {
+      list: async () => [
+        { name, path: dir, command: 'zsh', activityTs: 1, attached: 0, bell: false, title: '' },
+      ],
+    } as unknown as SessionService;
+  }
+
+  it('называет НАСТОЯЩУЮ причину нечитаемости: файл в середине пути — это не отказ в правах', async () => {
+    const root = await mkTmp();
+    const projectDir = path.join(root, 'proj');
+    await fsp.mkdir(projectDir);
+    await fsp.writeFile(path.join(projectDir, 'settings.gradle'), '');
+    // Обычный файл на месте каталога: realpath отвечает ENOTDIR, а не EACCES.
+    await fsp.writeFile(path.join(projectDir, 'notadir'), 'x');
+    const deps = { sessions: stubSessions('work', projectDir), roots: [root] };
+
+    const call = runGradleAction(deps, {
+      action: 'run',
+      session: 'work',
+      subdir: path.join('notadir', 'app'),
+      tasks: ['help'],
+    });
+    await expect(call).rejects.toThrow(/Run directory is not a directory/);
+    await expect(call).rejects.not.toThrow(/is not readable/);
   });
 });
 
@@ -618,42 +717,56 @@ describe('JDK проекта (§6): выбор источника и перед�
     expect(firstCall().env).toBeUndefined();
   });
 
-  it('повтор ключа: побеждает ПОСЛЕДНЕЕ вхождение — как у java.util.Properties', async () => {
-    const dir = await gradleProject();
-    const first = await fakeJdk(dir, 'jdk-first');
-    const last = await fakeJdk(dir, 'jdk-last');
-    // Так свойство и дописывают: строкой в конец уже существующего файла.
-    await fsp.writeFile(
-      path.join(dir, 'gradle.properties'),
-      `org.gradle.java.home=${first}\norg.gradle.jvmargs=-Xmx2048m\norg.gradle.java.home=${last}\n`,
-    );
+  it('кэш перечитывается при правке ЛЮБОГО источника JDK — списком источников служит сам jdkSources', async () => {
+    // Перебираем ровно те источники, по которым JDK и выбирается: четвёртый, если его
+    // однажды добавят, попадёт сюда сам — и обязан будет сбрасывать кэш наравне с этими.
     stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+    const lastEnv = (): NodeJS.ProcessEnv | undefined =>
+      (mockExecFile.mock.calls.at(-1) as [string, string[], { env?: NodeJS.ProcessEnv }])[2].env;
 
-    await listTasks(dir);
-    expect(firstCall().env?.JAVA_HOME).toBe(last);
+    for (let i = 0; i < jdkSources('/probe').length; i += 1) {
+      const dir = await gradleProject();
+      // Свой каталог настроек пользователя на итерацию: источник 2 живёт именно там.
+      process.env.GRADLE_USER_HOME = await mkTmp();
+      const src = jdkSources(dir)[i];
+      const before = await fakeJdk(dir, `jdk-${i}-before`);
+      const after = await fakeJdk(dir, `jdk-${i}-after-and-longer`);
+      await fsp.mkdir(path.dirname(src.file), { recursive: true });
+      await fsp.writeFile(src.file, `${src.key}=${before}\n`);
+
+      const calls = mockExecFile.mock.calls.length;
+      await listTasks(dir);
+      expect(lastEnv()?.JAVA_HOME, `источник ${i}: JDK не подхватился`).toBe(before);
+      await listTasks(dir);
+      expect(mockExecFile.mock.calls.length, `источник ${i}: кэш не сработал`).toBe(calls + 1);
+
+      await fsp.writeFile(src.file, `${src.key}=${after}\n`);
+      await listTasks(dir);
+      expect(mockExecFile.mock.calls.length, `источник ${i}: правка не сбросила кэш`).toBe(calls + 2);
+      expect(lastEnv()?.JAVA_HOME, `источник ${i}: подставлен прежний JDK`).toBe(after);
+    }
   });
 
-  it('разделителем ключа и значения может быть пробел, а не только = и :', async () => {
+  it('попадание в кэш не читает ни одного файла .properties — ключ дешевле того, что кэш экономит', async () => {
     const dir = await gradleProject();
-    const jdk = await fakeJdk(dir, 'Android Studio.app', 'Contents', 'jbr', 'Contents', 'Home');
-    // Форма `ключ значение` легальна для Properties.load; пробелы внутри значения — часть пути.
-    await fsp.writeFile(path.join(dir, 'gradle.properties'), `org.gradle.java.home ${jdk}\n`);
+    const jdk = await fakeJdk(dir, 'jdk-config');
+    await writeConfigProperties(dir, jdk);
     stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
-
     await listTasks(dir);
-    expect(firstCall().env?.JAVA_HOME).toBe(jdk);
-  });
 
-  it('значение, перенесённое обратным слэшем, склеивается в один путь', async () => {
-    const dir = await gradleProject();
-    const jdk = await fakeJdk(dir, 'jdk-continued');
-    const head = jdk.slice(0, -4);
-    const tail = jdk.slice(-4);
-    await writeConfigProperties(dir, `${head}\\\n    ${tail}`);
-    stubShell(() => ({ stdout: TINY_TASKS_OUTPUT }));
+    const reads = vi.spyOn(fsp, 'readFile');
+    try {
+      // Промах читает .properties — этим же проверяется, что спай вообще ловит чтения.
+      await listTasks(dir, { refresh: true });
+      expect(reads.mock.calls.filter((c) => String(c[0]).endsWith('.properties')).length).toBeGreaterThan(0);
+      reads.mockClear();
 
-    await listTasks(dir);
-    expect(firstCall().env?.JAVA_HOME).toBe(jdk);
+      await listTasks(dir);
+      expect(mockExecFile).toHaveBeenCalledTimes(2);
+      expect(reads.mock.calls.map((c) => String(c[0]))).toEqual([]);
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it('сменился JDK — список перечитывается, хотя build-файлы не тронуты', async () => {

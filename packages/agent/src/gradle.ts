@@ -17,17 +17,22 @@ import path from 'node:path';
 import type {
   GradleProject,
   GradleRunConfig,
+  GradleRunConfigSource,
   GradleRunPhase,
   GradleRunState,
   GradleTask,
   GradleTasks,
 } from '@termhub/protocol';
 
-/** Маркеры Gradle-проекта в корне сессии — в порядке, в каком их перечисляем наружу. */
-const MARKERS = ['settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', 'gradlew'];
+/** Имя wrapper'а — единственный маркер, который не описывает сборку, а запускает её. */
+const WRAPPER_NAME = 'gradlew';
 
-/** Файлы, по mtime которых инвалидируется кэш списка тасок. */
-const CACHE_FILES = [...MARKERS.slice(0, 4), 'gradle.properties'];
+/** Маркеры Gradle-проекта в корне сессии — в порядке, в каком их перечисляем наружу. */
+const MARKERS = ['settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts', WRAPPER_NAME];
+
+/** Build-файлы проекта: все маркеры, кроме wrapper'а (отбор по имени, а не по позиции
+ *  в MARKERS — иначе новый маркер в середине списка молча менял бы набор). */
+const BUILD_FILES = MARKERS.filter((m) => m !== WRAPPER_NAME);
 
 /** Команда чтения тасок — КОНСТАНТА (см. шапку файла): ни одного подставляемого значения. */
 const TASKS_CMD_WRAPPER = './gradlew tasks --all --console=plain -q';
@@ -152,10 +157,13 @@ function parseProperty(line: string): { key: string; value: string } | null {
   return { key: unescapeProperty(key), value: unescapeProperty(value) };
 }
 
-/** Значение свойства из .properties-файла. Повторённый ключ берётся ПОСЛЕДНИЙ —
- *  так его читает `java.util.Properties`, а значит и сам Gradle: свойство чаще всего
- *  дописывают строкой в конец файла. */
-function propertyValue(text: string, key: string): string | null {
+/** Значение свойства из .properties-файла (формат `java.util.Properties`: разделитель
+ *  `=`, `:` или пробел, перенос строки хвостовым `\`, escape-последовательности,
+ *  комментарии `#`/`!`). Повторённый ключ берётся ПОСЛЕДНИЙ — так его читает и сама
+ *  `java.util.Properties`, а значит и Gradle: свойство чаще всего дописывают строкой
+ *  в конец файла. Выставлено наружу, чтобы разбор формата проверялся напрямую, а не
+ *  через запись файла и чтение списка тасок. */
+export function propertyValue(text: string, key: string): string | null {
   let found: string | null = null;
   for (const line of logicalLines(text)) {
     const parsed = parseProperty(line);
@@ -193,18 +201,33 @@ function gradleUserHome(): string {
   return process.env.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle');
 }
 
+/** Откуда берётся JDK проекта, в порядке §6: файл и ключ в нём. Список ОДИН на две
+ *  задачи — выбрать JDK (resolveJavaHome) и заметить, что он сменился (сигнатура
+ *  кэша тасок): вторая копия означала бы, что новый источник молча отдаёт список,
+ *  прочитанный на прежнем JDK. Выставлен наружу, чтобы тест перебирал ровно эти
+ *  источники, а не свою копию списка. */
+export function jdkSources(root: string): { file: string; key: string }[] {
+  return [
+    { file: path.join(root, 'gradle.properties'), key: JDK_KEY_GRADLE },
+    { file: path.join(gradleUserHome(), 'gradle.properties'), key: JDK_KEY_GRADLE },
+    { file: path.join(root, '.gradle', 'config.properties'), key: JDK_KEY_CONFIG },
+  ];
+}
+
 /** JDK проекта — тот же выбор, что делает IDEA (§6 спецификации): свойство проекта →
  *  то же свойство в настройках пользователя → `java.home` из `<проект>/.gradle/config.properties`
  *  (это и есть `#GRADLE_LOCAL_JAVA_HOME` из `.idea/gradle.xml`). Путь, по которому нет
  *  исполняемого `bin/java`, пропускается, как будто его не записали. `null` — оставить
- *  окружение login-оболочки как есть. */
+ *  окружение login-оболочки как есть.
+ *
+ *  НАМЕРЕННО без проверки вхождения в корни сессии — и добавлять её сюда нельзя:
+ *  типичный JDK Android-проекта лежит в `/Applications/Android Studio.app/Contents/jbr/…`,
+ *  то есть заведомо вне корней, и whitelist сломал бы ровно тот случай, ради которого
+ *  выбор JDK и появился. Новой дыры нет: путь берётся из файлов САМОГО проекта, едет
+ *  отдельным значением окружения (не строкой команды), а сборка и так исполняет
+ *  `./gradlew` из этого же проекта. */
 async function resolveJavaHome(root: string): Promise<string | null> {
-  const sources: [string, string][] = [
-    [path.join(root, 'gradle.properties'), JDK_KEY_GRADLE],
-    [path.join(gradleUserHome(), 'gradle.properties'), JDK_KEY_GRADLE],
-    [path.join(root, '.gradle', 'config.properties'), JDK_KEY_CONFIG],
-  ];
-  for (const [file, key] of sources) {
+  for (const { file, key } of jdkSources(root)) {
     const text = await readCapped(file, MAX_PROPS_BYTES);
     if (text === null) continue;
     const value = propertyValue(text, key);
@@ -215,9 +238,10 @@ async function resolveJavaHome(root: string): Promise<string | null> {
   return null;
 }
 
-/** Окружение для команды с выбранным JDK. Обе переменные держим вместе: JAVA_HOME
- *  читает сам gradlew, TERMHUB_JAVA_HOME — источник для повторного export (JDK_EXPORT). */
-function jdkEnv(javaHome: string): NodeJS.ProcessEnv {
+/** Окружение агента с добавленным JDK — целиком, а не две переменные: команде нужен
+ *  весь PATH и всё остальное. Обе переменные держим вместе: JAVA_HOME читает сам
+ *  gradlew, TERMHUB_JAVA_HOME — источник для повторного export (JDK_EXPORT). */
+function processEnvWithJdk(javaHome: string): NodeJS.ProcessEnv {
   return { ...process.env, JAVA_HOME: javaHome, [JDK_ENV_VAR]: javaHome };
 }
 
@@ -267,9 +291,10 @@ function parseTaskLine(line: string, group: string): GradleTask | null {
   return { name: full, project, group, description };
 }
 
-/** Результат внешней команды: код и потоки, без throw (ошибку разбирает вызывающий). */
+/** Результат внешней команды: потоки и признак неудачи, без throw (разбирает вызывающий).
+ *  Кода возврата тут нет — ни один вызывающий его не читает: сборка отдаёт свой код
+ *  строкой `[termhub] gradle exit=N` в терминал, а списку тасок хватает `failed`. */
 interface RunResult {
-  code: number | null;
   stdout: string;
   stderr: string;
   failed: boolean;
@@ -283,28 +308,32 @@ function runShell(cmd: string, cwd: string, env?: NodeJS.ProcessEnv): Promise<Ru
       ['-lc', cmd],
       { cwd, env, timeout: TASKS_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER, encoding: 'utf8' },
       (err, stdout, stderr) => {
-        const e = err as (Error & { code?: number | string }) | null;
         resolve({
-          code: typeof e?.code === 'number' ? e.code : e ? null : 0,
           stdout: String(stdout ?? ''),
           stderr: String(stderr ?? ''),
-          failed: Boolean(e),
+          failed: Boolean(err),
         });
       },
     );
   });
 }
 
-/** Кэш списка тасок: папка → (сигнатура build-файлов, результат). */
+/** Кэш списка тасок: папка → (сигнатура входных файлов, результат). */
 const tasksCache = new Map<string, { sig: string; value: GradleTasks }>();
 
-/** Сигнатура build-файлов папки (имя + mtime) — по ней инвалидируется кэш. */
-async function buildFilesSig(dir: string): Promise<string> {
+/** Сигнатура входных файлов (путь + mtime + размер): всё, что описывает сборку, и всё,
+ *  откуда берётся JDK (§6) — источники берутся из того же `jdkSources`, что и сам выбор
+ *  JDK, поэтому добавленный источник инвалидирует кэш сам собой. Только СТАТЫ: ключ
+ *  кэша обязан стоить дешевле того, что кэш экономит, поэтому сам JDK (чтения файлов
+ *  и stat на bin/java) вычисляется только при промахе. Плата: JDK, исчезнувший с диска
+ *  без правки .properties, кэш не инвалидирует — это заметит уже сама сборка. */
+async function cacheSig(root: string): Promise<string> {
+  const files = [...BUILD_FILES.map((f) => path.join(root, f)), ...jdkSources(root).map((s) => s.file)];
   const parts: string[] = [];
-  for (const f of CACHE_FILES) {
+  for (const f of files) {
     try {
-      const st = await fsp.stat(path.join(dir, f));
-      parts.push(`${f}:${st.mtimeMs}`);
+      const st = await fsp.stat(f);
+      parts.push(`${f}:${st.mtimeMs}:${st.size}`);
     } catch {
       // файла нет — в сигнатуру не попадает
     }
@@ -332,17 +361,20 @@ export async function listTasks(dir: string, opts: ListTasksOpts = {}): Promise<
   const project = await detectProject(dir);
   if (!project) throw new Error('Not a Gradle project');
   const root = project.dir;
-  const javaHome = await resolveJavaHome(root);
-  // JDK — часть сигнатуры кэша: он сменился (правкой config.properties, например) —
+  // Файлы, откуда берётся JDK, входят в сигнатуру: сменили его правкой config.properties —
   // список тасок надо перечитать, хотя build-файлы никто не трогал.
-  const sig = `${await buildFilesSig(root)}|jdk:${javaHome ?? ''}`;
+  const sig = await cacheSig(root);
   if (opts.refresh) tasksCache.delete(root);
   else {
     const hit = tasksCache.get(root);
     if (hit && hit.sig === sig) return hit.value;
   }
+  const javaHome = await resolveJavaHome(root);
   const cmd = project.wrapper ? TASKS_CMD_WRAPPER : TASKS_CMD_GRADLE;
-  const r = javaHome === null ? await runShell(cmd, root) : await runShell(JDK_EXPORT + cmd, root, jdkEnv(javaHome));
+  const r =
+    javaHome === null
+      ? await runShell(cmd, root)
+      : await runShell(JDK_EXPORT + cmd, root, processEnvWithJdk(javaHome));
   if (r.failed) {
     const tail = stderrTail(r.stderr) || stderrTail(r.stdout);
     throw new Error(`Gradle failed to list tasks${tail ? `:\n${tail}` : ''}`);
@@ -360,7 +392,12 @@ function unxml(s: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_m, d: string) => String.fromCodePoint(Number(d)))
+    // Номер символа вне диапазона Unicode оставляем как есть: fromCodePoint на нём
+    // бросает, и один мусорный «&#…;» уронил бы разбор всего файла конфигураций.
+    .replace(/&#(\d+);/g, (m, d: string) => {
+      const code = Number(d);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : m;
+    })
     .replace(/&amp;/g, '&');
 }
 
@@ -392,8 +429,7 @@ function optionList(block: string, name: string): string[] {
 export interface ParseRunConfigOpts {
   /** Корень проекта: подстановка `$PROJECT_DIR$` и папка запуска по умолчанию. */
   projectDir: string;
-  /** Откуда прочитано: '.run' | 'runConfigurations' | 'workspace'. */
-  source: string;
+  source: GradleRunConfigSource;
 }
 
 /** Узкий парсер `<configuration type="GradleRunConfiguration">` — берёт ровно четыре
@@ -457,14 +493,15 @@ async function readCapped(file: string, limit: number): Promise<string | null> {
 async function xmlFiles(dir: string): Promise<string[]> {
   try {
     const names = (await fsp.readdir(dir)).filter((n) => n.toLowerCase().endsWith('.xml')).sort();
-    return names.sort().map((n) => path.join(dir, n));
+    return names.map((n) => path.join(dir, n));
   } catch {
     return [];
   }
 }
 
-/** Лежит ли путь внутри корня (оба — уже реальные). */
-function inside(root: string, p: string): boolean {
+/** Лежит ли путь внутри корня (оба — уже реальные, после realpath). Единственная
+ *  такая проверка на всю вкладку: порядок аргументов — «корень, потом путь». */
+export function isInsideRoot(root: string, p: string): boolean {
   return p === root || p.startsWith(root + path.sep);
 }
 
@@ -493,22 +530,13 @@ export async function listRunConfigs(dir: string): Promise<GradleRunConfig[]> {
       const xml = await readCapped(f, MAX_CONFIG_BYTES);
       if (xml === null) continue; // не прочитан (нет, велик, недоступен) — бюджет не тратим
       budget -= 1;
-      try {
-        found.push(...parseRunConfigXml(xml, { projectDir: root, source }));
-      } catch {
-        // битый файл пропускаем, остальные читаем дальше
-      }
+      // Парсер не бросает: битый блок он обрывает и отдаёт разобранное до него.
+      found.push(...parseRunConfigXml(xml, { projectDir: root, source }));
     }
   }
 
   const ws = await readCapped(path.join(root, '.idea', 'workspace.xml'), MAX_WORKSPACE_BYTES);
-  if (ws !== null) {
-    try {
-      found.push(...parseRunConfigXml(runManagerBlock(ws), { projectDir: root, source: 'workspace' }));
-    } catch {
-      // см. выше
-    }
-  }
+  if (ws !== null) found.push(...parseRunConfigXml(runManagerBlock(ws), { projectDir: root, source: 'workspace' }));
 
   // Имя занимает ПЕРВЫЙ источник (.run → runConfigurations → workspace) — даже если
   // его папка не прошла проверку на вхождение в корень. Иначе конфигурация,
@@ -525,7 +553,7 @@ export async function listRunConfigs(dir: string): Promise<GradleRunConfig[]> {
     } catch {
       continue; // папки запуска нет — проверить вхождение в корень нечем
     }
-    if (!inside(realRoot, realDir)) continue;
+    if (!isInsideRoot(realRoot, realDir)) continue;
     out.push(c);
   }
   return out;
@@ -600,7 +628,10 @@ interface TmuxResult {
   stderr: string;
 }
 
-/** tmux с изолированным сокетом (если задан). Не бросает: код возврата — часть ответа. */
+/** tmux с изолированным сокетом (если задан). Отличается от приватного `tmux()` в
+ *  SessionService контрактом ошибки: там неудача — исключение, здесь код возврата
+ *  часть ответа (нет сборочной сессии — это не ошибка, а фаза `idle`), поэтому
+ *  обёртка своя. Свести их в одну можно только вместе с правкой `sessions.ts`. */
 function tmux(args: string[], socketName?: string): Promise<TmuxResult> {
   const full = socketName ? ['-L', socketName, ...args] : args;
   return new Promise((resolve) => {
@@ -622,6 +653,12 @@ function paneTarget(name: string): string {
   return `=${name}:`;
 }
 
+/** Цель tmux для команд, принимающих target-session (kill-session): `=<имя>` — без
+ *  двоеточия. «=» так же выключает поиск по префиксу имени. */
+function sessionTarget(name: string): string {
+  return `=${name}`;
+}
+
 export interface RunTargetOpts {
   /** Имя рабочей сессии — сборочная вычисляется из него. */
   session: string;
@@ -629,9 +666,17 @@ export interface RunTargetOpts {
   socketName?: string;
 }
 
-/** Сессии, которым «Стоп» уже отправлял Ctrl+C: повторный «Стоп» при всё ещё живой
- *  команде убивает сессию совсем (история 18). Сбрасывается запуском и завершением. */
+/** Сборки, которым «Стоп» уже отправлял Ctrl+C: повторный «Стоп» при всё ещё живой
+ *  команде убивает сессию совсем (история 18). Ставится и снимается только запуском
+ *  и «Стопом» — статусный запрос состояние не трогает.
+ *  Ключ — сокет И имя сборочной сессии: на разных сокетах (прод `termhub`, тестовый
+ *  `termhub-test-…`) живут РАЗНЫЕ сборки, и одинаковое имя рабочей сессии не должно
+ *  делать их одной. */
 const stopSent = new Set<string>();
+
+function stopKey(name: string, socketName?: string): string {
+  return `${socketName ?? ''} ${name}`;
+}
 
 /** Идёт ли в панели что-то кроме оболочки. */
 function isBusy(current: string, idleShell: string): boolean {
@@ -641,15 +686,13 @@ function isBusy(current: string, idleShell: string): boolean {
 }
 
 /** Состояние сборки: idle — сборочной сессии нет, running — в панели идёт не
- *  оболочка, finished — сессия жива, команда отработала (вывод на месте). */
+ *  оболочка, finished — сессия жива, команда отработала (вывод на месте).
+ *  Запрос и только запрос: ничего в состоянии агента не меняет. */
 export async function runStatus(opts: RunTargetOpts): Promise<GradleRunState> {
   const name = buildSessionName(opts.session);
   const fmt = `#{pane_current_command}\t#{${OPT_COMMAND}}\t#{${OPT_STARTED}}\t#{${OPT_SHELL}}`;
   const r = await tmux(['list-panes', '-t', paneTarget(name), '-F', fmt], opts.socketName);
-  if (r.code !== 0) {
-    stopSent.delete(name);
-    return idleState();
-  }
+  if (r.code !== 0) return idleState();
   let busy = false;
   let command = '';
   let started = '';
@@ -663,7 +706,6 @@ export async function runStatus(opts: RunTargetOpts): Promise<GradleRunState> {
   const startedAt = Number.isFinite(at) && at > 0 ? at : null;
   const justSent = startedAt !== null && Date.now() - startedAt < START_GRACE_MS;
   const phase: GradleRunPhase = busy || justSent ? 'running' : 'finished';
-  if (phase !== 'running') stopSent.delete(name);
   return { phase, session: name, command: command || null, startedAt };
 }
 
@@ -716,14 +758,15 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   if (current.phase === 'running' && !opts.force) return current;
 
   // Прежняя сборочная сессия (с выводом прошлого запуска) уступает место новой.
-  await tmux(['kill-session', '-t', `=${name}`], opts.socketName);
+  await tmux(['kill-session', '-t', sessionTarget(name)], opts.socketName);
   // Путь к JDK едет отдельным argv-элементом `-e VAR=<путь>`: кавычки не нужны,
   // пробелы в «/Applications/Android Studio.app/…» ничего не ломают.
   const jdkArgs = javaHome === null ? [] : ['-e', `JAVA_HOME=${javaHome}`, '-e', `${JDK_ENV_VAR}=${javaHome}`];
   const created = await tmux(['new-session', '-d', '-s', name, '-c', dir, ...jdkArgs], opts.socketName);
   if (created.code !== 0)
     throw new Error(`Failed to create build session: ${created.stderr.trim() || created.code}`);
-  stopSent.delete(name);
+  // Новая сборка — новый счёт «Стопов»: первый снова шлёт Ctrl+C, а не убивает сессию.
+  stopSent.delete(stopKey(name, opts.socketName));
 
   const startedAt = Date.now();
   const target = paneTarget(name);
@@ -744,14 +787,19 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
  *  её вывод пользователю ещё нужен. */
 export async function stopRun(opts: RunTargetOpts): Promise<GradleRunState> {
   const name = buildSessionName(opts.session);
+  const key = stopKey(name, opts.socketName);
   const state = await runStatus(opts);
-  if (state.phase !== 'running') return state;
-  if (stopSent.has(name)) {
-    await tmux(['kill-session', '-t', `=${name}`], opts.socketName);
-    stopSent.delete(name);
+  if (state.phase !== 'running') {
+    // Останавливать нечего — и счёт «Стопов» начинается заново.
+    stopSent.delete(key);
+    return state;
+  }
+  if (stopSent.has(key)) {
+    await tmux(['kill-session', '-t', sessionTarget(name)], opts.socketName);
+    stopSent.delete(key);
     return idleState();
   }
-  stopSent.add(name);
+  stopSent.add(key);
   await tmux(['send-keys', '-t', paneTarget(name), 'C-c'], opts.socketName);
   return await runStatus(opts);
 }

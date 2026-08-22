@@ -123,4 +123,77 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
 
 Если сборка прервалась — скажи «продолжи автопилот»: состояние поднимется
 из `.autopilot/state.js`, переспрашивать ничего не нужно.
+
+## Вкладка Gradle (4-й таб сессии)
+
+Кто чем владеет:
+
+- `packages/agent/src/gradle.ts` — детект проекта, `tasks --all` с кэшем, разбор
+  XML-конфигураций запуска IDEA, запуск/стоп/статус сборки, выбор JDK проекта.
+- `packages/agent/src/gradle-action.ts` — единственный обработчик экшенов
+  (`detect|tasks|configs|run|stop|status`) на оба транспорта: здесь резолв корня
+  сессии через `realpath` + whitelist `config.sessionRoots` и права гостя
+  (`scope.files` на чтение, `scope.write` на `run`/`stop`).
+  **`gradle.ts` папку НЕ проверяет — принимает на веру**, вся защита пути тут.
+- Транспорты: `server.ts` → `POST /api/gradle`; `relay-link.ts` → кадры
+  `FrameType.Gradle`/`GradleResult`; веб → `Transport.gradle(action, params)`
+  (`transport.ts` + `relay-transport.ts`, обе реализации).
+- Веб: `packages/web/src/gradle.ts` — экран (`mountGradle` для роутера,
+  `mountGradleTab` — тот же монтаж с хэндлом `{listPanel, run, teardown}` для тестов),
+  `gradle-view.ts` — чистые рендеры, группировка и «недавние».
+- Четвёртый таб рисует `renderHoloBar` (`web/src/ui.ts`) асинхронно, после
+  `detectGradle` (кэш детекта на сессию — там же, плюс синхронный `knownGradle`,
+  которым `workspace.ts` уводит с не-Gradle сессии).
+
+Подводные камни (из кода не выводятся):
+
+- Сборка идёт в **отдельной** tmux-сессии `_gradle_<имя>_<6 hex>` на том же сокете;
+  `SessionService.list()` прячет их по префиксу (`isBuildSessionName`). Забытые
+  сборочные сессии видно только напрямую: `tmux -L termhub ls`.
+- **Каждый запуск пересоздаёт эту сессию** (`kill-session` + `new-session`), чтобы на
+  экране не остался прошлый вывод, — приаттаченный веб-терминал в этот момент
+  отваливается, и `GradleTab.run` обязан переподключить `openTerm` ПОСЛЕ ответа.
+- Код выхода наружу не отдаётся: признак конца — строка `[termhub] gradle exit=N`
+  в выводе. Веб берёт ПОСЛЕДНЕЕ вхождение в 64 КБ хвоста (перерисовка экрана при
+  attach иначе показала бы итог прошлой сборки).
+- `runStatus` первые 5 с после старта (`START_GRACE_MS`) отдаёт `running` всегда:
+  login-оболочка не мгновенно доходит до команды. Следствие — мгновенно упавшая
+  сборка ~5 с числится идущей, и повторный запуск без `force` в это окно отказывает.
+- Второй «Стоп» подряд убивает сборочную сессию (первый шлёт только `C-c`); счётчик
+  живёт в памяти агента — после рестарта первый «Стоп» снова только `C-c`.
+- Кэш списка тасок инвалидируется по mtime build-файлов **корня** (+ выбранный JDK):
+  правка `app/build.gradle.kts` его не сбросит, актуализация — кнопкой «Обновить»
+  (`refresh: true`). Автообновления списка нет и не обещай.
+- JDK проекта ищется как в IDEA: `<проект>/gradle.properties` →
+  `${GRADLE_USER_HOME:-~/.gradle}/gradle.properties` (`org.gradle.java.home`) →
+  `<проект>/.gradle/config.properties` (`java.home`). **`.idea/gradle.xml` не парсится**
+  — при именованном SDK из IDEA молча уходим на JDK login-оболочки; симптом
+  «в IDEA собирается, а тут нет».
+- Путь к JDK никогда не попадает в строку команды: он едет `env` у `execFile` и
+  `-e JAVA_HOME=… -e TERMHUB_JAVA_HOME=…` у `tmux new-session`. Константный
+  `export JAVA_HOME="$TERMHUB_JAVA_HOME"; ` перед командой — не лишний: `~/.zshrc`
+  читается tmux уже после старта оболочки и иначе перебивает `-e` (проверено вживую).
+  `tmux new-session -e` требует tmux ≥ 3.0; аргументы добавляются, только если JDK найден.
+- **JDK намеренно может лежать вне корней сессии** (живой случай — JBR внутри
+  `/Applications/Android Studio.app/…`); проверку whitelist к пути JDK не добавлять.
+- Имена тасок и аргументы **отвергаются** регуляркой, а не экранируются
+  (`checkTaskName`/`checkArgs`, `MAX_ARGS`); строки команд в `gradle.ts` константны.
+- `FrameType.Gradle` есть в `FRESH_AUTH_CHECK`, но сознательно НЕ в общем scope-фильтре
+  `handleAppFrame`: гостю нужен внятный `GradleResult{error}`, а не молчаливый drop.
+  `doOpen` дополнительно пускает гостя в `buildSessionName(scope.session)` — иначе
+  вкладка не покажет ему вывод сборки.
+- Тайм-аут gradle-запроса через relay — `GRADLE_TIMEOUT_MS = 190_000` (у `tasks` на
+  агенте свой потолок 180 с): общий 10-секундный обрывал бы первое открытие вкладки.
+- Раскладка и «недавние» — в localStorage: `termhub.gradleSplit`,
+  `termhub.gradleExpanded`, `termhub.gradleRecent.<session>`.
+
+Тесты только этой вкладки (4 файла: `gradle.unit`/`gradle.tmux` в agent,
+`gradle-view`/`gradle-tab` в web):
+
+```bash
+npx vitest run gradle
+```
+
+`gradle.tmux.test.ts` поднимает настоящий tmux на изолированном сокете и идёт ~27 с —
+это нормально, не таймаут.
 <!-- autopilot:end -->

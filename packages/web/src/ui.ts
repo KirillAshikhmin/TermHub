@@ -327,12 +327,20 @@ export function writeToolbarVisible(visible: boolean): void {
   }
 }
 
-// Детект Gradle-проекта — на сессию и на транспорт. Holo-бар рисуют три экрана,
-// и каждое переключение вкладки дёргало бы агента заново; ответ на сессию не
-// меняется, пока не сменился агент (relay: агентов несколько).
-const gradleDetects = new Map<string, Promise<GradleProject | null>>();
-const gradleKnown = new Map<string, GradleProject | null>();
+// Детект Gradle-проекта — на сессию, на транспорт (relay: агентов несколько) и
+// на срок: Holo-бар рисуют три экрана, и каждое переключение вкладки дёргало бы
+// агента заново, но вечным кэш быть не может — папка меняется под живой страницей.
+const gradleDetects = new Map<string, { at: number; req: Promise<GradleProject | null> }>();
+const gradleKnown = new Map<string, { at: number; value: GradleProject | null }>();
 let gradleOwner: unknown = null;
+/** Срок жизни ответа. Папка становится Gradle-проектом (и перестаёт им быть) при
+ *  живой странице — `gradle init`, `git clone`, checkout другой ветки, — и без
+ *  срока таб появился бы только после перезагрузки (история 4). */
+const GRADLE_TTL_MS = 5 * 60_000;
+
+function gradleFresh(at: number): boolean {
+  return Date.now() - at < GRADLE_TTL_MS;
+}
 
 function resetGradleIfForeign(transport: Transport): void {
   if (gradleOwner === transport) return;
@@ -347,20 +355,24 @@ function resetGradleIfForeign(transport: Transport): void {
  *  «остаться на вкладке и повторить»). */
 export function detectGradle(transport: Transport, session: string): Promise<GradleProject | null> {
   resetGradleIfForeign(transport);
+  const at = Date.now();
   const cached = gradleDetects.get(session);
-  if (cached) return cached;
+  if (cached && gradleFresh(cached.at)) return cached.req;
   const req = transport.gradle<GradleProject | null>('detect', { session }).then(
     (project) => {
       const value = project ?? null;
-      gradleKnown.set(session, value);
+      // Обе ветки сверяют, наша ли ещё запись: пока запрос был в полёте, срок мог
+      // выйти и следующий рендер бара спросил заново — опоздавший ответ не должен
+      // перебивать свежий (ни значением, ни удалением чужого запроса).
+      if (gradleDetects.get(session)?.req === req) gradleKnown.set(session, { at, value });
       return value;
     },
     (err: unknown) => {
-      gradleDetects.delete(session);
+      if (gradleDetects.get(session)?.req === req) gradleDetects.delete(session);
       throw err;
     },
   );
-  gradleDetects.set(session, req);
+  gradleDetects.set(session, { at, req });
   return req;
 }
 
@@ -368,7 +380,10 @@ export function detectGradle(transport: Transport, session: string): Promise<Gra
  *  Нужен роутеру, чтобы не показывать вкладку там, где её нет (см. workspace.ts). */
 export function knownGradle(transport: Transport, session: string): GradleProject | null | undefined {
   if (gradleOwner !== transport) return undefined;
-  return gradleKnown.get(session);
+  const known = gradleKnown.get(session);
+  // Протухший ответ — это «ещё не спрашивали»: вид смонтируется и уведёт сам,
+  // когда свежий детект вернёт `null` (см. workspace.ts).
+  return known && gradleFresh(known.at) ? known.value : undefined;
 }
 
 /** Android-Holo таб-бар рабочего пространства сессии: Сессия / Проводник / Репозиторий
