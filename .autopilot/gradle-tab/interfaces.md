@@ -190,3 +190,28 @@ export interface GradleRunRequest {
   ядром физически, поэтому симлинк в пути запуска увёл бы его мимо `<root>/gradlew`.
   Таск 03 и так делает realpath-проверку вхождения в whitelist — передавать надо
   результат этой проверки, а не исходную строку.
+
+### Дописано таском 03 (`gradle-action.ts`, `server.ts`, `relay-link.ts`, web-транспорт)
+
+- **Общий обработчик вынесен в НОВЫЙ модуль `packages/agent/src/gradle-action.ts`:**
+  `runGradleAction(deps: GradleActionDeps, req: Record<string, unknown>): Promise<unknown>`,
+  `GradleActionDeps = { sessions: SessionService; roots: string[]; socketName?: string; scope?: DeviceScope }`.
+  Естественное место (по образцу `runRepoAction` в `vcs.ts`) — сам `gradle.ts`, но он
+  зона тасков 01–02; отдельный модуль оставляет `gradle.ts` нетронутым и держит
+  обработчик в единственном экземпляре на оба транспорта.
+- Резолв корня и прав живёт ТОЛЬКО там: каталог сессии берётся из `sessions.list()`,
+  прогоняется через `realpath` и проверяется на вхождение в whitelist `roots`
+  (пустой `roots` → не разрешено ничего, fail-closed); `subdir` резолвится тем же
+  способом относительно уже проверенного корня. В `startRun` уходят `root` (корень
+  сессии) и `dir` (папка запуска) — оба после `realpath`.
+- Права гостя: `detect|tasks|configs|status` — при `scope.files`, `run|stop` — при
+  `scope.write`, чужая сессия — `session not shared`. `status` отнесён к чтению
+  (в критериях он не назван).
+- `AgentServer` получил опцию `socketName?: string`, `RelayLink` — `roots?: string[]`;
+  обе прокинуты из `cli.ts` (`TMUX_SOCKET` / `config.sessionRoots`).
+- `FrameType.Gradle` добавлен в `FRESH_AUTH_CHECK`, но НЕ в общий scope-фильтр кадров
+  `handleAppFrame`: там гостю отвечают молчаливым drop, а вкладке нужен внятный
+  `GradleResult{error}`. `doOpen` пускает гостя ещё и в `buildSessionName(scope.session)`.
+- Веб: `Transport.gradle<T>(action, params)` в обеих реализациях + `api.gradle`.
+  Тайм-аут relay-запроса — `GRADLE_TIMEOUT_MS = 190_000` (у `tasks` на агенте свой
+  потолок 180 с; общий 10-секундный обрывал бы первое открытие вкладки).

@@ -10,7 +10,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
   "startedAt": "2026-08-22T15:37:02+03:00",
-  "updatedAt": "2026-08-22T16:44:14+03:00",
+  "updatedAt": "2026-08-22T17:10:12+03:00",
   "finishedAt": null,
   "stages": [
     { "id": "preflight", "status": "done", "finishedAt": "2026-08-22T15:37:53+03:00", "startedAt": "2026-08-22T15:37:02+03:00" },
@@ -18,12 +18,12 @@ window.STATE =
     { "id": "briefing",  "status": "done", "finishedAt": "2026-08-22T15:44:38+03:00", "startedAt": "2026-08-22T15:38:57+03:00" },
     { "id": "spec",      "status": "done", "finishedAt": "2026-08-22T15:52:01+03:00", "startedAt": "2026-08-22T15:44:38+03:00" },
     { "id": "plan",      "status": "done", "note": "5 тасков, ярус T2", "finishedAt": "2026-08-22T15:55:40+03:00", "startedAt": "2026-08-22T15:52:01+03:00" },
-    { "id": "build",     "status": "active", "note": "1 из 5 тасков готов", "startedAt": "2026-08-22T15:55:40+03:00" },
-    { "id": "review",    "status": "active", "note": "проверен 1 из 5", "startedAt": "2026-08-22T16:16:06+03:00" },
+    { "id": "build",     "status": "active", "note": "2 из 5 тасков готовы", "startedAt": "2026-08-22T15:55:40+03:00" },
+    { "id": "review",    "status": "active", "note": "проверено 2 из 5", "startedAt": "2026-08-22T16:16:06+03:00" },
     { "id": "final",     "status": "pending" }
   ],
   "requirements": {
-    "total": 17, "done": 9, "inTicket": 8, "inSpec": 0,
+    "total": 17, "done": 14, "inTicket": 3, "inSpec": 0,
     "placeholder": 0, "deferred": 0, "dropped": 0
   },
   "tickets": [
@@ -34,11 +34,15 @@ window.STATE =
       "retries": 0, "repairs": 1, "handoffs": 0,
       "repairFindings": ["конфигурация вне корня воскресала из workspace.xml — R05.4", "конфигурация без тасок уходила наружу как запускаемая", "лимиты и молчаливый отброс не покрыты ассертами"] },
     { "id": "02", "title": "Запуск, остановка и статус сборки в tmux", "requirements": ["R07", "R08", "R09", "R12i", "R13i"],
-      "blockedBy": ["01"], "wave": 2, "zone": ["packages/agent/src/gradle.ts", "packages/agent/src/sessions.ts"], "status": "review", "startedAt": "2026-08-22T16:16:06+03:00",
-      "retries": 0, "repairs": 0, "handoffs": 0 },
+      "blockedBy": ["01"], "wave": 2, "zone": ["packages/agent/src/gradle.ts", "packages/agent/src/sessions.ts"], "status": "done", "startedAt": "2026-08-22T16:16:06+03:00", "finishedAt": "2026-08-22T16:47:53+03:00",
+      "files": ["packages/agent/src/gradle.ts", "packages/agent/src/sessions.ts", "packages/agent/test/gradle.tmux.test.ts"],
+      "tests": { "passed": 508, "failed": 0 }, "commit": "b9e7a0f",
+      "retries": 0, "repairs": 1, "handoffs": 0,
+      "repairFindings": ["wrapper искался в папке запуска вместо корня проекта — R07 partial", "истинная ветка isBusy не была придавлена ассертом", "skipIf молча снимал весь шов без tmux"] },
     { "id": "03", "title": "Gradle по обоим транспортам и права гостя", "requirements": ["R14i"],
-      "blockedBy": ["02"], "wave": 3, "zone": ["packages/agent/src/server.ts", "packages/agent/src/relay-link.ts", "packages/web/src/transport.ts"], "status": "pending",
-      "retries": 0, "repairs": 0, "handoffs": 0 },
+      "blockedBy": ["02"], "wave": 3, "zone": ["packages/agent/src/server.ts", "packages/agent/src/relay-link.ts", "packages/web/src/transport.ts"], "status": "repair", "startedAt": "2026-08-22T16:47:37+03:00",
+      "retries": 0, "repairs": 1, "handoffs": 0,
+      "repairFindings": ["сообщения обработчика на двух языках", "несуществующая подпапка получала текст про выход за корень", "symlink-побег проверялся только статусом 400"] },
     { "id": "04", "title": "Четвёртая вкладка: маршрут, таб, раскладка, окно вывода", "requirements": ["R01", "R02", "R03", "R08", "R09", "R12i", "R13i"],
       "blockedBy": ["03"], "wave": 4, "zone": ["packages/web/src/gradle.ts", "packages/web/src/ui.ts", "packages/web/src/workspace.ts"], "status": "pending",
       "retries": 0, "repairs": 0, "handoffs": 0 },
@@ -47,11 +51,11 @@ window.STATE =
       "retries": 0, "repairs": 0, "handoffs": 0 }
   ],
   "singlePass": null,
-  "tests": { "passed": 499, "failed": 0 },
+  "tests": { "passed": 508, "failed": 0 },
   "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
   "additions": [],
   "coverage": { "findings": 6, "missing": 2, "half": 4, "fixed": 6, "note": "1 из 2 «пропущенных» — сужение R05 решением пользователя (G02), в спецификации помечено явно; второе (.idea/workspace.xml) закрыто чтением RunManager" },
-  "concerns": ["gradle.ts:21 — CACHE_FILES завязан на позицию gradlew в MARKERS (индекс, не имя)", "gradle.ts:128-153 — RunResult.code не читается ни одним вызывающим", "gradle.ts:348-360 — try/catch вокруг parseRunConfigXml, у которого нет пути к throw", "gradle.ts:262-283 — самозакрытый <configuration/> даёт конфигурацию с пустым tasks", "frames.ts:230 — GradleRunConfig.source: string вместо union из трёх значений", "frames.ts:46-47 — набор экшенов Gradle живёт только в комментарии, не типом", "gradle.unit.test.ts:278-331 — лимиты MAX_CONFIG_FILES и MAX_WORKSPACE_BYTES не покрыты ассертом", "gradle.unit.test.ts:84-129 — молчаливый отброс строки таски не покрыт ассертом", "gradle.ts:311-315 — двойной .sort() в xmlFiles", "gradle.ts:378-383 — имя занимается и при несуществующей папке конфигурации", "gradle.ts:498,507 — runStatus удаляет записи из stopSent: чтение статуса меняет состояние", "gradle.ts:471 — stopSent ключуется только по имени сессии, без сокета", "gradle.ts:445,569,584 — обёртка «execFile tmux с -L» дублирует приватный tmux() из SessionService", "gradle.ts:568,576 — цель tmux собирается двумя способами (paneTarget() и inline =name)", "gradle.tmux.test.ts:103-104 — комментарий обещает проверку папки запуска, ассерт проверяет только наличие сессии"],
+  "concerns": ["gradle.ts:21 — CACHE_FILES завязан на позицию gradlew в MARKERS (индекс, не имя)", "gradle.ts:128-153 — RunResult.code не читается ни одним вызывающим", "gradle.ts:348-360 — try/catch вокруг parseRunConfigXml, у которого нет пути к throw", "gradle.ts:262-283 — самозакрытый <configuration/> даёт конфигурацию с пустым tasks", "frames.ts:230 — GradleRunConfig.source: string вместо union из трёх значений", "frames.ts:46-47 — набор экшенов Gradle живёт только в комментарии, не типом", "gradle.unit.test.ts:278-331 — лимиты MAX_CONFIG_FILES и MAX_WORKSPACE_BYTES не покрыты ассертом", "gradle.unit.test.ts:84-129 — молчаливый отброс строки таски не покрыт ассертом", "gradle.ts:311-315 — двойной .sort() в xmlFiles", "gradle.ts:378-383 — имя занимается и при несуществующей папке конфигурации", "gradle.ts:498,507 — runStatus удаляет записи из stopSent: чтение статуса меняет состояние", "gradle.ts:471 — stopSent ключуется только по имени сессии, без сокета", "gradle.ts:445,569,584 — обёртка «execFile tmux с -L» дублирует приватный tmux() из SessionService", "gradle.ts:568,576 — цель tmux собирается двумя способами (paneTarget() и inline =name)", "gradle.tmux.test.ts:103-104 — комментарий обещает проверку папки запуска, ассерт проверяет только наличие сессии", "gradle-action.ts:77 — sessionRoot() резолвится и для status/stop: переименовали папку при живой сборке → остановить её из UI нечем (R12i)", "gradle-action.ts:29 — две функции inside с обратным порядком аргументов в одной фиче", "server.ts:150, relay-link.ts:243 — имя сокета едет отдельным полем рядом с SessionService, который им уже владеет", "gradle-action.ts:36-46 — sessionRoot делает две вещи: резолвит каталог и авторизует доступ", "gradle-action.ts:36-46 — «имя сессии → list() → realpath» повторяет RelayLink.scopedDir", "relay-transport.ts — четвёртая копия формы «карта ожиданий + id + таймаут + case XResult»", "cli.ts:51,65 — roots доезжает до транспортов двумя разными путями"],
   "reviewers": { "manifestSpec": "a548ca363619ec34b", "craft": "ad0cc9e74279f2453" },
   "blind": null
 }

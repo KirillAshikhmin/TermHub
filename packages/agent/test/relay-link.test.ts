@@ -36,6 +36,7 @@ import {
 import { startRelay, type RelayHandle } from '../../relay/src/index.js';
 import { RelayLink } from '../src/relay-link.js';
 import { SessionService } from '../src/sessions.js';
+import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
 import { saveAuthorized, loadAuthorized } from '../src/config.js';
 import type { AuthorizedDevice } from '../src/config.js';
@@ -819,4 +820,154 @@ describe('RelayLink — hardening (pending-cap, revoke)', () => {
       await revokeLink.stop();
     }
   }, 20000);
+});
+
+describe('RelayLink — вкладка Gradle через relay', () => {
+  const GUEST_SESSION = 'gradle-guest';
+  const OTHER_SESSION = 'gradle-other';
+  const DEVICE = 'gradle-guest-device';
+  type Scope = { session: string; write: boolean; files: boolean };
+
+  let gradleIdentity: Identity;
+  let gradleId: string;
+  let gradleLink: RelayLink;
+  let projectDir: string;
+  let otherDir: string;
+  let openedSessions: string[] = [];
+
+  /** Терминал-пустышка: OPEN не должен спавнить настоящий pty — проверяем решение
+   *  о доступе, а не работу tmux. */
+  const fakeAttach = (opts: { session: string }): TerminalHandle => {
+    openedSessions.push(opts.session);
+    return { write: () => {}, resize: () => {}, pause: () => {}, resume: () => {}, dispose: () => {} };
+  };
+
+  beforeAll(() => {
+    projectDir = path.join(root, 'gradle-proj');
+    otherDir = path.join(root, 'gradle-other');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.mkdirSync(otherDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'settings.gradle'), "rootProject.name='guest'\n");
+    const listed: SessionInfo[] = [
+      { name: GUEST_SESSION, path: projectDir, command: 'zsh', activityTs: 1, attached: 0, bell: false, title: '' },
+      { name: OTHER_SESSION, path: otherDir, command: 'zsh', activityTs: 1, attached: 0, bell: false, title: '' },
+    ];
+    gradleIdentity = generateIdentity();
+    gradleId = fingerprint(gradleIdentity.edPub);
+    gradleLink = new RelayLink({
+      url: `ws://127.0.0.1:${relayHandle.port}/relay`,
+      identity: gradleIdentity,
+      authorized: () => loadAuthorized(),
+      sessions: { list: async () => listed } as unknown as SessionService,
+      roots: [root],
+      socketName,
+      attach: fakeAttach,
+    });
+    gradleLink.start();
+  });
+
+  afterAll(async () => {
+    await gradleLink.stop();
+  });
+
+  beforeEach(() => {
+    openedSessions = [];
+  });
+
+  interface Client {
+    ws: WebSocket;
+    col: Collector;
+    enc: { push(b: Uint8Array): Uint8Array };
+    dec: { pull(b: Uint8Array): Uint8Array };
+  }
+
+  async function guestClient(scope?: Scope): Promise<Client> {
+    const clientId = generateIdentity();
+    saveAuthorized([
+      {
+        name: DEVICE,
+        edPub: b64(clientId.edPub),
+        fingerprint: fingerprint(clientId.edPub),
+        addedAt: Date.now(),
+        ...(scope ? { scope } : {}),
+      },
+    ]);
+    const { ws, col } = await connectClient(relayHandle.port, gradleId);
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), DEVICE), { binary: true });
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, gradleIdentity.edPub);
+    const dec = makeDecryptor(rx, unb64(ok.header));
+    const enc = makeEncryptor(tx);
+    ws.send(finFrame(clientId, enc, ok), { binary: true });
+    return { ws, col, enc, dec };
+  }
+
+  async function nextFrame(c: Client): Promise<ReturnType<typeof decodeFrame>> {
+    return decodeFrame(c.dec.pull(new Uint8Array((await c.col.next()).binary as Buffer)));
+  }
+
+  async function gradle(c: Client, req: Record<string, unknown>): Promise<{ result?: unknown; error?: string }> {
+    c.ws.send(c.enc.push(jsonFrame(FrameType.Gradle, 0, { id: 7, ...req })), { binary: true });
+    const frame = await nextFrame(c);
+    expect(frame.type).toBe(FrameType.GradleResult);
+    const r = frameJson<{ id?: number; result?: unknown; error?: string }>(frame);
+    expect(r.id).toBe(7);
+    return r;
+  }
+
+  it('владелец (scope нет): detect отдаёт Gradle-проект каталога сессии', async () => {
+    const c = await guestClient();
+    const r = await gradle(c, { action: 'detect', session: GUEST_SESSION });
+    expect(r.error).toBeUndefined();
+    expect((r.result as { markers: string[] }).markers).toContain('settings.gradle');
+  }, 25000);
+
+  const combos: Scope[] = [
+    { session: GUEST_SESSION, write: false, files: false },
+    { session: GUEST_SESSION, write: false, files: true },
+    { session: GUEST_SESSION, write: true, files: false },
+    { session: GUEST_SESSION, write: true, files: true },
+  ];
+  for (const scope of combos) {
+    it(`гость scope{files:${scope.files},write:${scope.write}}: detect — по files, stop — по write`, async () => {
+      const c = await guestClient(scope);
+      const detect = await gradle(c, { action: 'detect', session: GUEST_SESSION });
+      if (scope.files) expect((detect.result as { markers: string[] }).markers).toContain('settings.gradle');
+      else expect(detect.error).toBe('no files permission');
+
+      const stop = await gradle(c, { action: 'stop', session: GUEST_SESSION });
+      if (scope.write) expect((stop.result as { phase: string }).phase).toBe('idle');
+      else expect(stop.error).toBe('no write permission');
+    }, 25000);
+  }
+
+  it('гость с полными правами не получает Gradle чужой сессии', async () => {
+    const c = await guestClient({ session: GUEST_SESSION, write: true, files: true });
+    for (const action of ['detect', 'tasks', 'configs', 'status', 'stop', 'run']) {
+      const r = await gradle(c, { action, session: OTHER_SESSION, tasks: ['assemble'] });
+      expect(r.error).toBe('session not shared');
+      expect(r.result).toBeUndefined();
+    }
+  }, 25000);
+
+  it('гость подключается терминалом к сборочной сессии СВОЕЙ сессии и не может — к чужой', async () => {
+    const c = await guestClient({ session: GUEST_SESSION, write: true, files: true });
+    c.ws.send(c.enc.push(jsonFrame(FrameType.Open, 1, { session: buildSessionName(GUEST_SESSION) })), {
+      binary: true,
+    });
+    const own = await nextFrame(c);
+    expect(own.type).toBe(FrameType.OpenOk);
+    expect(openedSessions).toEqual([buildSessionName(GUEST_SESSION)]);
+
+    c.ws.send(c.enc.push(jsonFrame(FrameType.Open, 2, { session: buildSessionName(OTHER_SESSION) })), {
+      binary: true,
+    });
+    const foreign = await nextFrame(c);
+    expect(foreign.type).toBe(FrameType.Error);
+    expect(frameJson<{ code: string }>(foreign).code).toBe('forbidden');
+    expect(openedSessions).toEqual([buildSessionName(GUEST_SESSION)]);
+  }, 25000);
 });

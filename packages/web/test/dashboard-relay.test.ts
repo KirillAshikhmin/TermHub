@@ -101,6 +101,10 @@ class ScriptedTransport implements Transport {
     return Promise.reject(new Error('repo not scripted'));
   }
 
+  gradle<T = unknown>(_action: string, _params: Record<string, unknown>): Promise<T> {
+    return Promise.reject(new Error('gradle not scripted'));
+  }
+
   fileOp<T = unknown>(_action: string, _params: Record<string, unknown>): Promise<T> {
     return Promise.reject(new Error('fileOp not scripted'));
   }

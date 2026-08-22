@@ -75,6 +75,8 @@ import { attachTerminal, type TerminalHandle } from './bridge.js';
 import { runRepoAction } from './vcs.js';
 import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
+import { runGradleAction } from './gradle-action.js';
+import { buildSessionName } from './gradle.js';
 import { VcsService } from './vcs.js';
 
 /** TTL кода пейринга — 5 минут (совпадает с relay). */
@@ -118,6 +120,7 @@ const FRESH_AUTH_CHECK = new Set<FrameType>([
   FrameType.Revoke,
   FrameType.FileOp,
   FrameType.Repo,
+  FrameType.Gradle,
   FrameType.PushSubscribe,
   FrameType.Caffeinate,
 ]);
@@ -182,6 +185,7 @@ export class RelayLink {
   private readonly push?: PushCtl;
   private readonly files?: FilesCtl;
   private readonly vcs?: VcsService;
+  private readonly roots: string[];
   private readonly socketName?: string;
   /** Адреса прямого доступа к агенту (минуя relay); отдаются по кадру Addresses. */
   private readonly localUrls?: () => string[];
@@ -221,6 +225,8 @@ export class RelayLink {
     /** Файловый браузер (листинг/чтение в корнях) для удалённого доступа; необязательно. */
     files?: FilesCtl;
     vcs?: VcsService;
+    /** Whitelist корней сессий (config.sessionRoots) — для экшенов Gradle. */
+    roots?: string[];
     socketName?: string;
     /** Адреса прямого доступа (минуя relay) — их клиент кладёт в список серверов. */
     localUrls?: () => string[];
@@ -237,6 +243,7 @@ export class RelayLink {
     this.push = opts.push;
     this.files = opts.files;
     this.vcs = opts.vcs;
+    this.roots = opts.roots ?? [];
     this.socketName = opts.socketName;
     this.localUrls = opts.localUrls;
     this.helloTimeoutMs = opts.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
@@ -802,6 +809,9 @@ export class RelayLink {
       case FrameType.FileOp:
         void this.doFileOp(s, frame);
         return;
+      case FrameType.Gradle:
+        void this.doGradle(s, frame);
+        return;
       case FrameType.Share:
         void this.doShare(s, frame);
         return;
@@ -945,6 +955,29 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, error: (err as Error).message }));
+    }
+  }
+
+  /** Вкладка Gradle через relay. Обработчик — тот же, что у LAN-роута POST /api/gradle
+   *  (gradle-action.ts): права гостя и проверка корней живут там, здесь — только
+   *  транспорт. В общий scope-фильтр выше кадр НЕ добавлен намеренно: молчаливый drop
+   *  оставил бы клиента ждать ответа, а так гость получает GradleResult с error. */
+  private async doGradle(s: ClientSession, frame: Frame): Promise<void> {
+    let req: Record<string, unknown>;
+    try {
+      req = frameJson<Record<string, unknown>>(frame);
+    } catch {
+      req = {};
+    }
+    const id = typeof req.id === 'number' ? req.id : 0;
+    try {
+      const result = await runGradleAction(
+        { sessions: this.sessions, roots: this.roots, socketName: this.socketName, scope: s.scope },
+        req,
+      );
+      this.sendFrameBytes(s, jsonFrame(FrameType.GradleResult, 0, { id, result }));
+    } catch (err) {
+      this.sendFrameBytes(s, jsonFrame(FrameType.GradleResult, 0, { id, error: (err as Error).message }));
     }
   }
 
@@ -1124,8 +1157,9 @@ export class RelayLink {
     }
     if (typeof req.session !== 'string') return;
     const session = req.session;
-    // Гость может открыть только свою сессию.
-    if (s.scope && session !== s.scope.session) {
+    // Гость может открыть только свою сессию — и сборочную сессию ЕЁ сборки
+    // (вкладка Gradle показывает вывод через тот же openTerm), но не чужую.
+    if (s.scope && session !== s.scope.session && session !== buildSessionName(s.scope.session)) {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'forbidden', message: 'session not shared' }));
       return;
     }

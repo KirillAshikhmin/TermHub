@@ -53,6 +53,7 @@ async function start(opts: {
   onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
   push?: { subscribe(sub: unknown): Promise<void>; vapidPublicKey(): string };
   caffeinate?: { readonly supported: boolean; isActive(): boolean; set(on: boolean): void };
+  socketName?: string;
   staticDir?: string;
 }): Promise<Started> {
   const server = new AgentServer({
@@ -61,6 +62,7 @@ async function start(opts: {
     onShare: opts.onShare,
     push: opts.push,
     caffeinate: opts.caffeinate,
+    socketName: opts.socketName,
     staticDir: opts.staticDir,
   });
   const port = await server.listen();
@@ -751,5 +753,158 @@ describe.skipIf(!tmuxAvailable)('AgentServer — реальный SessionService
       headers: { cookie: authCookie() },
     });
     expect(del.status).toBe(404);
+  });
+});
+
+describe('POST /api/gradle — LAN-роут', () => {
+  let s: Started | undefined;
+  let root: string;
+  let projectDir: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-gradle-'));
+    projectDir = path.join(root, 'proj');
+    fs.mkdirSync(projectDir);
+    fs.writeFileSync(path.join(projectDir, 'settings.gradle'), "rootProject.name='proj'\n");
+  });
+
+  afterEach(async () => {
+    await s?.server.close();
+    s = undefined;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Сессия `proj` живёт в каталоге внутри корня; `outside` — за его пределами. */
+  async function startWithSessions(sessions: SessionInfo[], roots: string[] = [root]): Promise<void> {
+    s = await start({
+      config: fixtureConfig({ sessionRoots: roots }),
+      sessions: stubSessions({ list: async () => sessions }),
+    });
+  }
+
+  function sessionAt(name: string, dir: string): SessionInfo {
+    return { name, path: dir, command: 'zsh', activityTs: 1, attached: 0, bell: false, title: '' };
+  }
+
+  async function post(body: unknown): Promise<{ status: number; body: { result?: unknown; error?: string } }> {
+    const res = await fetch(`${s!.base}/api/gradle`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: (await res.json()) as { result?: unknown; error?: string } };
+  }
+
+  it('неизвестный action → 400 с текстом ошибки, а не 500', async () => {
+    await startWithSessions([sessionAt('proj', projectDir)]);
+    const res = await post({ action: 'launch-missiles', session: 'proj' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('launch-missiles');
+  });
+
+  it('каталог сессии вне whitelist корней (в том числе через symlink) → отказ', async () => {
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-outside-'));
+    fs.writeFileSync(path.join(elsewhere, 'settings.gradle'), "rootProject.name='evil'\n");
+    // Symlink ВНУТРИ корня, указывающий наружу: без realpath проверка «начинается с
+    // корня» его пропустила бы, и сборка ушла бы в чужой каталог.
+    const link = path.join(root, 'escape');
+    fs.symlinkSync(elsewhere, link);
+    try {
+      await startWithSessions([sessionAt('far', elsewhere), sessionAt('link', link)]);
+      const far = await post({ action: 'detect', session: 'far' });
+      expect(far.status).toBe(400);
+      expect(far.body.error).toBe('Session directory outside allowed roots');
+      const viaLink = await post({ action: 'detect', session: 'link' });
+      expect(viaLink.status).toBe(400);
+      // 400 — общий ответ роута на любую ошибку, поэтому фиксируем ПРИЧИНУ отказа:
+      // symlink обязан отвергаться как побег за корни, а не как что-то ещё.
+      expect(viaLink.body.error).toBe('Session directory outside allowed roots');
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it('detect в корне Gradle-проекта отдаёт маркеры, в обычной папке — null', async () => {
+    const plain = path.join(root, 'plain');
+    fs.mkdirSync(plain);
+    await startWithSessions([sessionAt('proj', projectDir), sessionAt('plain', plain)]);
+    const found = await post({ action: 'detect', session: 'proj' });
+    expect(found.status).toBe(200);
+    expect((found.body.result as { markers: string[] }).markers).toContain('settings.gradle');
+    const none = await post({ action: 'detect', session: 'plain' });
+    expect(none.status).toBe(200);
+    expect(none.body.result).toBeNull();
+  });
+});
+
+describe.skipIf(!tmuxAvailable)('POST /api/gradle — запуск в подпапке (изолированный tmux)', () => {
+  const socketName = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
+  let root: string;
+  let projectDir: string;
+  let started: Started;
+  let buildSession: string;
+
+  beforeAll(async () => {
+    buildSession = (await import('../src/gradle.js')).buildSessionName('gproj');
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-gradle-run-'));
+    projectDir = path.join(root, 'gproj');
+    fs.mkdirSync(path.join(projectDir, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'settings.gradle'), "include ':app'\n");
+    // Wrapper лежит ТОЛЬКО в корне проекта — как в настоящей многомодульной сборке.
+    fs.writeFileSync(path.join(projectDir, 'gradlew'), '#!/bin/sh\necho stub-wrapper "$@"\n', { mode: 0o755 });
+    const listed: SessionInfo[] = [
+      { name: 'gproj', path: projectDir, command: 'zsh', activityTs: 1, attached: 0, bell: false, title: '' },
+    ];
+    started = await start({
+      config: fixtureConfig({ sessionRoots: [root] }),
+      sessions: stubSessions({ list: async () => listed }),
+      socketName,
+    });
+  });
+
+  afterAll(async () => {
+    await started.server.close();
+    try {
+      execFileSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore' });
+    } catch {
+      // сервер мог не подниматься
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  async function post(body: unknown): Promise<{ status: number; body: { result?: unknown; error?: string } }> {
+    const res = await fetch(`${started.base}/api/gradle`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: (await res.json()) as { result?: unknown; error?: string } };
+  }
+
+  it('run в подпапке адресует wrapper из КОРНЯ сессии (../gradlew), а не из папки запуска', async () => {
+    const res = await post({ action: 'run', session: 'gproj', subdir: 'app', tasks: ['help'], args: [] });
+    expect(res.status).toBe(200);
+    const state = res.body.result as { phase: string; session: string; command: string };
+    expect(state.phase).toBe('running');
+    expect(state.session).toBe(buildSession);
+    expect(state.command.startsWith('../gradlew ')).toBe(true);
+    // Сборочная сессия действительно поднята на изолированном сокете.
+    const names = execFileSync('tmux', ['-L', socketName, 'list-sessions', '-F', '#{session_name}'], {
+      encoding: 'utf8',
+    });
+    expect(names).toContain(buildSession);
+  }, 20000);
+
+  it('run с subdir вне корня и run с несуществующей subdir называют РАЗНЫЕ причины', async () => {
+    const outside = await post({ action: 'run', session: 'gproj', subdir: '../..', tasks: ['help'], args: [] });
+    expect(outside.status).toBe(400);
+    expect(outside.body.error).toBe('Run directory outside session root');
+
+    // Опечатка в имени подпапки — это не побег за корень: назвав её так, мы отправили
+    // бы пользователя искать проблему в правах вместо имени.
+    const missing = await post({ action: 'run', session: 'gproj', subdir: 'aap', tasks: ['help'], args: [] });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error).toBe('Run directory not found');
+    expect(missing.body.error).not.toBe(outside.body.error);
   });
 });

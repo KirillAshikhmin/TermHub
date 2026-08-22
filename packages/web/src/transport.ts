@@ -89,6 +89,9 @@ export interface Transport {
   /** Файловые операции (stat-full/remove/move/copy) над файлом в пределах корня.
    *  Мутации требуют право записи (оба режима). */
   fileOp<T = unknown>(action: string, params: Record<string, unknown>): Promise<T>;
+  /** Вкладка Gradle (оба режима). action — detect|tasks|configs|run|stop|status;
+   *  params — {session, subdir?, tasks?, args?, force?, refresh?}. */
+  gradle<T = unknown>(action: string, params: Record<string, unknown>): Promise<T>;
   /** Сгенерировать код пейринга; scope — ограничение гостя (оба режима). */
   share(scope?: DeviceScope): Promise<ShareInfo>;
   /** Список допущенных устройств (оба режима). */
@@ -326,6 +329,10 @@ export class LanTransport implements Transport {
 
   fileOp<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {
     return api.fileOp<T>(action, params);
+  }
+
+  gradle<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {
+    return api.gradle<T>(action, params);
   }
 
   share(scope?: DeviceScope): Promise<ShareInfo> {

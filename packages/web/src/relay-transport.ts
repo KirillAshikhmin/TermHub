@@ -42,6 +42,10 @@ const CONTROL_CHANNEL = 0;
 const FIRST_TERM_CHANNEL = 1;
 /** Тайм-аут ответа на LIST (покрывает и начальный хендшейк). */
 const LIST_TIMEOUT_MS = 10_000;
+/** Тайм-аут ответа на экшены Gradle: `tasks` ждёт настоящий `gradle tasks --all`,
+ *  у которого на стороне агента свой потолок 180 с — общий 10-секундный обрывал бы
+ *  первое открытие вкладки на холодном демоне. */
+const GRADLE_TIMEOUT_MS = 190_000;
 /** Backoff реконнекта: старт 1 с, удвоение до потолка 15 с. */
 const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 15_000;
@@ -225,6 +229,11 @@ export class RelayTransport implements Transport {
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private fileOpReqId = 0;
+  private pendingGradle = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  private gradleReqId = 0;
   private backoff = BACKOFF_START_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   /** Был ли поток установлен хоть раз — влияет на статус (connecting vs reconnecting). */
@@ -584,6 +593,22 @@ export class RelayTransport implements Transport {
         else pending.resolve(r.result);
         return;
       }
+      case FrameType.GradleResult: {
+        let r: { id?: number; result?: unknown; error?: string };
+        try {
+          r = frameJson(frame);
+        } catch {
+          return;
+        }
+        if (typeof r.id !== 'number') return;
+        const pending = this.pendingGradle.get(r.id);
+        if (!pending) return;
+        this.pendingGradle.delete(r.id);
+        clearTimeout(pending.timer);
+        if (r.error) pending.reject(new Error(r.error));
+        else pending.resolve(r.result);
+        return;
+      }
       case FrameType.FileOpResult: {
         let r: { id?: number; result?: unknown; error?: string };
         try {
@@ -744,6 +769,7 @@ export class RelayTransport implements Transport {
     for (const map of [
       this.pendingRepo,
       this.pendingFileOp,
+      this.pendingGradle,
       this.pendingDirs,
       this.pendingFilesList,
       this.pendingFileRead,
@@ -895,6 +921,19 @@ export class RelayTransport implements Transport {
       }, LIST_TIMEOUT_MS);
       this.pendingFileOp.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
       this.sendFrame(jsonFrame(FrameType.FileOp, CONTROL_CHANNEL, { id, action, ...params }));
+    });
+  }
+
+  gradle<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {
+    if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    const id = ++this.gradleReqId;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingGradle.delete(id);
+        reject(new Error('gradle timeout'));
+      }, GRADLE_TIMEOUT_MS);
+      this.pendingGradle.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      this.sendFrame(jsonFrame(FrameType.Gradle, CONTROL_CHANNEL, { id, action, ...params }));
     });
   }
 

@@ -20,6 +20,7 @@ import { runFileOp } from './files.js';
 import type { FileService } from './files.js';
 import { runRepoAction } from './vcs.js';
 import type { VcsService } from './vcs.js';
+import { runGradleAction } from './gradle-action.js';
 import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
 
 /** Сервис веб-push (реализация — Task 9). */
@@ -146,6 +147,8 @@ export class AgentServer {
   private readonly relayStatus?: () => { connected: boolean; agentId: string; clients: number } | null;
   private readonly push?: PushService;
   private readonly caffeinate?: CaffeinateController;
+  /** Сокет tmux рабочих сессий: нужен экшенам Gradle (сборочная сессия — там же). */
+  private readonly socketName?: string;
   private readonly rateLimit = new LoginRateLimit();
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly staticDir: string;
@@ -161,6 +164,8 @@ export class AgentServer {
     relayStatus?: () => { connected: boolean; agentId: string; clients: number } | null;
     push?: PushService;
     caffeinate?: CaffeinateController;
+    /** Сокет tmux рабочих сессий (в проде — config.TMUX_SOCKET). */
+    socketName?: string;
     /** Каталог web-статики; по умолчанию packages/agent/static (для тестов — переопределяемый). */
     staticDir?: string;
   }) {
@@ -172,6 +177,7 @@ export class AgentServer {
     this.relayStatus = opts.relayStatus;
     this.push = opts.push;
     this.caffeinate = opts.caffeinate;
+    this.socketName = opts.socketName;
     this.staticDir = opts.staticDir ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'static');
   }
 
@@ -285,6 +291,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/files/download') return this.fileDownload(req, res, url);
     if (method === 'POST' && pathname === '/api/repo') return this.repoApi(req, res);
     if (method === 'POST' && pathname === '/api/files/op') return this.filesOp(req, res);
+    if (method === 'POST' && pathname === '/api/gradle') return this.gradleApi(req, res);
     if (method === 'POST' && pathname === '/api/files/upload') return this.fileUpload(req, res, url);
     if (method === 'POST' && pathname === '/api/push/subscribe') return this.pushSubscribe(req, res);
     if (method === 'GET' && pathname === '/api/devices') {
@@ -363,6 +370,21 @@ export class AgentServer {
     const body = await this.readJson(req, res);
     try {
       const result = await runRepoAction(this.vcs, body);
+      this.sendJson(res, 200, { result });
+    } catch (err) {
+      this.sendJson(res, 400, { error: (err as Error).message });
+    }
+  }
+
+  /** Вкладка Gradle в LAN. Обработчик — общий с relay (gradle-action.ts): неизвестный
+   *  экшен, выход за корни и нехватка прав приходят оттуда ошибкой → 400. */
+  private async gradleApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.readJson(req, res);
+    try {
+      const result = await runGradleAction(
+        { sessions: this.sessions, roots: this.config.sessionRoots, socketName: this.socketName },
+        body,
+      );
       this.sendJson(res, 200, { result });
     } catch (err) {
       this.sendJson(res, 400, { error: (err as Error).message });

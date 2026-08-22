@@ -388,6 +388,29 @@ describe('RelayTransport — сопоставление ответов по id, 
     const entries = (await pB) as Array<{ name: string }>;
     expect(entries[0]!.name).toBe('right');
   });
+
+  it('gradle(): кадр Gradle с action и params, ответ по id — result резолвит, error отклоняет', async () => {
+    const { transport, ws, agentEnc, agentDec } = streaming();
+    const from = ws.sent.length;
+    const pRun = transport.gradle('run', { session: 'app', tasks: [':app:assembleDebug'], subdir: '' });
+    const pStop = transport.gradle('stop', { session: 'app' });
+    const frames = ws.sent.slice(from).map((b) => decodeFrame(agentDec.pull(b as Uint8Array)));
+    expect(frames.map((f) => f.type)).toEqual([FrameType.Gradle, FrameType.Gradle]);
+    const reqs = frames.map((f) => frameJson<Record<string, unknown>>(f));
+    expect(reqs[0]!.action).toBe('run');
+    expect(reqs[0]!.session).toBe('app');
+    expect(reqs[0]!.tasks).toEqual([':app:assembleDebug']);
+    const idRun = reqs[0]!.id as number;
+    const idStop = reqs[1]!.id as number;
+
+    // Ответы приходят в обратном порядке — каждый должен найти свой промис по id.
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.GradleResult, 0, { id: idStop, error: 'no write permission' })));
+    ws.deliverBinary(
+      agentEnc.push(jsonFrame(FrameType.GradleResult, 0, { id: idRun, result: { phase: 'running' } })),
+    );
+    await expect(pStop).rejects.toThrow('no write permission');
+    expect(await pRun).toEqual({ phase: 'running' });
+  });
 });
 
 describe('RelayTransport — create() дожидается подтверждения агента', () => {

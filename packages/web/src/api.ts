@@ -157,6 +157,8 @@ export const api = {
     request<{ result: T }>('POST', '/api/repo', { body: { action, ...params } }).then((r) => r.result),
   fileOp: <T = unknown>(action: string, params: Record<string, unknown>) =>
     request<{ result: T }>('POST', '/api/files/op', { body: { action, ...params } }).then((r) => r.result),
+  gradle: <T = unknown>(action: string, params: Record<string, unknown>) =>
+    request<{ result: T }>('POST', '/api/gradle', { body: { action, ...params } }).then((r) => r.result),
   /** Загрузка файла: тело уходит потоком на /api/files/upload. XHR, а не fetch, —
    *  ради событий прогресса (у fetch нет upload-progress). */
   uploadFile: (root: string, path: string, file: File, onProgress?: (frac: number) => void) =>

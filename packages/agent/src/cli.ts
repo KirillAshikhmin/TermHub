@@ -48,6 +48,7 @@ async function runStart(): Promise<number> {
       push,
       files,
       vcs,
+      roots: config.sessionRoots,
       socketName: TMUX_SOCKET,
       localUrls: () => localUrls({ port: config.port, tls: config.tls !== null }),
     });
@@ -61,6 +62,7 @@ async function runStart(): Promise<number> {
     vcs,
     push,
     caffeinate,
+    socketName: TMUX_SOCKET,
     onShare: link
       ? (scope) => link.openPairing(scope).then((p) => ({ code: p.code, expiresAt: p.expiresAt }))
       : undefined,
