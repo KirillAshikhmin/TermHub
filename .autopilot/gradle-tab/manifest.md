@@ -21,3 +21,4 @@
 | R15i | *(подразумевается)* Gradle-проект бывает многомодульным — таски есть и у подпроектов | done | — | история 5, Решения §4 → T01 (756b00c), T05 |
 | G01 | «Таски + Gradle-конфиги IDEA» (ответ на вопрос 1) | done | читать `.run/*.xml` и `.idea/runConfigurations/*.xml`, показывать те, что сводятся к Gradle-таске, с их аргументами | история 10, Решения §5 → T01 (756b00c), T05 |
 | G02 | «Не-Gradle конфиги (Application, JUnit, Android device) не показываем — их без IDEA не запустить» | done | пользователь, вопрос 1 | история 11 → T01 (756b00c), T05 |
+| D01 | *(доказано сборкой)* wrapper'а мало — нужен ещё JDK, который выбрал бы IDEA | in-ticket | живая проверка 2026-08-22 на `~/AndroidStudioProjects/MyApplication`: `JAVA_HOME` пользователя = JDK 25, wrapper = Gradle 8.9, `tasks --all` падает «Unsupported class file major version 69»; с `java.home` из `.gradle/config.properties` тот же вызов отрабатывает. Служит R04, R07, R11i | spec §6 → T06 |

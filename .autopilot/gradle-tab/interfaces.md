@@ -259,3 +259,36 @@ export interface GradleRunRequest {
 - Шов тестов вкладки — `packages/web/test/gradle-tab.test.ts` (happy-dom, xterm подменён
   через `vi.mock`): attach при монтировании, переподключение после `run`, разбор строки exit,
   раскладка/персист, «Стоп», teardown, увод с не-Gradle сессии.
+
+### Дописано таском 05 (`web/gradle-view.ts` — новый, `web/gradle.ts`, `i18n.ts`, `theme.css`)
+
+- `gradle-view.ts` выставляет: `groupTasks(data: GradleTasks): TaskGroupTree`
+  (принимает ВЕСЬ ответ, а не `tasks[]` — порядок групп берётся из `groupOrder`),
+  `filterTasks(tree, query): TaskGroupTree`, `renderTaskRow(task, query?)`,
+  `renderConfigRow(cfg)`, плюс сверх контракта `pushRecent(list, entry): RecentRun[]`,
+  `renderRecentRow(entry)`, `recentKey(entry): string`, `RECENT_LIMIT = 10` и тип
+  `RecentRun = { tasks: string[]; args: string[]; subdir: string }`. Недавние вынесены
+  сюда, потому что дедуп и потолок — чистая логика, и она проверяется швом 3.
+- **Рендеры не принимают колбэков.** Строка — `<button class="th-grow">` с
+  `data-task` / `data-config` / `data-recent`; запуск вешается делегированием на панель
+  в `gradle.ts`. Иначе «чистый рендер» тянул бы за собой состояние экрана.
+  `data-recent` — `recentKey(entry)`, а НЕ позиция: `pushRecent` переупорядочивает
+  список под нарисованными строками, и индекс запустил бы соседнюю запись.
+- **Ветки «корневой проект первым» нет.** `':'` — префикс любого `':<модуль>'`, поэтому
+  обычная сортировка уже ставит его первым: мутация ветки не краснела ни одним тестом,
+  и она снята как мёртвая (порядок при этом закреплён тестом).
+- Недавние — `localStorage['termhub.gradleRecent.<session>']` (свой список у каждой
+  сессии); битые записи отсеиваются type-guard'ом при чтении.
+- «Сборка уже идёт» ловится ДВАЖДЫ: до запроса — по известному `phase === 'running'`,
+  и после — по ответу агента: запуск наш, только если `state.command` кончается на
+  `<таски…> <аргументы…>` И `startedAt` сменился. Сверять один `startedAt` нельзя —
+  до первого `status` он `null`, и отказ на первом клике прошёл бы за успех.
+  Подтверждение шлёт тот же запуск с `force: true`.
+- `relSubdir(root, dir)` отдаёт `null` на папке вне корня, и конфигурация с такой
+  папкой не запускается вовсе (`gradle.configOutside`): подмена корнем выглядела бы
+  как успешный запуск не того.
+- Ключ `gradle.listPlaceholder` удалён (заглушка панели исчезла), добавлены
+  `loadingTasks/refresh/search/noMatches/noTasks/configOutside/tasks/configs/recent/
+  rootProject/tasksError/tasksErrorDetail/taskField/taskPlaceholder/argsField/
+  argsPlaceholder/run/busyTitle/restart`. «В проекте нет тасок» и «поиск ничего не дал» —
+  разные строки: с одним текстом пустой проект читался бы как неудачный поиск.

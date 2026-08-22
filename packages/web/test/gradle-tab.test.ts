@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import type { GradleProject, GradleRunState } from '@termhub/protocol/frames';
+import type { GradleProject, GradleRunConfig, GradleRunState, GradleTasks } from '@termhub/protocol/frames';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mountGradleTab } from '../src/gradle';
@@ -148,6 +148,9 @@ function tabTransport(opts: {
   status?: GradleRunState;
   run?: GradleRunState;
   stop?: GradleRunState;
+  tasks?: GradleTasks | 'error';
+  tasksGate?: Promise<unknown>;
+  configs?: GradleRunConfig[];
   scope?: { write: boolean; files: boolean } | null;
 }): {
   transport: Transport;
@@ -166,6 +169,12 @@ function tabTransport(opts: {
         if (opts.detect === 'error') throw new Error('relay down');
         return opts.detect ?? null;
       }
+      if (action === 'tasks') {
+        if (opts.tasksGate) await opts.tasksGate;
+        if (opts.tasks === 'error') throw new Error('FAILURE: build file broken');
+        return opts.tasks ?? EMPTY_TASKS;
+      }
+      if (action === 'configs') return opts.configs ?? [];
       if (action === 'status') return opts.status ?? IDLE;
       if (action === 'run') return opts.run ?? IDLE;
       if (action === 'stop') return opts.stop ?? IDLE;
@@ -182,6 +191,24 @@ function tabTransport(opts: {
 }
 
 const IDLE: GradleRunState = { phase: 'idle', session: null, command: null, startedAt: null };
+const EMPTY_TASKS: GradleTasks = { tasks: [], groupOrder: [], fetchedAt: 0 };
+const TASKS_ANSWER: GradleTasks = {
+  fetchedAt: 5,
+  groupOrder: ['Build tasks', 'Other tasks'],
+  tasks: [
+    { name: 'build', project: ':', group: 'Build tasks', description: 'Builds everything' },
+    { name: ':app:assembleDebug', project: ':app', group: 'Build tasks', description: 'Assembles the debug build' },
+  ],
+};
+const CONFIGS: GradleRunConfig[] = [
+  {
+    name: 'app debug',
+    tasks: [':app:clean', ':app:assembleDebug'],
+    args: '--offline',
+    dir: '/p/app/app',
+    source: '.run',
+  },
+];
 const RUNNING: GradleRunState = {
   phase: 'running',
   session: '_gradle_work_a1b2c3',
@@ -219,7 +246,7 @@ describe('mountGradleTab: окно вывода сборки', () => {
     const tab = mountGradleTab(root, transport, 'work');
     await flush();
 
-    expect(calls.map((c) => c.action)).toEqual(['detect', 'status']);
+    expect(calls.map((c) => c.action)).toEqual(['detect', 'tasks', 'configs', 'status']);
     expect(opened.map((o) => o.session)).toEqual([RUNNING.session]);
     expect(statusText(root)).toContain('./gradlew :app:assembleDebug');
     tab.teardown();
@@ -342,5 +369,307 @@ describe('mountGradleTab: окно вывода сборки', () => {
     expect(location.hash).toBe('#/sgradle/work');
     expect(brokenRoot.querySelector('.th-loaderror')).not.toBeNull();
     brokenTab.teardown();
+  });
+});
+
+// ── Панель списка: конфигурации, таски, поиск, аргументы, недавние ──────────
+const DONE: GradleRunState = {
+  phase: 'finished',
+  session: '_gradle_work_a1b2c3',
+  command: './gradlew build',
+  startedAt: 2000,
+};
+
+function rowNames(host: HTMLElement, sel: string): string[] {
+  return [...host.querySelectorAll(sel)].map((el) => el.querySelector('.th-grow__name')?.textContent ?? '');
+}
+
+describe('mountGradleTab: панель тасок и конфигураций', () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    setLang('ru');
+    xterm.instances.length = 0;
+    localStorage.clear();
+    location.hash = '#/';
+    document.body.replaceChildren();
+    root = document.createElement('div');
+    document.body.append(root);
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe(): void {}
+      disconnect(): void {}
+    };
+  });
+
+  it('конфигурации — отдельной секцией над тасками; нет ни одной → секции нет вовсе', async () => {
+    const { transport } = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER, configs: CONFIGS });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    expect(rowNames(root, '.th-gsec--configs .th-grow--config')).toEqual(['app debug']);
+    const order = [...root.querySelectorAll('.th-gsec')].map((el) => el.className);
+    expect(order.findIndex((c) => c.includes('configs'))).toBeLessThan(order.findIndex((c) => c.includes('tasks')));
+    tab.teardown();
+
+    const empty = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER, configs: [] });
+    const emptyRoot = document.createElement('div');
+    document.body.append(emptyRoot);
+    const emptyTab = mountGradleTab(emptyRoot, empty.transport, 'work');
+    await flush();
+    expect(emptyRoot.querySelector('.th-gsec--configs')).toBeNull();
+    emptyTab.teardown();
+  });
+
+  it('пока список едет — «Читаю таски проекта…», кнопка «Обновить» перечитывает', async () => {
+    let open = (): void => {};
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    const { transport, calls } = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER, tasksGate: gate });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    // Ответ ещё не пришёл: заметку рисует список тасок, а не стартовая заглушка.
+    const list = root.querySelector<HTMLElement>('.th-gsec--tasks .th-glist')!;
+    expect(list.textContent).toContain(t('gradle.loadingTasks'));
+    expect(list.querySelector('.th-spinner')).not.toBeNull();
+    open();
+    await flush();
+
+    expect(rowNames(root, '.th-grow--task')).toEqual(['build', ':app:assembleDebug']);
+    root.querySelector<HTMLButtonElement>('.th-gsec--tasks .th-iconbtn')!.click();
+    await flush();
+    expect(calls.filter((c) => c.action === 'tasks').map((c) => c.params.refresh)).toEqual([false, true]);
+    tab.teardown();
+  });
+
+  it('Gradle не отдал список → хвост stderr и «Повторить»; ручной ввод таски работает', async () => {
+    const { transport, calls } = tabTransport({ detect: PROJECT, status: IDLE, tasks: 'error', run: DONE });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    expect(root.querySelector('.th-loaderror')?.textContent).toContain('FAILURE: build file broken');
+    root.querySelector<HTMLInputElement>('.th-grun__task')!.value = ':app:test';
+    root.querySelector<HTMLInputElement>('.th-grun__args')!.value = '--offline';
+    root.querySelector<HTMLFormElement>('.th-grun')!.dispatchEvent(new Event('submit', { cancelable: true }));
+    await flush();
+
+    const run = calls.find((c) => c.action === 'run')!;
+    expect(run.params.tasks).toEqual([':app:test']);
+    expect(run.params.args).toEqual(['--offline']);
+    tab.teardown();
+  });
+
+  it('поиск фильтрует по имени и описанию; пустой результат — «ничего не нашлось»', async () => {
+    const { transport } = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+    const search = root.querySelector<HTMLInputElement>('.th-gsearch')!;
+
+    search.value = 'debug build';
+    search.dispatchEvent(new Event('input'));
+    expect(rowNames(root, '.th-grow--task')).toEqual([':app:assembleDebug']);
+    expect(root.querySelector('.th-grow--task mark')?.textContent).toBe('debug build');
+
+    search.value = 'zzz-нет-такой';
+    search.dispatchEvent(new Event('input'));
+    expect(rowNames(root, '.th-grow--task')).toEqual([]);
+    expect(root.textContent).toContain(t('gradle.noMatches'));
+    tab.teardown();
+  });
+
+  it('конфигурация запускается одной командой: таски в порядке XML, args в поле, своя папка', async () => {
+    const { transport, calls } = tabTransport({
+      detect: PROJECT,
+      status: IDLE,
+      tasks: TASKS_ANSWER,
+      configs: CONFIGS,
+      run: DONE,
+    });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    root.querySelector<HTMLButtonElement>('.th-grow--config')!.click();
+    await flush();
+
+    const run = calls.find((c) => c.action === 'run')!;
+    expect(run.params.tasks).toEqual([':app:clean', ':app:assembleDebug']);
+    expect(run.params.args).toEqual(['--offline']);
+    // PROJECT.dir = /p/app, конфигурация запускается из /p/app/app.
+    expect(run.params.subdir).toBe('app');
+    expect(root.querySelector<HTMLInputElement>('.th-grun__args')!.value).toBe('--offline');
+    tab.teardown();
+  });
+
+  it('запуск поверх идущей сборки спрашивает, а не запускает молча', async () => {
+    const { transport, calls } = tabTransport({
+      detect: PROJECT,
+      status: RUNNING,
+      tasks: TASKS_ANSWER,
+      run: { ...RUNNING, startedAt: 3000 },
+    });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    root.querySelector<HTMLButtonElement>('.th-grow--task')!.click();
+    await flush();
+    expect(calls.some((c) => c.action === 'run')).toBe(false);
+    const dialog = document.querySelector('.th-gbusy')!;
+    expect(dialog.textContent).toContain('./gradlew :app:assembleDebug');
+
+    dialog.querySelector<HTMLButtonElement>('.th-gbusy__go')!.click();
+    await flush();
+    expect(calls.find((c) => c.action === 'run')!.params.force).toBe(true);
+    tab.teardown();
+  });
+
+  it('недавние: запуск попадает в список и в localStorage, повтор — одним нажатием', async () => {
+    const { transport, calls } = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER, run: DONE });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+    expect(root.querySelector('.th-gsec--recent')).toBeNull();
+
+    root.querySelector<HTMLButtonElement>('.th-grow--task')!.click();
+    await flush();
+
+    expect(rowNames(root, '.th-gsec--recent .th-grow--recent')).toEqual(['build']);
+    expect(JSON.parse(localStorage.getItem('termhub.gradleRecent.work')!)).toEqual([
+      { tasks: ['build'], args: [], subdir: '' },
+    ]);
+
+    root.querySelector<HTMLButtonElement>('.th-gsec--recent .th-grow--recent')!.click();
+    await flush();
+    expect(calls.filter((c) => c.action === 'run')).toHaveLength(2);
+    tab.teardown();
+  });
+
+  it('недавние переживают перемонтирование вкладки и живут на свою сессию', async () => {
+    localStorage.setItem(
+      'termhub.gradleRecent.work',
+      JSON.stringify([{ tasks: [':app:test'], args: ['--offline'], subdir: '' }]),
+    );
+    const { transport } = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+    expect(rowNames(root, '.th-grow--recent')).toEqual([':app:test']);
+    tab.teardown();
+
+    const other = document.createElement('div');
+    document.body.append(other);
+    const otherTab = mountGradleTab(other, transport, 'другая');
+    await flush();
+    expect(other.querySelector('.th-gsec--recent')).toBeNull();
+    otherTab.teardown();
+  });
+
+  it('гость без права записи видит список, но запустить не может', async () => {
+    const { transport, calls } = tabTransport({
+      detect: PROJECT,
+      status: IDLE,
+      tasks: TASKS_ANSWER,
+      configs: CONFIGS,
+      scope: { write: false, files: true },
+    });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    expect(rowNames(root, '.th-grow--task')).toEqual(['build', ':app:assembleDebug']);
+    expect(root.querySelector('.th-grun')).toBeNull();
+    expect([...root.querySelectorAll('.th-grow')].every((el) => (el as HTMLButtonElement).disabled)).toBe(true);
+
+    root.querySelector<HTMLButtonElement>('.th-grow--task')!.click();
+    await flush();
+    expect(calls.some((c) => c.action === 'run')).toBe(false);
+    tab.teardown();
+  });
+});
+
+describe('mountGradleTab: отказы вместо правдоподобной подмены', () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    setLang('ru');
+    xterm.instances.length = 0;
+    localStorage.clear();
+    location.hash = '#/';
+    document.body.replaceChildren();
+    root = document.createElement('div');
+    document.body.append(root);
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe(): void {}
+      disconnect(): void {}
+    };
+  });
+
+  it('конфигурация с папкой вне корня сессии не запускается и говорит почему', async () => {
+    const outside: GradleRunConfig[] = [{ ...CONFIGS[0]!, name: 'чужая', dir: '/other/app' }];
+    const { transport, calls } = tabTransport({
+      detect: PROJECT,
+      status: IDLE,
+      tasks: TASKS_ANSWER,
+      configs: outside,
+      run: DONE,
+    });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    root.querySelector<HTMLButtonElement>('.th-grow--config')!.click();
+    await flush();
+
+    expect(calls.some((c) => c.action === 'run')).toBe(false);
+    expect(document.querySelector('.th-toasts')?.textContent).toContain('чужая');
+    tab.teardown();
+  });
+
+  it('отказ агента на ПЕРВОМ запуске (прежний старт неизвестен) опознаётся по команде', async () => {
+    // status ещё не показал идущую сборку: phase = idle, startedAt = null.
+    const { transport, calls } = tabTransport({
+      detect: PROJECT,
+      status: IDLE,
+      tasks: TASKS_ANSWER,
+      run: RUNNING, // агент вернул состояние ЧУЖОЙ сборки — значит, отказал
+    });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    root.querySelector<HTMLButtonElement>('.th-grow--task')!.click();
+    await flush();
+
+    expect(calls.filter((c) => c.action === 'run')).toHaveLength(1);
+    expect(document.querySelector('.th-gbusy')).not.toBeNull();
+    // Отказ — не запуск: в «Недавние» строка не уходит.
+    expect(root.querySelector('.th-gsec--recent')).toBeNull();
+    expect(localStorage.getItem('termhub.gradleRecent.work')).toBeNull();
+    tab.teardown();
+  });
+
+  it('повтор недавнего запускает ту запись, что в строке, а не ту, что на её месте', async () => {
+    const a = { tasks: ['build'], args: [], subdir: '' };
+    const b = { tasks: [':app:assembleDebug'], args: ['--offline'], subdir: '' };
+    localStorage.setItem('termhub.gradleRecent.work', JSON.stringify([b, a]));
+    const { transport, calls } = tabTransport({ detect: PROJECT, status: IDLE, tasks: TASKS_ANSWER, run: DONE });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+
+    // Запуск таски `build` поднимает a наверх — места строк меняются.
+    root.querySelector<HTMLButtonElement>('.th-grow--task')!.click();
+    await flush();
+    expect(rowNames(root, '.th-grow--recent')).toEqual(['build', ':app:assembleDebug']);
+
+    const rows = [...root.querySelectorAll<HTMLButtonElement>('.th-grow--recent')];
+    rows.find((el) => el.textContent?.includes(':app:assembleDebug'))!.click();
+    await flush();
+
+    const last = calls.filter((c) => c.action === 'run').at(-1)!;
+    expect(last.params.tasks).toEqual([':app:assembleDebug']);
+    expect(last.params.args).toEqual(['--offline']);
+    tab.teardown();
+  });
+
+  it('в проекте нет тасок — это не «поиск ничего не дал»', async () => {
+    const { transport } = tabTransport({ detect: PROJECT, status: IDLE, tasks: EMPTY_TASKS });
+    const tab = mountGradleTab(root, transport, 'work');
+    await flush();
+    expect(root.textContent).toContain(t('gradle.noTasks'));
+    expect(root.textContent).not.toContain(t('gradle.noMatches'));
+    tab.teardown();
   });
 });

@@ -1542,6 +1542,113 @@ main.th-gradle {
 .th-gradle__stop {
   flex: none;
 }
+/* Панель списка: строка запуска, конфигурации, недавние, дерево тасок. */
+.th-gpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.th-grun {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.th-grun__task {
+  flex: 2 1 180px;
+}
+.th-grun__args {
+  flex: 1 1 120px;
+}
+.th-grun__go {
+  flex: none;
+}
+.th-gsec__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.th-gsec__head h3 {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.th-gsearch {
+  margin-bottom: 8px;
+}
+.th-glist {
+  display: flex;
+  flex-direction: column;
+}
+.th-gproj__title {
+  margin: 8px 0 2px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.th-ggroup__title {
+  margin: 6px 0 2px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+/* Строка списка — она же кнопка запуска (у гостя без права записи disabled). */
+.th-grow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  cursor: pointer;
+}
+.th-grow:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+}
+.th-grow:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.th-grow--config .th-grow__name,
+.th-grow--recent .th-grow__name {
+  color: var(--accent);
+}
+.th-grow__name {
+  overflow-wrap: anywhere;
+}
+.th-grow__desc {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.th-gmark {
+  background: var(--accent-tint);
+  color: inherit;
+  border-radius: 3px;
+}
+.th-gnote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+.th-gbusy__go {
+  flex: none;
+}
 .th-gradle__term {
   flex: 1 1 auto;
   min-height: 0;
