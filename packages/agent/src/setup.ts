@@ -1,5 +1,6 @@
 // Интерактивная команда `termhub setup`: собирает конфиг, генерирует секреты,
-// по желанию дописывает ~/.tmux.conf и `tm`/`tml` в rc текущего шелла (~/.zshrc | ~/.bashrc).
+// по желанию дописывает ~/.tmux.conf и `tm`/`tml` в rc текущего шелла (~/.zshrc | ~/.bashrc),
+// а в уже прописанном блоке `# termhub` предлагает обновить устаревшую `tm`.
 // Побочные эффекты вынесены в runSetup; чистая логика (строки конфигов, парсинг)
 // экспортируется отдельно и покрыта тестами.
 
@@ -22,10 +23,43 @@ import type { TermhubConfig } from './config.js';
 const DEFAULT_PORT = 7710;
 const DEFAULT_ROOT = '~/projects';
 const VAPID_SUBJECT = 'mailto:termhub@localhost';
-// `tm [имя]` — присоединиться к сессии (создать при отсутствии). Имя берётся из
-// аргумента, иначе — из имени текущего каталога, поэтому это функция, а не alias.
-// Сокет -L TMUX_SOCKET — тот же, что использует агент (см. config.TMUX_SOCKET).
-const TM_FUNCTION = `tm() { tmux -L ${TMUX_SOCKET} new -As "\${1:-\$(basename "\$PWD")}"; }`;
+// `tm` без аргумента — НОВАЯ сессия с именем текущего каталога по тому же правилу,
+// что кнопка «+» в вебе: `MyProject`, а если занято — `MyProject1`, `MyProject2`…
+// (счёт с 1, без разделителя). Правило повторено на POSIX sh, потому что агент в
+// этот момент может быть не запущен, а tmux под рукой всегда. `tm <имя>` — прежнее
+// «присоединиться или создать» (`new -As`): это и путь вернуться в свою сессию
+// после перезапуска IDE (как и `tml`, который зовёт `tm` с явным именем).
+// Занятость — дословное сравнение кандидата с выводом `list-sessions -F
+// '#{session_name}'` (`grep -qxF`: вся строка целиком), а НЕ `has-session -t "=<имя>"`:
+// в цели tmux точка и двоеточие — разделители «сессия:окно.панель», и `=foo.bar`
+// ищет панель `bar` в сессии `foo`, то есть для имени с точкой отвечает «свободно»
+// на занятое имя (проверено на tmux 3.7b). Нет сервера или ошибка — список пуст,
+// имя свободно; `|| _th_taken=''` там обязателен: под `set -e` присваивание
+// наследует код подстановки, и exit 1 от `list-sessions` без сервера завершил бы
+// оболочку до `new -s` (условие `while` от errexit защищено, присваивание — нет).
+// Гонку двух одновременных `tm` не закрываем: tmux ответит «duplicate session»,
+// повторный `tm` возьмёт следующий номер.
+// Это функция, а не alias (аргумент и цикл); без `local`, переменные с префиксом
+// `_th_` — блок обязан работать и в bash, и в zsh. Сокет -L TMUX_SOCKET — тот же,
+// что у агента (config.TMUX_SOCKET); параметр нужен тестам, гоняющим функцию на
+// своём сокете с подложным tmux.
+export function tmFunction(socket: string = TMUX_SOCKET): string {
+  return [
+    'tm() {',
+    `  if [ -n "$1" ]; then tmux -L ${socket} new -As "$1"; return $?; fi`,
+    '  _th_base=$(basename "$PWD")',
+    `  _th_taken=$(tmux -L ${socket} list-sessions -F '#{session_name}' 2>/dev/null) || _th_taken=''`,
+    '  _th_name=$_th_base',
+    '  _th_n=0',
+    `  while printf '%s\\n' "$_th_taken" | grep -qxF -- "$_th_name"; do`,
+    '    _th_n=$((_th_n + 1))',
+    '    _th_name="$_th_base$_th_n"',
+    '  done',
+    `  tmux -L ${socket} new -s "$_th_name"`,
+    '}',
+  ].join('\n');
+}
+export const TM_FUNCTION = tmFunction();
 // `tml` — выбор сессии из списка на выделенном сокете (то же, что видит дашборд),
 // `tmc` — экран закрытия сессий. Общий сбор списка вынесен в `_th_rows`/`_th_show`,
 // чтобы обе команды показывали одно и то же и не разъезжались при правках.
@@ -198,6 +232,36 @@ export function hasZshMarker(existing: string): boolean {
   return existing.split('\n').some((l) => l.trim() === ZSH_MARKER);
 }
 
+// Прежняя однострочная `tm() { tmux … }` (setup до нумерации имён): вся функция на одной
+// строке, закрывающая скобка там же — новая многострочная под это не подходит.
+const OLD_TM_RE = /^[ \t]*tm[ \t]*\(\)[ \t]*\{[ \t]*tmux\b[^\n]*\}[ \t]*$/m;
+
+/** Смещение в тексте сразу за первой строкой маркера (критерий тот же, что у hasZshMarker);
+ *  −1, если маркера нет. */
+function afterZshMarker(existing: string): number {
+  let offset = 0;
+  for (const line of existing.split('\n')) {
+    offset += line.length + 1;
+    if (line.trim() === ZSH_MARKER) return offset;
+  }
+  return -1;
+}
+
+/** Заменяет в тексте rc-файла устаревшую однострочную `tm` текущим определением, ничего
+ *  больше не трогая. Ищет её только ПОСЛЕ первой строки маркера `# termhub`: однострочная
+ *  `tm() { … }` выше блока — пользовательская, не наша. Текущее определение уже есть →
+ *  текст без изменений; маркера или старой строки нет → null: setup покажет определение
+ *  для ручной вставки. */
+export function upgradeTmFunction(existing: string): string | null {
+  if (existing.includes(TM_FUNCTION)) return existing;
+  const from = afterZshMarker(existing);
+  if (from < 0) return null;
+  const m = OLD_TM_RE.exec(existing.slice(from));
+  if (m === null) return null;
+  const at = from + m.index;
+  return existing.slice(0, at) + TM_FUNCTION + existing.slice(at + m[0].length);
+}
+
 /** rc-файл для алиасов по текущему шеллу ($SHELL). zsh → ~/.zshrc; bash и прочее → ~/.bashrc.
  *  Синтаксис блока (функции tm и tml) POSIX-совместим — годится и для bash, и для zsh. */
 export function shellRcFile(shell: string | undefined, home: string): { path: string; label: string } {
@@ -272,16 +336,44 @@ async function maybePatchTmux(rl: readline.Interface): Promise<void> {
   console.log('✓ ~/.tmux.conf updated.');
 }
 
+/** Блок с отступом в два пробела — для показа в предложениях setup. */
+function indent(block: string): string {
+  return block
+    .split('\n')
+    .map((l) => '  ' + l)
+    .join('\n');
+}
+
 async function maybePatchShellRc(rl: readline.Interface): Promise<void> {
   const { path: file, label } = shellRcFile(process.env.SHELL, os.homedir());
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   if (hasZshMarker(existing)) {
-    console.log(`${label}: tm alias already configured (marker # termhub).`);
+    if (existing.includes(TM_FUNCTION)) {
+      console.log(`${label}: tm/tml already configured (marker # termhub).`);
+      return;
+    }
+    // Блок есть, но `tm` прежняя (без нумерации имён): меняем ровно её строку, остальной
+    // файл не трогаем. Не распознали или отказ — печатаем определение для ручной вставки.
+    const upgraded = upgradeTmFunction(existing);
+    if (upgraded !== null) {
+      console.log(
+        `\n${label}: the termhub block has an outdated tm(). The new one starts a fresh session\n` +
+          '  named after the folder (MyProject → MyProject1 → MyProject2) instead of attaching.',
+      );
+      if (await askYesNo(rl, 'Update tm?', true)) {
+        fs.writeFileSync(file, upgraded);
+        console.log(`✓ ${label}: tm updated (restart your shell or run \`source ${label}\`).`);
+        return;
+      }
+    } else {
+      console.log(`\n${label}: the termhub block is present, but its tm() was not recognised.`);
+    }
+    console.log(`Replace tm() in ${label} manually with:\n${indent(TM_FUNCTION)}`);
     return;
   }
   // Полное тело tml длинное — в предложении показываем только назначение, сам блок
   // всё равно записывается целиком.
-  console.log(`\nSuggested additions to ${label}:\n  ${TM_FUNCTION}\n  tml() { ... }  # pick a session, grouped by directory`);
+  console.log(`\nSuggested additions to ${label}:\n${indent(TM_FUNCTION)}\n  tml() { ... }  # pick a session, grouped by directory`);
   if (!(await askYesNo(rl, 'Add?', true))) return;
   appendToFile(file, zshAliasBlock());
   console.log(`✓ ${label} updated (restart your shell or run \`source ${label}\`).`);

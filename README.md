@@ -136,10 +136,12 @@ agent starts at boot without an active login; if that step lacks privileges, run
 
 ### The habit: `tm` in the IDE terminal
 
-When you open a terminal in your IDE (IDEA, etc.), type `tm` — it creates/opens the tmux
-session `main` on socket `-L termhub`, which is exactly what TermHub sees on the dashboard.
-`tml` lists sessions. One more parallel session — the "New session" button on the dashboard
-or `tmux -L termhub new -s <name>`.
+When you open a terminal in your IDE (IDEA, etc.), type `tm` — it starts a new tmux session
+named after the current folder on socket `-L termhub`, which is exactly what TermHub sees on
+the dashboard. `tm` and the "New session" (+) button on the dashboard follow the same naming
+rule: `MyProject`; if that name is taken — `MyProject1`, then `MyProject2`, and so on. So `tm`
+without arguments always gives a fresh session; to get back into an existing one, use `tml`
+(pick from the list) or `tm <name>` (attach, or create if missing).
 
 ---
 
