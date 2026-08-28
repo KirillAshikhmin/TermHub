@@ -437,6 +437,25 @@ describe('RelayLink — обслуживание клиента', () => {
       expect(frameJson<{ session: string }>(createFrame).session).toBe('created-x');
       // Сессия реально создана на изолированном сокете.
       expect(tmux(['list-sessions', '-F', '#{session_name}'])).toContain('created-x');
+
+      // Второй CREATE того же имени с autoName (имя не вводили) → агент нумерует: created-x1.
+      ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, { name: 'created-x', root, dir: 'work', preset: 'zsh', autoName: true })), {
+        binary: true,
+      });
+      const autoMsg = await col.next();
+      const autoFrame = decodeFrame(clientDec.pull(new Uint8Array(autoMsg.binary as Buffer)));
+      expect(autoFrame.type).toBe(FrameType.CreateOk);
+      expect(frameJson<{ session: string }>(autoFrame).session).toBe('created-x1');
+      expect(tmux(['list-sessions', '-F', '#{session_name}']).split('\n')).toContain('created-x1');
+
+      // Без признака — как раньше: дубль отклоняется кадром Error(create-failed).
+      ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, { name: 'created-x', root, dir: 'work', preset: 'zsh' })), {
+        binary: true,
+      });
+      const dupMsg = await col.next();
+      const dupFrame = decodeFrame(clientDec.pull(new Uint8Array(dupMsg.binary as Buffer)));
+      expect(dupFrame.type).toBe(FrameType.Error);
+      expect(frameJson<{ code: string; message: string }>(dupFrame)).toMatchObject({ code: 'create-failed', message: /duplicate session/ });
     },
     25000,
   );

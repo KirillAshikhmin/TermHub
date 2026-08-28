@@ -47,6 +47,24 @@ export function isExistingSessionName(name: string): boolean {
   return name.length > 0 && name.length <= 40 && !/[\u0000-\u001f\u007f]/.test(name);
 }
 
+/** Предел длины имени сессии (тот же, что в NAME_RE). */
+const NAME_MAX = 40;
+/** Потолок перебора числовых суффиксов в pickFreeName — практически недостижим. */
+const MAX_NAME_PROBES = 10_000;
+
+/** Свободное имя по базе: сама база, если не занята, иначе `<база><n>` для n = 1, 2, … —
+ *  первое незанятое (дыры заполняются). Суффикс клеится без разделителя, база при нужде
+ *  обрезается, чтобы уложиться в NAME_MAX; цифры на конце базы не разбираются (`v2` → `v21`). */
+export function pickFreeName(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
+  for (let n = 1; n <= MAX_NAME_PROBES; n++) {
+    const suffix = String(n);
+    const candidate = base.slice(0, NAME_MAX - suffix.length) + suffix;
+    if (!taken.has(candidate)) return candidate;
+  }
+  throw new Error(`No free session name for «${base}»: all numbered variants up to ${MAX_NAME_PROBES} are taken`);
+}
+
 /** Допустимые пресеты создаваемой сессии. «zsh» — просто оболочка, остальные
  *  запускают одноимённую команду поверх неё (см. create). */
 export const SESSION_PRESETS = ['zsh', 'claude', 'codex'] as const;
@@ -63,6 +81,18 @@ function isNoServerError(err: unknown): boolean {
   const e = err as TmuxError;
   const stderr = typeof e.stderr === 'string' ? e.stderr : '';
   return e.code === 1 && /no server running|error connecting|no such file or directory/i.test(stderr);
+}
+
+/** Сырой формат «только имя» — для подбора свободного имени (см. takenNames). */
+const NAME_ONLY_FORMAT = '#{session_name}';
+/** Сколько раз create с autoName переигрывает «duplicate session» от tmux (гонка двух создающих). */
+const DUPLICATE_RETRIES = 5;
+
+/** «duplicate session: <имя>» — tmux отказал в new-session, потому что имя уже занято. */
+function isDuplicateSessionError(err: unknown): boolean {
+  const e = err as TmuxError;
+  const stderr = typeof e.stderr === 'string' ? e.stderr : '';
+  return e.code === 1 && /duplicate session/i.test(stderr);
 }
 
 /** Разбивает вывод tmux на непустые строки. */
@@ -165,7 +195,28 @@ export class SessionService {
     return parseListOutput(sessionsOut, panesOut).filter((s) => !isBuildSessionName(s.name));
   }
 
-  async create(req: { name: string; root: string; dir: string; preset: SessionPreset }): Promise<void> {
+  /** Все занятые имена на сокете. Нарочно сырой list-sessions, а не list(): тот прячет
+   *  сборочные сессии Gradle (их имена тоже заняты) и зря дёргает list-panes.
+   *  «No server running» — пустой список: самую первую сессию создают до старта сервера. */
+  private async takenNames(): Promise<Set<string>> {
+    try {
+      return new Set(nonEmptyLines(await this.tmux(['list-sessions', '-F', NAME_ONLY_FORMAT])));
+    } catch (err) {
+      if (isNoServerError(err)) return new Set();
+      throw err;
+    }
+  }
+
+  /** Создаёт сессию и возвращает её фактическое имя. С `autoName` (имя не вводили, оно
+   *  взято из каталога) занятое имя нумеруется: MyProject → MyProject1, MyProject2…;
+   *  без него имя берётся как есть, и отказ tmux на дубле уходит наружу, как раньше. */
+  async create(req: {
+    name: string;
+    root: string;
+    dir: string;
+    preset: SessionPreset;
+    autoName?: boolean;
+  }): Promise<{ name: string }> {
     if (!NAME_RE.test(req.name))
       throw new Error(`Invalid session name «${req.name}»: letters, digits, «_», «-» allowed, 1–40 characters`);
     if (!PRESETS.has(req.preset))
@@ -186,9 +237,32 @@ export class SessionService {
 
     // Имя пресета и есть команда (кроме «zsh» — это просто оболочка по умолчанию).
     // Пресет уже сверен с whitelist выше, поэтому произвольная команда сюда не пройдёт.
-    const args = ['new-session', '-d', '-s', req.name, '-c', dirPath];
-    if (req.preset !== 'zsh') args.push(req.preset);
-    await this.tmux(args);
+    const newSession = (name: string) => {
+      const args = ['new-session', '-d', '-s', name, '-c', dirPath];
+      if (req.preset !== 'zsh') args.push(req.preset);
+      return this.tmux(args);
+    };
+
+    if (!req.autoName) {
+      await newSession(req.name);
+      return { name: req.name };
+    }
+
+    const taken = await this.takenNames();
+    for (let attempt = 0; attempt < DUPLICATE_RETRIES; attempt++) {
+      const candidate = pickFreeName(req.name, taken);
+      try {
+        await newSession(candidate);
+        return { name: candidate };
+      } catch (err) {
+        // Между чтением списка и new-session имя мог занять кто-то ещё (второе устройство,
+        // `tm` в терминале): tmux отвечает «duplicate session» — считаем имя занятым и берём
+        // следующий номер. Любая другая ошибка — не гонка, уходит наружу сразу.
+        if (!isDuplicateSessionError(err)) throw err;
+        taken.add(candidate);
+      }
+    }
+    throw new Error(`Could not create session for «${req.name}»: name kept colliding after ${DUPLICATE_RETRIES} attempts`);
   }
 
   async kill(name: string): Promise<void> {

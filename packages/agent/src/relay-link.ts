@@ -1180,7 +1180,7 @@ export class RelayLink {
   }
 
   private async doCreate(s: ClientSession, frame: Frame): Promise<void> {
-    let req: { name?: unknown; root?: unknown; dir?: unknown; preset?: unknown };
+    let req: { name?: unknown; root?: unknown; dir?: unknown; preset?: unknown; autoName?: unknown };
     try {
       req = frameJson(frame);
     } catch {
@@ -1188,15 +1188,17 @@ export class RelayLink {
     }
     const name = String(req.name ?? '');
     try {
-      await this.sessions.create({
+      const created = await this.sessions.create({
         name,
         root: String(req.root ?? ''),
         dir: String(req.dir ?? ''),
         preset: req.preset as SessionPreset,
+        autoName: req.autoName === true,
       });
-      // Подтверждаем создание (сессия уже существует) — клиент дожидается, чтобы
+      // Подтверждаем создание (сессия уже существует) фактическим именем — с autoName оно
+      // может отличаться от запрошенного (MyProject1). Клиент дожидается кадра, чтобы
       // навигация ушла на готовую сессию, а не на ещё несуществующую.
-      this.sendFrameBytes(s, jsonFrame(FrameType.CreateOk, frame.channel, { session: name }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.CreateOk, frame.channel, { session: created.name }));
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'create-failed', message: (err as Error).message }));
     }

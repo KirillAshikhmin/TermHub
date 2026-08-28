@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SessionService, parseListOutput } from '../src/sessions.js';
+import { SessionService, parseListOutput, pickFreeName, isCreatableSessionName } from '../src/sessions.js';
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }));
 
@@ -342,5 +342,150 @@ describe('SessionService.onBell — переход false→true', () => {
     expect(cb).toHaveBeenCalledWith('s', 'Сборка проекта');
 
     svc.stopPolling();
+  });
+});
+
+describe('pickFreeName — свободное имя с числовым суффиксом', () => {
+  it('свободная база берётся как есть — даже если занята база с суффиксом', () => {
+    expect(pickFreeName('MyProject', new Set())).toBe('MyProject');
+    expect(pickFreeName('MyProject', new Set(['MyProject1']))).toBe('MyProject');
+  });
+
+  it('первый дубль — «1» без разделителя, дальше 2, 3…', () => {
+    expect(pickFreeName('MyProject', new Set(['MyProject']))).toBe('MyProject1');
+    expect(pickFreeName('MyProject', new Set(['MyProject', 'MyProject1']))).toBe('MyProject2');
+    expect(pickFreeName('MyProject', new Set(['MyProject', 'MyProject1', 'MyProject2']))).toBe('MyProject3');
+  });
+
+  it('дыры заполняются: заняты база и «2» → «1»', () => {
+    expect(pickFreeName('MyProject', new Set(['MyProject', 'MyProject2']))).toBe('MyProject1');
+  });
+
+  it('цифра на конце базы не увеличивается: v2 → v21 → v22', () => {
+    expect(pickFreeName('v2', new Set(['v2']))).toBe('v21');
+    expect(pickFreeName('v2', new Set(['v2', 'v21']))).toBe('v22');
+  });
+
+  it('база в 40 символов обрезается под суффикс: 39 × «a» + «1»; под двузначный — 38 + «10»', () => {
+    const base = 'a'.repeat(40);
+    expect(pickFreeName(base, new Set([base]))).toBe('a'.repeat(39) + '1');
+    const taken = new Set([base, ...Array.from({ length: 9 }, (_, i) => 'a'.repeat(39) + String(i + 1))]);
+    const picked = pickFreeName(base, taken);
+    expect(picked).toBe('a'.repeat(38) + '10');
+    expect(isCreatableSessionName(picked)).toBe(true);
+  });
+
+  it('потолок перебора (10 000) → ошибка с именем базы', () => {
+    const taken = new Set(['x', ...Array.from({ length: 10_000 }, (_, i) => `x${i + 1}`)]);
+    expect(() => pickFreeName('x', taken)).toThrow(/«x»/);
+  });
+});
+
+describe('SessionService.create — autoName: свободное имя по живому списку tmux', () => {
+  let root: string;
+  let svc: SessionService;
+  const DUP = (name: string) => ({ err: { code: 1 }, stderr: `duplicate session: ${name}\n` });
+
+  /** Стаб tmux, помнящий занятые имена: list-sessions отдаёт их сырым списком,
+   *  new-session на занятое отвечает «duplicate session», на свободное — занимает. */
+  function stubTmuxWithSessions(taken: Set<string>, over: Partial<{ list: () => { err?: unknown; stdout?: string; stderr?: string } }> = {}) {
+    stubTmux((args) => {
+      if (args.includes('list-sessions')) return over.list ? over.list() : { stdout: [...taken].map((n) => n + '\n').join('') };
+      if (args.includes('new-session')) {
+        const name = args[args.indexOf('-s') + 1]!;
+        if (taken.has(name)) return DUP(name);
+        taken.add(name);
+        return {};
+      }
+      return {};
+    });
+  }
+
+  function newSessionNames(): string[] {
+    return mockExecFile.mock.calls
+      .map((c) => c[1] as string[])
+      .filter((a) => a.includes('new-session'))
+      .map((a) => a[a.indexOf('-s') + 1]!);
+  }
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-root-'));
+    fs.mkdirSync(path.join(root, 'MyProject'));
+    svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each([
+    [[], 'MyProject'],
+    [['MyProject'], 'MyProject1'],
+    [['MyProject', 'MyProject1'], 'MyProject2'],
+    [['MyProject', 'MyProject2'], 'MyProject1'],
+  ])('заняты %j → создаётся %s и имя возвращается', async (taken, expected) => {
+    stubTmuxWithSessions(new Set(taken));
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName: true })).resolves.toEqual({ name: expected });
+    expect(newSessionNames()).toEqual([expected]);
+  });
+
+  it('занятые имена берутся сырым list-sessions -F #{session_name} (сборочные сессии видны), без list-panes', async () => {
+    stubTmuxWithSessions(new Set(['MyProject', '_gradle_MyProject_ab12cd']));
+    // Сборочная сессия скрыта из list(), но имя занимает — кандидат с её именем недопустим.
+    const svcGradle = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    await expect(svcGradle.create({ name: '_gradle_MyProject_ab12cd', root, dir: 'MyProject', preset: 'zsh', autoName: true }))
+      .resolves.toEqual({ name: '_gradle_MyProject_ab12cd1' });
+    const calls = mockExecFile.mock.calls.map((c) => c[1] as string[]);
+    const listCall = calls.find((a) => a.includes('list-sessions'))!;
+    expect(listCall).toEqual(['-L', 'termhub-test-u', 'list-sessions', '-F', '#{session_name}']);
+    expect(calls.some((a) => a.includes('list-panes'))).toBe(false);
+  });
+
+  it('«no server running» при чтении списка → пустой список, имя папки как есть', async () => {
+    stubTmuxWithSessions(new Set(), { list: () => ({ err: { code: 1 }, stderr: 'no server running on /tmp/tmux-501/termhub-test-u\n' }) });
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName: true })).resolves.toEqual({ name: 'MyProject' });
+  });
+
+  it('иная ошибка list-sessions пробрасывается, new-session не вызывается', async () => {
+    stubTmuxWithSessions(new Set(), { list: () => ({ err: { code: 1 }, stderr: 'permission denied\n' }) });
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName: true })).rejects.toMatchObject({ code: 1 });
+    expect(newSessionNames()).toEqual([]);
+  });
+
+  it('гонка: список пуст, но new-session отвечает «duplicate session» → следующий номер', async () => {
+    stubTmuxWithSessions(new Set(['MyProject', 'MyProject1']), { list: () => ({ stdout: '' }) });
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName: true })).resolves.toEqual({ name: 'MyProject2' });
+    expect(newSessionNames()).toEqual(['MyProject', 'MyProject1', 'MyProject2']);
+  });
+
+  it('вечный «duplicate session» → не больше 5 попыток и внятная ошибка с базой', async () => {
+    stubTmux((args) => (args.includes('new-session') ? DUP(args[args.indexOf('-s') + 1]!) : { stdout: '' }));
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName: true })).rejects.toThrow(/«MyProject».*5/);
+    expect(newSessionNames()).toEqual(['MyProject', 'MyProject1', 'MyProject2', 'MyProject3', 'MyProject4']);
+  });
+
+  it('иная ошибка new-session при autoName — сразу наружу, без повторов', async () => {
+    stubTmux((args) => (args.includes('new-session') ? { err: { code: 1 }, stderr: 'unknown option -- Q\n' } : { stdout: '' }));
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName: true })).rejects.toMatchObject({ code: 1, stderr: /unknown option/ });
+    expect(newSessionNames()).toEqual(['MyProject']);
+  });
+
+  it.each([undefined, false])('autoName=%s: имя как есть, дубль от tmux пробрасывается без повторов и без чтения списка', async (autoName) => {
+    stubTmuxWithSessions(new Set(['MyProject']));
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh', autoName })).rejects.toMatchObject({ stderr: /duplicate session/ });
+    expect(newSessionNames()).toEqual(['MyProject']);
+    expect(mockExecFile.mock.calls.some((c) => (c[1] as string[]).includes('list-sessions'))).toBe(false);
+  });
+
+  it('без autoName успех возвращает запрошенное имя', async () => {
+    stubTmuxWithSessions(new Set());
+    await expect(svc.create({ name: 'MyProject', root, dir: 'MyProject', preset: 'zsh' })).resolves.toEqual({ name: 'MyProject' });
+  });
+
+  it('autoName не ослабляет валидацию: плохое имя отвергается до всякого tmux', async () => {
+    stubTmuxWithSessions(new Set());
+    await expect(svc.create({ name: 'bad name!', root, dir: 'MyProject', preset: 'zsh', autoName: true })).rejects.toThrow(/name/i);
+    await expect(svc.create({ name: 'a'.repeat(41), root, dir: 'MyProject', preset: 'zsh', autoName: true })).rejects.toThrow(/name/i);
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 });

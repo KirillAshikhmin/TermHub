@@ -57,6 +57,19 @@ describe.skipIf(!tmuxAvailable)('SessionService — реальный tmux (из�
     expect(await svc.list()).toEqual([]);
   });
 
+  it('трижды create с autoName → main, main1, main2; повтор без autoName → ошибка', async () => {
+    const req = { name: 'main', root, dir: 'projectA', preset: 'zsh' as const };
+    expect(await svc.create({ ...req, autoName: true })).toEqual({ name: 'main' });
+    expect(await svc.create({ ...req, autoName: true })).toEqual({ name: 'main1' });
+    expect(await svc.create({ ...req, autoName: true })).toEqual({ name: 'main2' });
+    await expect(svc.create(req)).rejects.toThrow(/duplicate session/);
+    const names = execFileSync('tmux', ['-L', socketName, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .sort();
+    expect(names).toEqual(['main', 'main1', 'main2']);
+  });
+
   it('dirs() перечисляет подкаталоги корня', async () => {
     const dirs = await svc.dirs();
     expect(dirs).toEqual([{ root, dirs: ['projectA'] }]);

@@ -343,13 +343,16 @@ export class AgentServer {
   private async createSession(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await this.readJson(req, res);
     try {
-      await this.sessions.create({
+      const created = await this.sessions.create({
         name: String(body.name ?? ''),
         root: String(body.root ?? ''),
         dir: String(body.dir ?? ''),
         preset: body.preset as SessionPreset,
+        // Признак «имя не вводили» — только булев true; старый клиент его не шлёт.
+        autoName: body.autoName === true,
       });
-      this.sendJson(res, 200, { ok: true });
+      // Фактическое имя: с autoName оно может отличаться от запрошенного (MyProject1).
+      this.sendJson(res, 200, { ok: true, session: created.name });
     } catch (err) {
       this.sendJson(res, 422, { error: (err as Error).message });
     }

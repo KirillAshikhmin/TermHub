@@ -34,7 +34,7 @@ function fixtureConfig(over: Partial<TermhubConfig> = {}): TermhubConfig {
 function stubSessions(over: Partial<SessionService> = {}): SessionService {
   return {
     list: async () => [] as SessionInfo[],
-    create: async () => {},
+    create: async (req) => ({ name: req.name }),
     kill: async () => {},
     rename: async () => {},
     dirs: async () => [],
@@ -245,6 +245,31 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     });
     expect(res.status).toBe(422);
     expect((await res.json() as { error: string }).error).toContain('name');
+  });
+
+  it('POST /api/sessions → 200 {ok, session: фактическое имя}; autoName доходит до create', async () => {
+    const seen: Array<{ name: string; autoName?: boolean }> = [];
+    s = await start({
+      sessions: stubSessions({
+        create: async (req) => {
+          seen.push({ name: req.name, autoName: req.autoName });
+          return { name: req.autoName ? req.name + '1' : req.name };
+        },
+      }),
+    });
+    const post = (body: Record<string, unknown>) =>
+      fetch(`${s.base}/api/sessions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: authCookie() },
+        body: JSON.stringify(body),
+      });
+    const auto = await post({ name: 'MyProject', root: '/x', dir: 'a', preset: 'zsh', autoName: true });
+    expect(auto.status).toBe(200);
+    expect(await auto.json()).toEqual({ ok: true, session: 'MyProject1' });
+    // Старый клиент без признака — прежнее поведение: флаг не выставлен, имя как есть.
+    const plain = await post({ name: 'MyProject', root: '/x', dir: 'a', preset: 'zsh' });
+    expect(await plain.json()).toEqual({ ok: true, session: 'MyProject' });
+    expect(seen).toEqual([{ name: 'MyProject', autoName: true }, { name: 'MyProject', autoName: false }]);
   });
 
   it('POST /api/sessions/rename → sessions.rename(from, to), 200', async () => {
