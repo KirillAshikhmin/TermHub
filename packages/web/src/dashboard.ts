@@ -769,7 +769,11 @@ export function openCreateModal(transport: Transport): void {
       nameInput.type = 'text';
       nameInput.className = 'th-input';
       nameInput.autocomplete = 'off';
-      dirInput.addEventListener('input', () => (nameInput.placeholder = dirInput.value.trim()));
+      // Подсказка — то имя, что уйдёт агенту: санитизированное, как в форме со списком.
+      dirInput.addEventListener('input', () => {
+        const dir = dirInput.value.trim();
+        nameInput.placeholder = dir ? sanitizeSessionName(dir) : '';
+      });
 
       body.append(
         field(t('create.root'), rootInput),
@@ -782,7 +786,9 @@ export function openCreateModal(transport: Transport): void {
         const dir = dirInput.value.trim();
         if (!root || !dir) return null;
         const typed = nameInput.value.trim();
-        const input: CreateSessionInput = { name: typed || dir, root, dir, preset };
+        // Имя — как в форме со списком: санитизированное (папка my.app → my_app, иначе агент
+        // отказал бы); каталог уходит как введён.
+        const input: CreateSessionInput = { name: sanitizeSessionName(typed || dir), root, dir, preset };
         if (!typed) input.autoName = true; // как в форме со списком: имя из каталога → нумеруем
         return input;
       };

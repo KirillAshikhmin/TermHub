@@ -62,7 +62,9 @@ describe.skipIf(!tmuxAvailable)('SessionService — реальный tmux (из�
     expect(await svc.create({ ...req, autoName: true })).toEqual({ name: 'main' });
     expect(await svc.create({ ...req, autoName: true })).toEqual({ name: 'main1' });
     expect(await svc.create({ ...req, autoName: true })).toEqual({ name: 'main2' });
-    await expect(svc.create(req)).rejects.toThrow(/duplicate session/);
+    // Живой отказ tmux на дубле — та самая форма ошибки, которую распознаёт агент: exit 1
+    // и «duplicate session» в stderr (а не просто любое исключение с этими словами).
+    await expect(svc.create(req)).rejects.toMatchObject({ code: 1, stderr: expect.stringMatching(/duplicate session/) });
     const names = execFileSync('tmux', ['-L', socketName, 'list-sessions', '-F', '#{session_name}'], { encoding: 'utf8' })
       .split('\n')
       .filter(Boolean)

@@ -68,7 +68,11 @@ describe('обвязка в term.ts: Enter — ровно одно действ�
     return { xt: FakeTerminal.instances[0]!, frames, teardown: handle.teardown };
   }
 
-  it('Shift+Enter: keydown погашен, ровно один \\x1b\\r; последующий keypress не даёт ни байта', () => {
+  // Контракт для keypress Enter — обработчик отдаёт false и гасит событие: это и есть то,
+  // что в живом xterm не даёт второго \r. Поддельный xterm свой \r на keypress не
+  // эмулирует, поэтому «ни байта» здесь утверждать нельзя — проверяется только, что
+  // НАШ обработчик на keypress ничего не дописал в журнал.
+  it('Shift+Enter: keydown погашен, ровно один \\x1b\\r; последующий keypress подавлен (false + defaultPrevented)', () => {
     const { xt, frames, teardown } = connectedScreen();
     const down = enterEvent('keydown', true);
     expect(xt.key(down)).toBe(false);
@@ -78,19 +82,22 @@ describe('обвязка в term.ts: Enter — ровно одно действ�
     const press = enterEvent('keypress', true);
     expect(xt.key(press)).toBe(false);
     expect(press.defaultPrevented).toBe(true);
-    expect(frames).toHaveLength(1);
+    expect(frames).toHaveLength(1); // наш обработчик на keypress байтов не шлёт
     teardown();
   });
 
-  it('тумблер выключен: чистый Enter — тоже один перенос, keypress подавлен', () => {
+  it('тумблер выключен: чистый Enter — тоже один перенос, keypress подавлен (false + defaultPrevented)', () => {
     localStorage.setItem('termhub.enterSends', '0');
     const { xt, frames, teardown } = connectedScreen();
     const down = enterEvent('keydown');
     expect(xt.key(down)).toBe(false);
     expect(down.defaultPrevented).toBe(true);
     expect(frames).toEqual([{ kind: 'data', text: '\x1b\r' }]);
-    expect(xt.key(enterEvent('keypress'))).toBe(false);
-    expect(frames).toHaveLength(1);
+
+    const press = enterEvent('keypress');
+    expect(xt.key(press)).toBe(false);
+    expect(press.defaultPrevented).toBe(true);
+    expect(frames).toHaveLength(1); // наш обработчик на keypress байтов не шлёт
     teardown();
   });
 

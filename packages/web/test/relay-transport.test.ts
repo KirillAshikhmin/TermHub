@@ -414,23 +414,38 @@ describe('RelayTransport — сопоставление ответов по id, 
 });
 
 describe('RelayTransport — create() дожидается подтверждения агента', () => {
-  /** Доводит до streaming и возвращает encryptor «агента» (для ответных кадров клиенту). */
-  function driveToStreaming(): { transport: RelayTransport; ws: FakeWebSocket; agentEnc: ReturnType<typeof makeEncryptor> } {
+  /** Доводит до streaming и возвращает средства «агента»: encryptor для ответных кадров
+   *  клиенту и decryptor для чтения того, что клиент отправил. */
+  function driveToStreaming(): {
+    transport: RelayTransport;
+    ws: FakeWebSocket;
+    agentEnc: ReturnType<typeof makeEncryptor>;
+    agentDec: ReturnType<typeof makeDecryptor>;
+  } {
     const clientIdentity = generateIdentity();
     const agentIdentity = generateIdentity();
     const transport = makeTransport(clientIdentity, agentIdentity);
     const ws = sockets[0]!;
     const hello = driveToHelloSent(ws);
-    const { tx } = sessionKeys('server', agentIdentity, hello.edPub);
+    const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
     const agentEnc = makeEncryptor(tx);
+    const before = ws.sent.length;
     ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, hello.nonce));
     expect(transport.isStreaming).toBe(true);
-    return { transport, ws, agentEnc };
+    const fin = JSON.parse(td.decode(decodeFrame(ws.sent[before] as Uint8Array).payload)) as { header: string };
+    return { transport, ws, agentEnc, agentDec: makeDecryptor(rx, unb64(fin.header)) };
   }
 
-  it('резолвится ФАКТИЧЕСКИМ именем из CreateOk.session (агент мог пронумеровать: x → x1)', async () => {
-    const { transport, ws, agentEnc } = driveToStreaming();
+  it('резолвится ФАКТИЧЕСКИМ именем из CreateOk.session (агент мог пронумеровать: x → x1); в кадре Create уехал autoName', async () => {
+    const { transport, ws, agentEnc, agentDec } = driveToStreaming();
+    const from = ws.sent.length;
     const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh', autoName: true });
+    // Признак autoName обязан доехать до агента в кадре Create — без него агент не
+    // нумерует занятое имя, а отказывает.
+    const sent = ws.sent.slice(from).map((b) => decodeFrame(agentDec.pull(b as Uint8Array)));
+    expect(sent.map((f) => f.type)).toEqual([FrameType.Create]);
+    expect(frameJson<Record<string, unknown>>(sent[0]!)).toMatchObject({ name: 'x', root: '/r', dir: 'd', preset: 'zsh', autoName: true });
+
     ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CreateOk, 0, { session: 'x1' })));
     await expect(p).resolves.toBe('x1');
   });

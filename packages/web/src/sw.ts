@@ -114,6 +114,10 @@ sw.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = event.notification.data as { session?: unknown } | null;
   const session = data && typeof data.session === 'string' ? data.session : '';
+  // Формат — тот же, что у routes.termHash, но дословно, без импорта: sw.js — классический
+  // воркер (регистрация без type: 'module'), а модуль, общий с main, rollup выносит в
+  // отдельный чанк и оставляет здесь `import`, на котором SW падает (проверено сборкой).
+  // Меняешь формат в routes.ts — меняй и здесь.
   const target = new URL(session ? `#/term/${encodeURIComponent(session)}` : '#/', sw.registration.scope).href;
   event.waitUntil(focusOrOpen(target));
 });

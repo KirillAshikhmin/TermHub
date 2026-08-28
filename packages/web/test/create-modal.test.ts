@@ -90,7 +90,7 @@ afterEach(() => {
 });
 
 describe('openCreateModal — уход в созданную сессию (R07i, R11, R11.1)', () => {
-  it('после «Создать» запись модалки заменяется маршрутом созданной сессии: без history.back(), hash = #/term/<имя из ответа>', async () => {
+  it('после «Создать» запись модалки заменяется маршрутом созданной сессии: без history.back(), location.replace(#/term/<имя из ответа>)', async () => {
     const { transport } = fakeTransport({ groups: GROUPS, create: () => Promise.resolve('MyProject1') });
     const lengthBefore = history.length;
     openCreateModal(transport);
@@ -100,12 +100,13 @@ describe('openCreateModal — уход в созданную сессию (R07i,
     submit();
     await flush();
 
+    // Доказательство — пара spy: back() не звался, а в replace ушёл маршрут с именем ИЗ
+    // ОТВЕТА транспорта (MyProject1, не запрошенное MyProject). Что после этого hash равен
+    // маршруту, а history.length не вырос, — следствие эмуляции replace через replaceState
+    // (см. beforeEach), а не поведения модалки, поэтому здесь не утверждается.
     expect(back).not.toHaveBeenCalled();
+    expect(replace).toHaveBeenCalledTimes(1);
     expect(replace).toHaveBeenCalledWith('#/term/MyProject1');
-    // Имя — из ответа транспорта (MyProject1), а не запрошенное (MyProject).
-    expect(location.hash).toBe('#/term/MyProject1');
-    // История — [откуда пришли, новая сессия]: запись модалки заменена, не добавлена.
-    expect(history.length).toBe(lengthBefore + 1);
   });
 });
 
@@ -153,6 +154,24 @@ describe('openCreateModal — признак autoName, ручная форма (
     await flush();
 
     expect(calls).toEqual([{ name: 'MyProject', root: '/srv/projects', dir: 'MyProject', preset: 'zsh', autoName: true }]);
+  });
+
+  it('пустое имя, каталог с точкой (my.app) → имя санитизировано как в форме со списком (my_app), dir уходит как введён', async () => {
+    const { transport, calls } = fakeTransport({ groups: [], create: (req) => Promise.resolve(req.name) });
+    openCreateModal(transport);
+    await flush();
+    control<HTMLInputElement>(t('create.root')).value = '/srv/projects';
+    const dir = control<HTMLInputElement>(t('create.directory'));
+    dir.value = 'my.app';
+    dir.dispatchEvent(new Event('input'));
+    // Подсказка в поле «Имя» — то имя, которое и уйдёт агенту (точка в имени tmux-сессии
+    // ломает адресацию target, агент такое имя отверг бы).
+    expect(control<HTMLInputElement>(t('create.name')).placeholder).toBe('my_app');
+
+    submit();
+    await flush();
+
+    expect(calls).toEqual([{ name: 'my_app', root: '/srv/projects', dir: 'my.app', preset: 'zsh', autoName: true }]);
   });
 
   it('введённое имя → без признака autoName', async () => {

@@ -54,6 +54,19 @@ describe("workspace.show('term')", () => {
     ws.teardown();
   });
 
+  it("повторный show('term') на уже активной вкладке фокус не трогает — повтор события маршрута не крадёт его у compose-бара", () => {
+    const root = document.createElement('div');
+    const ws = mountWorkspace(root, 'work', { mode: 'lan', clientScope: null } as unknown as Transport);
+    ws.show('term');
+    ws.show('term');
+    expect(term.handle.focus).toHaveBeenCalledTimes(1);
+    // Ушли на другую вкладку и вернулись — фокус снова: до этого show вид не был активен.
+    ws.show('files');
+    ws.show('term');
+    expect(term.handle.focus).toHaveBeenCalledTimes(2);
+    ws.teardown();
+  });
+
   it('показ других вкладок терминал не фокусирует', () => {
     const root = document.createElement('div');
     const ws = mountWorkspace(root, 'work', { mode: 'lan', clientScope: null } as unknown as Transport);

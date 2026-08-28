@@ -27,7 +27,7 @@ import {
   renderTaskRow,
 } from './gradle-view';
 import { t } from './i18n';
-import { sgradleHash } from './routes';
+import { sgradleHash, termHash } from './routes';
 import { mountSessionBar } from './tabs';
 import { currentTheme } from './theme';
 import { enableTouchScroll } from './touch-scroll';
@@ -810,7 +810,7 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
       (project) => {
         if (disposed) return;
         if (!project) {
-          location.hash = `#/term/${encodeURIComponent(session)}`;
+          location.hash = termHash(session);
           return;
         }
         projectDir = project.dir;

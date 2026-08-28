@@ -219,7 +219,8 @@ npx tsc -p packages/web/tsconfig.json --noEmit   # web не типизирует
   агент не запущен.
 - **Mac засыпает** — отключите сон в System Settings, либо `caffeinate -di`, либо тумблер
   «Не давать Mac засыпать» в меню веба.
-- **Запасной канал** — включите Remote Login (SSH) и делайте `tmux -L termhub attach -t main`.
+- **Запасной канал** — включите Remote Login (SSH) и делайте `tmux -L termhub attach -t <имя>`,
+  где `<имя>` — имя сессии, то есть имя папки, например `MyProject` (см. `tmux -L termhub ls`).
 
 ---
 

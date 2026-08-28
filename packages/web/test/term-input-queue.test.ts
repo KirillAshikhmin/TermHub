@@ -42,13 +42,14 @@ describe('очередь ввода до подключения', () => {
     handle.teardown();
   });
 
-  it('лимит 8 КБ: лишнее отбрасывается с конца', () => {
+  it('лимит 8 КБ: чанк, который не влезает целиком, отбрасывается целиком; следующий, что влезает, — принимается', () => {
     const { transport, frames, opened } = termTransport();
     const handle = mountTerminal(root, 'work', transport);
     const xt = FakeTerminal.instances[0]!;
     xt.type('a'.repeat(8000));
-    xt.type('b'.repeat(500));
-    xt.type('c');
+    xt.type('b'.repeat(500)); // 8500 > лимита — отброшен целиком, а не обрезан до 192
+    xt.type('c'.repeat(INPUT_LIMIT - 8000)); // ровно до потолка — влезает
+    xt.type('d'); // потолок достигнут
 
     opened[0]!.opts.onStatus('connected');
     const data = frames
@@ -56,7 +57,26 @@ describe('очередь ввода до подключения', () => {
       .map((f) => f.text)
       .join('');
     expect(data).toHaveLength(INPUT_LIMIT);
-    expect(data).toBe('a'.repeat(8000) + 'b'.repeat(INPUT_LIMIT - 8000));
+    expect(data).toBe('a'.repeat(8000) + 'c'.repeat(INPUT_LIMIT - 8000));
+    handle.teardown();
+  });
+
+  it('многобайтовый символ на границе лимита не режется: в pty не уходит разорванный UTF-8', () => {
+    const { transport, frames, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    xt.type('a'.repeat(INPUT_LIMIT - 1)); // в очереди остался ровно один байт
+    xt.type('ё'); // два байта UTF-8 — целиком не влезает
+    xt.type('b'); // один байт — влезает
+
+    opened[0]!.opts.onStatus('connected');
+    const data = frames
+      .filter((f) => f.kind === 'data')
+      .map((f) => f.text)
+      .join('');
+    // Срез первого байта «ё» дал бы в кадре одинокий lead-байт (декодер показал бы U+FFFD).
+    expect(data).not.toContain('�');
+    expect(data).toBe('a'.repeat(INPUT_LIMIT - 1) + 'b');
     handle.teardown();
   });
 

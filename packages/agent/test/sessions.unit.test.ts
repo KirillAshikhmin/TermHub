@@ -432,9 +432,11 @@ describe('SessionService.create — autoName: свободное имя по ж�
   it('занятые имена берутся сырым list-sessions -F #{session_name} (сборочные сессии видны), без list-panes', async () => {
     stubTmuxWithSessions(new Set(['MyProject', '_gradle_MyProject_ab12cd']));
     // Сборочная сессия скрыта из list(), но имя занимает — кандидат с её именем недопустим.
-    const svcGradle = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
-    await expect(svcGradle.create({ name: '_gradle_MyProject_ab12cd', root, dir: 'MyProject', preset: 'zsh', autoName: true }))
+    await expect(svc.create({ name: '_gradle_MyProject_ab12cd', root, dir: 'MyProject', preset: 'zsh', autoName: true }))
       .resolves.toEqual({ name: '_gradle_MyProject_ab12cd1' });
+    // Ровно одна попытка new-session — сразу со свободным именем: занятое из сырого списка
+    // видно заранее, пробовать его и ловить «duplicate session» не пришлось.
+    expect(newSessionNames()).toEqual(['_gradle_MyProject_ab12cd1']);
     const calls = mockExecFile.mock.calls.map((c) => c[1] as string[]);
     const listCall = calls.find((a) => a.includes('list-sessions'))!;
     expect(listCall).toEqual(['-L', 'termhub-test-u', 'list-sessions', '-F', '#{session_name}']);

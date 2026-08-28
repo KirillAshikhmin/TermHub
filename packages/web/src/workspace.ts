@@ -9,6 +9,7 @@ import type { GradleTab } from './gradle';
 import { mountGradleTab } from './gradle';
 import { mountRepo } from './repo';
 import type { RemoteRoute } from './remote';
+import { termHash } from './routes';
 import { mountTerminal } from './term';
 import type { Transport } from './transport';
 import { detectGradle, knownGradle } from './ui';
@@ -68,7 +69,7 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
     for (const other of views.values()) other.el.classList.toggle('is-active', other === v);
   };
   const toTerm = (): void => {
-    location.hash = `#/term/${encodeURIComponent(session)}`;
+    location.hash = termHash(session);
   };
   let alive = true;
   // Номер последнего показа: пока ответ детекта в пути, пользователь может уйти
@@ -110,10 +111,15 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
       }
     }
     const v = ensure(tab);
+    // Признак перехода — из состояния ДО показа: роутер зовёт show и на повтор события
+    // маршрута для уже активной вкладки, и тогда фокус трогать нельзя — он мог стоять в
+    // compose-баре.
+    const wasActive = v.el.classList.contains('is-active');
     reveal(v);
-    // Вкладка сессии: фокус в терминал ПОСЛЕ показа (скрытый элемент фокус не берёт) и
-    // безусловно — тумблер ⌨ здесь не условие, а режим поля ввода (см. term.ts).
-    if (tab === 'term') v.focus?.();
+    // Вкладка сессии: фокус в терминал ПОСЛЕ показа (скрытый элемент фокус не берёт),
+    // только при переходе на неё и безусловно к тумблеру ⌨ — он здесь не условие, а
+    // режим поля ввода (см. term.ts).
+    if (tab === 'term' && !wasActive) v.focus?.();
   };
   return {
     session,

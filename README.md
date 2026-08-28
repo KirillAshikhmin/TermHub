@@ -219,7 +219,8 @@ How to contribute — [CONTRIBUTING.md](CONTRIBUTING.md).
   the agent isn't running.
 - **The Mac falls asleep** — disable sleep in System Settings, or `caffeinate -di`, or the
   "Keep Mac awake" toggle in the web menu.
-- **Fallback channel** — enable Remote Login (SSH) and do `tmux -L termhub attach -t main`.
+- **Fallback channel** — enable Remote Login (SSH) and do `tmux -L termhub attach -t <name>`,
+  where `<name>` is the session name — the folder name, e.g. `MyProject` (see `tmux -L termhub ls`).
 
 ---
 

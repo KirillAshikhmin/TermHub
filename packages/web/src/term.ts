@@ -22,7 +22,7 @@ import { enterAction } from './term-keys';
 import { markBellSeen, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { detectPaths, filePathParts, parentRel } from './termlinks';
-import { filesHash, sfilesHash } from './routes';
+import { filesHash, sfilesHash, termHash } from './routes';
 import { resolveSessionPath } from './session-path';
 import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
@@ -37,7 +37,7 @@ const FONT_DEFAULT = 14;
 const FONT_LS_KEY = 'termhub.fontSize';
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
-// Потолок очереди ввода до подключения (см. sendData): лишнее отбрасывается с конца.
+// Потолок очереди ввода до подключения (см. sendData): не влезающий чанк отбрасывается целиком.
 const INPUT_QUEUE_MAX = 8 * 1024;
 
 // Открыта ли compose-строка — на уровне модуля, чтобы состояние переживало
@@ -164,7 +164,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // активному табу просто возвращает фокус в терминал.
   const goTo = (name: string): void => {
     if (name === session) term.focus();
-    else location.hash = `#/term/${encodeURIComponent(name)}`;
+    else location.hash = termHash(name);
   };
   const tabs = mountSessionTabs({
     transport,
@@ -195,7 +195,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       toast(t('card.killError'), 'error');
       return;
     }
-    if (name === session) location.hash = neighbor ? `#/term/${encodeURIComponent(neighbor)}` : '#/';
+    if (name === session) location.hash = neighbor ? termHash(neighbor) : '#/';
     else await tabs.refresh();
   }
   const dot = document.createElement('span');
@@ -388,6 +388,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // уже в нужном режиме (при выключенном тумблере — inputmode=none: экранная клавиатура
   // не всплывёт, аппаратная работает), поэтому applyKeyboardMode обязан отработать ДО
   // фокуса. Раньше фокус давал только onStatus('connected'), и набранное до него пропадало.
+  // Кому этот фокус достаётся: на пути openTerminal/remote.ts — экрану сразу; на пути
+  // workspace вид в момент монтажа ещё скрыт (без is-active), браузер такой фокус
+  // игнорирует, и рабочий фокус там даёт show('term') после показа вкладки.
   term.focus();
 
   // ── Соединение (через транспорт) ─────────────────────────────────────
@@ -439,7 +442,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // OPEN; relay — до OpenOk), а фокус в терминале стоит с монтажа — набранное в это
   // окно копим и отдаём на connected. Инвариант «ПЕРВЫЙ кадр — RESIZE» (иначе агент не
   // спавнит pty) неприкосновенен: очередь сбрасывается строго ПОСЛЕ sendResize().
-  // Потолок INPUT_QUEUE_MAX, лишнее отбрасывается с конца; onEnd и teardown очищают.
+  // Потолок INPUT_QUEUE_MAX: чанк, который не влезает целиком, отбрасывается целиком —
+  // резать его нельзя, граница байтов пройдёт внутри многобайтового символа, и в pty
+  // уйдёт разорванный UTF-8. onEnd и teardown очищают.
   let connected = false;
   let pending: Uint8Array[] = [];
   let pendingBytes = 0;
@@ -449,11 +454,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       channel?.write(bytes);
       return;
     }
-    const room = INPUT_QUEUE_MAX - pendingBytes;
-    if (room <= 0) return;
-    const chunk = bytes.length > room ? bytes.subarray(0, room) : bytes;
-    pending.push(chunk);
-    pendingBytes += chunk.length;
+    if (pendingBytes + bytes.length > INPUT_QUEUE_MAX) return;
+    pending.push(bytes);
+    pendingBytes += bytes.length;
   };
   const dropPending = (): void => {
     pending = [];
