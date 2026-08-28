@@ -139,7 +139,7 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
   `FrameType.Gradle`/`GradleResult`; веб → `Transport.gradle(action, params)`
   (`transport.ts` + `relay-transport.ts`, обе реализации).
 - Веб: `packages/web/src/gradle.ts` — экран (`mountGradle` для роутера,
-  `mountGradleTab` — тот же монтаж с хэндлом `{listPanel, run, teardown}` для тестов),
+  `mountGradleTab` — тот же монтаж с хэндлом `{listPanel, run, recheck, teardown}` для тестов),
   `gradle-view.ts` — чистые рендеры, группировка и «недавние».
 - Четвёртый таб рисует `renderHoloBar` (`web/src/ui.ts`) асинхронно, после
   `detectGradle` (кэш детекта на сессию — там же, плюс синхронный `knownGradle`,
@@ -186,6 +186,8 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
   агенте свой потолок 180 с): общий 10-секундный обрывал бы первое открытие вкладки.
 - Раскладка и «недавние» — в localStorage: `termhub.gradleSplit`,
   `termhub.gradleExpanded`, `termhub.gradleRecent.<session>`.
+- `grep` по `packages/agent/src/gradle.ts` без `-a` молча не находит ничего: в `stopKey` разделитель
+  ключа — литеральный NUL (`${socketName}\0${name}`), и для grep/`file` файл бинарный.
 
 Тесты только этой вкладки (4 файла: `gradle.unit`/`gradle.tmux` в agent,
 `gradle-view`/`gradle-tab` в web):
@@ -196,4 +198,71 @@ npx vitest run gradle
 
 `gradle.tmux.test.ts` поднимает настоящий tmux на изолированном сокете и идёт ~27 с —
 это нормально, не таймаут.
+
+## Имена сессий и экран сессии
+
+Кто чем владеет:
+
+- `packages/agent/src/sessions.ts` — `SessionService.create({name, root, dir, preset, autoName?})
+  → {name}`: при `autoName: true` занятое имя нумерует `pickFreeName(base, taken)` — `MyProject` →
+  `MyProject1` → `MyProject2` (`v2` → `v21`); занятые — сырой `list-sessions -F '#{session_name}'`
+  («no server» = пусто); гонка «duplicate session» переигрывается 5 раз. Без `autoName` — отказ tmux наружу.
+- Фактическое имя едет клиенту: `server.ts` `POST /api/sessions` → `{ok: true, session}`,
+  `relay-link.ts` `doCreate` → `CreateOk{session}`. Веб: `api.ts` `CreateSessionInput.autoName?`/
+  `CreateSessionResult.session?`; `Transport.create(req) → Promise<string>` (обе реализации)
+  резолвится именем из ответа, без поля — запрошенным; `routes.termHash(name)` — единственный сборщик `#/term/<name>`.
+- `ui.ts` `openModal(builder(close))`: `close()` → `history.back()`, `close(next: string)` →
+  `cleanup()` + `location.replace(next)`, нестроковое (Event) — обычное закрытие. `dashboard.ts`
+  `openCreateModal(transport)` без колбэка: пустое поле имени → `autoName: true` (имя из каталога,
+  `sanitizeSessionName`: `my.app` → `my_app`), введённое — без признака; потом `close(termHash(created))`.
+- `packages/agent/src/setup.ts` — `tmFunction(socket)`/`TM_FUNCTION`: `tm` без аргумента —
+  `basename "$PWD"` + та же нумерация на POSIX sh (`grep -qxF` по снимку `list-sessions`) и
+  `new -s`; `tm <имя>` — `new -As` (так зовёт и `tml`). `upgradeTmFunction(rc)` заменяет старую
+  однострочную `tm() { tmux … }` только ПОСЛЕ маркера `# termhub`, иначе `null` и печать определения.
+- `packages/web/src/term.ts` — `mountTerminal(root, session, transport) → TerminalHandle{focus, teardown}`
+  (`openTerminal` — обёртка для `remote.ts`), фокус при монтаже, очередь ввода до `connected`
+  (`INPUT_QUEUE_MAX` = 8 КБ), Enter через чистую `enterAction(e, enterSends) →
+  'send'|'newline'|'suppress'|'pass'` из `term-keys.ts` (тумблер — localStorage `termhub.enterSends`,
+  `'0'` = выкл); `workspace.ts` `show('term')` зовёт `focus()`; `tabs.ts` гасит `mousedown` на `.th-tab__btn`.
+
+Подводные камни (из кода не выводятся):
+
+- **`-t "=имя"` в tmux не защищает от точки/двоеточия:** для `=foo.bar` tmux ищет панель `bar`
+  в сессии `foo` (живой tmux 3.7b) — `has-session -t =v1.1` отвечает «нет» на живую `v1.1`.
+  Занятость проверяй только точным сравнением с `list-sessions -F '#{session_name}'` (так делают
+  `tm` и `create` с `autoName`); `kill-session -t "=$1"` в `tml`/`tmc` (`_th_kill`) этим ещё страдает.
+- Две регулярки имён: создать/убить/переименовать агент даёт только по `NAME_RE` (`/^[\w-]{1,40}$/`,
+  без точки), ссылаться на существующую (WS-апгрейд, гостевой scope) — `isExistingSessionName`, шире.
+  `tm` в папке `v1.1` такую сессию заведёт: дашборд покажет и откроет, «закрыть»/«переименовать» откажут.
+- `tm` без аргумента больше НЕ присоединяется к сессии папки — всегда следующая по номеру;
+  вернуться — `tml` или `tm <имя>`. Ручное имя в модалке не нумеруется: коллизия — ошибка.
+- `history.back()` модалки — асинхронная траверса, синхронная смена `location.hash` её обгоняет:
+  браузер пушит маршрут, потом исполняет back и возвращается на запись модалки со старым URL —
+  роутер сносит свежесмонтированный экран (баг R11). Уход из модалки — только `close(termHash(…))`,
+  никогда `close(); location.hash = …`. Закрыли модалку до ответа — сессия создастся, перехода не будет.
+- Ветка `newline` обработчика Enter ОБЯЗАНА `preventDefault()` + `return false`: на голый `false`
+  xterm выходит из `_keyDown` до своего cancel, браузер рождает `keypress`, и `_keyPress` шлёт
+  второй `\r` — перенос и отправка за одно нажатие. `keypress Enter` гасится всегда (`suppress`).
+- Очередь ввода: транспорт молча роняет байты до подключения (LAN — WS не OPEN, relay — до `OpenOk`),
+  а фокус стоит с монтажа. Накопленное уходит строго ПОСЛЕ `sendResize()` («первый кадр — RESIZE», иначе
+  агент не спавнит pty); не влезающий в 8 КБ чанк отбрасывается целиком (резать — рвать UTF-8); `reconnecting` копит заново.
+- Фокус: `term.focus()` при монтаже на пути workspace попадает в скрытый элемент (без `is-active`) и
+  игнорируется — рабочий даёт `show('term')` после показа и только при переходе (`wasActive`): повтор события
+  маршрута не крадёт фокус у compose-бара. Тумблер ⌨ — режим поля (`inputmode=none`), не условие фокуса.
+- `sw.ts` не может импортировать `routes` (классический воркер: rollup вынес бы общий чанк и оставил
+  `import`, на котором SW падает) — формат `#/term/` там продублирован дословно; меняешь `termHash` — меняй и `sw.ts`.
+- Тесты агента в `tsc`-сборку не входят (`packages/agent/tsconfig.json`: `include: ["src"]`), веб-тесты
+  в `tsc -p packages/web/tsconfig.json` входят. `create-modal.test.ts`: в happy-dom `History.back()`
+  синхронный — гонка R11 не воспроизводится, тест утверждает только механизм (`location.replace` вызван, back — нет).
+
+Тесты этой области (фильтры — подстроки имён файлов):
+
+```bash
+npx vitest run sessions tm-shell setup create-modal term-keys term-input-queue workspace
+```
+
+Живые: `sessions.tmux` — tmux на изолированном сокете, `tm-shell` — `tm` под sh/bash/zsh с подложным
+`tmux` в PATH; остальные — стаб `execFile` / happy-dom. Хелпер `packages/web/test/term-harness.ts`: поддельный
+xterm (`FakeTerminal`: `type()`, `key()`, `focusCalls`) и транспорт с журналом кадров (`termTransport()`), `@xterm/xterm` — через `vi.mock`.
+
 <!-- autopilot:end -->
