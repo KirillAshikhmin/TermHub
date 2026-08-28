@@ -1,0 +1,120 @@
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { mountTerminal } from '../src/term';
+import { FakeTerminal, stubResizeObserver, termTransport } from './term-harness';
+
+// xterm подменён: проверяем, что уходит в транспорт, а не рендер (см. term-harness).
+vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')).FakeTerminal }));
+
+const INPUT_LIMIT = 8 * 1024; // 8 КБ — потолок очереди из спецификации (§15)
+const RESIZE = { kind: 'resize', text: '80x24' }; // cols×rows поддельного xterm
+
+// Транспорт молча роняет байты, пока соединение не поднято (LAN: WebSocket ещё не OPEN;
+// relay — до OpenOk). Экран обязан копить ввод и отдать его после первого кадра RESIZE.
+describe('очередь ввода до подключения', () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    localStorage.clear();
+    FakeTerminal.instances.length = 0;
+    stubResizeObserver();
+    root = document.createElement('div');
+    document.body.append(root);
+  });
+
+  it('набранное до connected не уходит в транспорт; на connected — сначала RESIZE, затем очередь', () => {
+    const { transport, frames, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    xt.type('ls');
+    xt.type('\r');
+    expect(frames).toEqual([]);
+
+    opened[0]!.opts.onStatus('connected');
+    expect(frames[0]).toEqual(RESIZE);
+    expect(frames.slice(1).map((f) => f.kind)).toEqual(['data', 'data']);
+    expect(frames.slice(1).map((f) => f.text).join('')).toBe('ls\r');
+
+    // После подключения ввод идёт сразу, без очереди.
+    xt.type('x');
+    expect(frames.at(-1)).toEqual({ kind: 'data', text: 'x' });
+    handle.teardown();
+  });
+
+  it('лимит 8 КБ: лишнее отбрасывается с конца', () => {
+    const { transport, frames, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    xt.type('a'.repeat(8000));
+    xt.type('b'.repeat(500));
+    xt.type('c');
+
+    opened[0]!.opts.onStatus('connected');
+    const data = frames
+      .filter((f) => f.kind === 'data')
+      .map((f) => f.text)
+      .join('');
+    expect(data).toHaveLength(INPUT_LIMIT);
+    expect(data).toBe('a'.repeat(8000) + 'b'.repeat(INPUT_LIMIT - 8000));
+    handle.teardown();
+  });
+
+  it('обрыв (reconnecting) снова копит ввод до нового connected — и снова после RESIZE', () => {
+    const { transport, frames, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    opened[0]!.opts.onStatus('connected');
+    frames.length = 0;
+    xt.type('a');
+    expect(frames).toEqual([{ kind: 'data', text: 'a' }]);
+
+    opened[0]!.opts.onStatus('reconnecting');
+    xt.type('b');
+    expect(frames).toHaveLength(1);
+
+    opened[0]!.opts.onStatus('connected');
+    expect(frames.slice(1)).toEqual([RESIZE, { kind: 'data', text: 'b' }]);
+    handle.teardown();
+  });
+
+  it('onEnd очищает очередь', () => {
+    const { transport, frames, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    xt.type('zzz');
+    opened[0]!.opts.onEnd({ kind: 'ended' });
+
+    opened[0]!.opts.onStatus('connected');
+    expect(frames).toEqual([RESIZE]);
+    handle.teardown();
+  });
+});
+
+// Очередь имеет смысл только потому, что фокус стоит в терминале с монтажа — до
+// connected. Тумблер ⌨ фокус не отменяет: он лишь переводит поле в inputmode=none,
+// чтобы не всплывала экранная клавиатура (R13, R13.4).
+describe('фокус терминала', () => {
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    localStorage.clear();
+    FakeTerminal.instances.length = 0;
+    stubResizeObserver();
+    root = document.createElement('div');
+    document.body.append(root);
+  });
+
+  it('при монтаже — сразу, до connected и при выключенном ⌨; поле в inputmode=none; хэндл фокусирует повторно', () => {
+    localStorage.setItem('termhub.keyboard', '0');
+    const { transport } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    expect(xt.focusCalls).toBe(1);
+    expect(xt.textarea.inputMode).toBe('none');
+
+    handle.focus();
+    expect(xt.focusCalls).toBe(2);
+    handle.teardown();
+  });
+});

@@ -18,6 +18,7 @@ import { openCreateModal } from './dashboard';
 import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
+import { enterAction } from './term-keys';
 import { markBellSeen, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { detectPaths, filePathParts, parentRel } from './termlinks';
@@ -36,6 +37,8 @@ const FONT_DEFAULT = 14;
 const FONT_LS_KEY = 'termhub.fontSize';
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
+// Потолок очереди ввода до подключения (см. sendData): лишнее отбрасывается с конца.
+const INPUT_QUEUE_MAX = 8 * 1024;
 
 // Открыта ли compose-строка — на уровне модуля, чтобы состояние переживало
 // переключение вкладок (пере-монтирование term-экрана). Содержимое не храним:
@@ -123,8 +126,19 @@ function writeEnterSends(enabled: boolean): void {
   }
 }
 
-/** Монтирует терминал сессии в root через транспорт; возвращает функцию очистки. */
+/** Хэндл экрана терминала: фокус (его зовёт workspace при показе вкладки) и снятие. */
+export interface TerminalHandle {
+  focus(): void;
+  teardown(): void;
+}
+
+/** Совместимая обёртка для роутера (remote.ts): ему нужна только функция снятия. */
 export function openTerminal(root: HTMLElement, session: string, transport: Transport): () => void {
+  return mountTerminal(root, session, transport).teardown;
+}
+
+/** Монтирует терминал сессии в root через транспорт. */
+export function mountTerminal(root: HTMLElement, session: string, transport: Transport): TerminalHandle {
   root.replaceChildren();
   let disposed = false;
   markBellSeen(session); // открыли сессию — её звонок прочитан
@@ -370,6 +384,11 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     ta.spellcheck = false;
   };
   applyKeyboardMode();
+  // Фокус — сразу при монтаже, не дожидаясь connected, и независимо от тумблера ⌨: поле
+  // уже в нужном режиме (при выключенном тумблере — inputmode=none: экранная клавиатура
+  // не всплывёт, аппаратная работает), поэтому applyKeyboardMode обязан отработать ДО
+  // фокуса. Раньше фокус давал только onStatus('connected'), и набранное до него пропадало.
+  term.focus();
 
   // ── Соединение (через транспорт) ─────────────────────────────────────
   // Канал владеет жизненным циклом соединения (WS/E2E, backoff-реконнект);
@@ -414,8 +433,36 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   };
 
   const sendResize = (): void => channel?.resize(term.cols, term.rows);
+
+  // ── Очередь ввода до подключения ─────────────────────────────────────
+  // Транспорт молча роняет байты, пока соединение не поднято (LAN: WebSocket ещё не
+  // OPEN; relay — до OpenOk), а фокус в терминале стоит с монтажа — набранное в это
+  // окно копим и отдаём на connected. Инвариант «ПЕРВЫЙ кадр — RESIZE» (иначе агент не
+  // спавнит pty) неприкосновенен: очередь сбрасывается строго ПОСЛЕ sendResize().
+  // Потолок INPUT_QUEUE_MAX, лишнее отбрасывается с конца; onEnd и teardown очищают.
+  let connected = false;
+  let pending: Uint8Array[] = [];
+  let pendingBytes = 0;
   const sendData = (bytes: Uint8Array): void => {
-    if (!readOnly) channel?.write(bytes);
+    if (readOnly) return;
+    if (connected) {
+      channel?.write(bytes);
+      return;
+    }
+    const room = INPUT_QUEUE_MAX - pendingBytes;
+    if (room <= 0) return;
+    const chunk = bytes.length > room ? bytes.subarray(0, room) : bytes;
+    pending.push(chunk);
+    pendingBytes += chunk.length;
+  };
+  const dropPending = (): void => {
+    pending = [];
+    pendingBytes = 0;
+  };
+  const flushPending = (): void => {
+    const queued = pending;
+    dropPending();
+    for (const chunk of queued) channel?.write(chunk);
   };
 
   // Общий оверлей конца сессии — используется и для штатного CLOSE («сессия
@@ -450,11 +497,13 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     onStatus: (state) => {
       if (disposed) return;
       setDot(state);
+      connected = state === 'connected';
       if (state === 'connected') {
         banner.classList.remove('is-shown');
         doFit();
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.
         sendResize();
+        flushPending(); // набранное до подключения — только после RESIZE
         // Фокус (и клавиатуру) на connect — только если клавиатура включена.
         if (keyboardEnabled) term.focus();
       } else if (state === 'reconnecting') {
@@ -464,6 +513,8 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
       }
     },
     onEnd: (reason) => {
+      connected = false;
+      dropPending(); // сессии больше нет — набранное для неё некуда слать
       if (disposed || leavingToNeighbor) return;
       if (reason.kind === 'error')
         showOverlay(t('term.sessionError', { message: reason.message ?? '' }), t('term.sessionEndedHint'));
@@ -474,27 +525,29 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   // ── Ввод из терминала → pty ──────────────────────────────────────────
   const encoder = new TextEncoder();
   const dataDisp = term.onData((s) => sendData(encoder.encode(s)));
-  // Shift+Enter — ВСЕГДА перенос строки. Тумблер «Отправлять по Enter» (enterSends)
-  // меняет поведение ТОЛЬКО чистого Enter:
-  //   enterSends=true  (по умолч.): Enter → отправка (\r)
-  //   enterSends=false:             Enter → перенос
-  // Раньше роли менялись местами, и при выключенном тумблере Shift+Enter неожиданно
-  // отправлял ввод вместо переноса.
-  // «Перенос» шлём как ESC+CR (\x1b\r) — это то, что терминал отправляет на Option/
-  // Alt+Enter, и Claude Code (как и другие readline/ink-TUI) вставляет новую строку.
-  // Голый \n не годится: Claude Code трактует его как submit (проверено на v2.1.209).
-  // xterm сам шлёт \r на любой Enter, поэтому перехватываем только случай переноса;
-  // иначе (return true) xterm отправляет \r.
+  // Правило Enter — чистая enterAction (term-keys.ts): тумблер «Отправлять по Enter»
+  // меняет поведение ТОЛЬКО чистого Enter, Shift+Enter — всегда перенос. «Перенос» шлём
+  // как ESC+CR (\x1b\r) — это то, что терминал отправляет на Option/Alt+Enter, и Claude
+  // Code (как и другие readline/ink-TUI) вставляет новую строку. Голый \n не годится:
+  // Claude Code трактует его как submit (проверено на v2.1.209).
+  // Почему preventDefault обязателен: при `false` xterm выходит из _keyDown ДО своего
+  // cancel(), браузер порождает keypress, и _keyPress xterm шлёт \r через onData — одно
+  // нажатие давало перенос И отправку. Гасим keydown сами, а keypress Enter подавляем
+  // ещё и явно — страховка от второго \r и от \n в скрытой textarea.
   let enterSends = readEnterSends();
   term.attachCustomKeyEventHandler((e) => {
-    if (e.type !== 'keydown') return true;
-    if (e.key === 'Enter') {
-      if (e.shiftKey || !enterSends) {
-        sendData(encoder.encode('\x1b\r'));
-        return false;
-      }
-      return true;
+    const action = enterAction(e, enterSends);
+    if (action === 'newline') {
+      sendData(encoder.encode('\x1b\r'));
+      e.preventDefault();
+      return false;
     }
+    if (action === 'suppress') {
+      e.preventDefault();
+      return false;
+    }
+    // 'send': xterm сам шлёт \r и гасит событие. Остальное ниже — только keydown.
+    if (action === 'send' || e.type !== 'keydown') return true;
     // Cmd+←/→ — в начало/конец строки ввода, как в нативных полях macOS. Шлём Ctrl-A/
     // Ctrl-E: их понимают и readline (zsh/bash), и ink-TUI вроде Claude Code, тогда как
     // Home/End (\x1b[H, \x1b[F) обрабатывают далеко не все. Сам xterm на Cmd+стрелку
@@ -728,26 +781,30 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
   // Первичная раскладка (соединение уже стартовало в transport.openTerm).
   reposition();
 
-  return (): void => {
-    disposed = true;
-    if (rafId) cancelAnimationFrame(rafId);
-    ro.disconnect();
-    window.removeEventListener('resize', scheduleFit);
-    vv?.removeEventListener('resize', scheduleFit);
-    vv?.removeEventListener('scroll', scheduleFit);
-    dataDisp.dispose();
-    binaryDisp.dispose();
-    resizeDisp.dispose();
-    stopTouchScroll?.();
-    stopTouchSelect?.();
-    tabs.teardown();
-    channel?.close();
-    channel = null;
-    try {
-      term.dispose();
-    } catch {
-      // повторный dispose безопасен
-    }
-    root.replaceChildren();
+  return {
+    focus: () => term.focus(),
+    teardown: (): void => {
+      disposed = true;
+      if (rafId) cancelAnimationFrame(rafId);
+      ro.disconnect();
+      window.removeEventListener('resize', scheduleFit);
+      vv?.removeEventListener('resize', scheduleFit);
+      vv?.removeEventListener('scroll', scheduleFit);
+      dataDisp.dispose();
+      binaryDisp.dispose();
+      resizeDisp.dispose();
+      stopTouchScroll?.();
+      stopTouchSelect?.();
+      tabs.teardown();
+      dropPending();
+      channel?.close();
+      channel = null;
+      try {
+        term.dispose();
+      } catch {
+        // повторный dispose безопасен
+      }
+      root.replaceChildren();
+    },
   };
 }

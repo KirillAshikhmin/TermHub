@@ -95,6 +95,9 @@ export function renderSessionTab(
   name.className = 'th-tab__name';
   label.append(name);
   main.append(label);
+  // Тап по вкладке не должен уводить фокус с textarea xterm (на телефоне это закрывает
+  // экранную клавиатуру ещё до смены экрана) — тот же приём, что у быстрых клавиш.
+  main.addEventListener('mousedown', (e) => e.preventDefault());
   main.addEventListener('click', () => onSwitch(info.name));
   const close = document.createElement('button');
   close.type = 'button';

@@ -9,11 +9,18 @@ import type { GradleTab } from './gradle';
 import { mountGradleTab } from './gradle';
 import { mountRepo } from './repo';
 import type { RemoteRoute } from './remote';
-import { openTerminal } from './term';
+import { mountTerminal } from './term';
 import type { Transport } from './transport';
 import { detectGradle, knownGradle } from './ui';
 
 type WsTab = 'term' | 'files' | 'repo' | 'gradle';
+
+/** Смонтированный вид вкладки; focus есть только у терминала. */
+interface WsView {
+  el: HTMLElement;
+  clean: () => void;
+  focus?: () => void;
+}
 
 export interface WorkspaceHandle {
   session: string;
@@ -34,33 +41,30 @@ export function routeWorkspace(route: RemoteRoute): { session: string; tab: WsTa
 /** Монтирует рабочее пространство сессии в root; show(tab) переключает видимость. */
 export function mountWorkspace(root: HTMLElement, session: string, transport: Transport): WorkspaceHandle {
   root.replaceChildren();
-  const views = new Map<WsTab, { el: HTMLElement; clean: () => void }>();
+  const views = new Map<WsTab, WsView>();
   // Вкладка Gradle — единственная, у которой показ повторно спрашивает детект,
   // поэтому от неё держим хэндл, а не только teardown (см. show).
   let gradleView: GradleTab | null = null;
-  const ensure = (tab: WsTab): { el: HTMLElement; clean: () => void } => {
+  const ensure = (tab: WsTab): WsView => {
     const cached = views.get(tab);
     if (cached) return cached;
     const el = document.createElement('div');
     el.className = 'th-ws-view';
     root.append(el);
-    const mountGradleView = (): (() => void) => {
+    let v: WsView;
+    if (tab === 'term') {
+      const term = mountTerminal(el, session, transport);
+      v = { el, clean: term.teardown, focus: term.focus };
+    } else if (tab === 'files') v = { el, clean: mountFiles(el, transport, session) };
+    else if (tab === 'repo') v = { el, clean: mountRepo(el, transport, session) };
+    else {
       gradleView = mountGradleTab(el, transport, session);
-      return gradleView.teardown;
-    };
-    const clean =
-      tab === 'term'
-        ? openTerminal(el, session, transport)
-        : tab === 'files'
-          ? mountFiles(el, transport, session)
-          : tab === 'repo'
-            ? mountRepo(el, transport, session)
-            : mountGradleView();
-    const v = { el, clean };
+      v = { el, clean: gradleView.teardown };
+    }
     views.set(tab, v);
     return v;
   };
-  const reveal = (v: { el: HTMLElement; clean: () => void }): void => {
+  const reveal = (v: WsView): void => {
     for (const other of views.values()) other.el.classList.toggle('is-active', other === v);
   };
   const toTerm = (): void => {
@@ -105,7 +109,11 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
         return;
       }
     }
-    reveal(ensure(tab));
+    const v = ensure(tab);
+    reveal(v);
+    // Вкладка сессии: фокус в терминал ПОСЛЕ показа (скрытый элемент фокус не берёт) и
+    // безусловно — тумблер ⌨ здесь не условие, а режим поля ввода (см. term.ts).
+    if (tab === 'term') v.focus?.();
   };
   return {
     session,

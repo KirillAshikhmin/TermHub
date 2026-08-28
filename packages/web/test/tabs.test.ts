@@ -58,6 +58,15 @@ describe('renderSessionTab / updateSessionTab', () => {
     expect(onSwitch).toHaveBeenCalledWith('work');
   });
 
+  // Тап по вкладке не должен уводить фокус с textarea xterm: на телефоне это закрывает
+  // экранную клавиатуру ещё до того, как новый экран терминала её вернёт.
+  it('mousedown по кнопке таба гасится (фокус остаётся в терминале)', () => {
+    const tab = renderSessionTab({ name: 'work', bell: false, title: '' }, false, t, noop, noop);
+    const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    tab.querySelector<HTMLButtonElement>('.th-tab__btn')!.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
   it('крестик вызывает onKill (и не вызывает onSwitch)', () => {
     const onSwitch = vi.fn();
     const onKill = vi.fn();
