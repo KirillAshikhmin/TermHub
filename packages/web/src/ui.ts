@@ -11,7 +11,7 @@ import { currentTheme, toggleTheme } from './theme';
 import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
-import { sgradleHash } from './routes';
+import { sgradleHash, termHash } from './routes';
 
 const ICONS: Record<string, string> = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -167,10 +167,15 @@ function trapFocus(e: KeyboardEvent, container: HTMLElement): void {
   }
 }
 
-/** Модалка поверх приложения. builder получает close(). Esc и клик по фону закрывают.
+/** Закрытие модалки. close() — снять её history-запись через history.back(); close(next)
+ *  с hash-маршрутом — уйти «в сторону» next, заменив запись модалки маршрутом. Всё, что не
+ *  строка (Event: close часто вешают слушателем напрямую), — обычное закрытие. */
+export type ModalClose = (next?: string | Event) => void;
+
+/** Модалка поверх приложения. builder получает close(next?). Esc и клик по фону закрывают.
  *  Возвращает cleanup() — тихое закрытие БЕЗ history.back (для цепочки модалок:
  *  закрыть текущую и открыть следующую, не роняя её запоздавшим popstate). */
-export function openModal(builder: (close: () => void) => HTMLElement): () => void {
+export function openModal(builder: (close: ModalClose) => HTMLElement): () => void {
   const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const overlay = document.createElement('div');
   overlay.className = 'th-overlay';
@@ -190,10 +195,20 @@ export function openModal(builder: (close: () => void) => HTMLElement): () => vo
     previouslyFocused?.focus();
     setTimeout(() => overlay.remove(), 200);
   };
-  const close = (): void => {
+  const close: ModalClose = (next) => {
     if (closed) return;
     cleanup();
-    history.back(); // снять нашу history-запись → URL возвращается к экрану
+    if (typeof next !== 'string') {
+      history.back(); // снять нашу history-запись → URL возвращается к экрану
+      return;
+    }
+    // Уход на маршрут next (в только что созданную сессию). Нельзя «history.back() и
+    // location.hash = next»: back() — асинхронная траверса, а смена hash синхронна.
+    // Браузер сперва пушит next, потом исполняет отложенный back уже от новой записи и
+    // возвращается на запись модалки со СТАРЫМ URL — роутер сносит только что
+    // смонтированный экран (баг R11). Поэтому запись модалки ЗАМЕНЯЕМ маршрутом:
+    // история — [откуда пришли, next], «Назад» ведёт ровно на шаг, back() не нужен.
+    location.replace(next);
   };
   const onPop = (): void => cleanup(); // «Назад» уже снял запись — только чистим
   const onKey = (e: KeyboardEvent): void => {
@@ -409,7 +424,7 @@ export function renderHoloBar(opts: {
     a.setAttribute('aria-selected', String(opts.active === key));
     return a;
   };
-  bar.append(mkTab('term', t('holo.session'), `#/term/${enc}`));
+  bar.append(mkTab('term', t('holo.session'), termHash(opts.session)));
   const scope = opts.transport?.clientScope;
   if (!scope || scope.files) {
     bar.append(mkTab('files', t('nav.files'), `#/sfiles/${enc}`));

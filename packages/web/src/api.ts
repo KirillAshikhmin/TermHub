@@ -23,6 +23,16 @@ export interface CreateSessionInput {
   root: string;
   dir: string;
   preset: SessionPreset;
+  /** Имя не вводили — взято из каталога. Занято → агент подбирает свободное с числовым
+   *  суффиксом (MyProject → MyProject1). Без признака дубль — ошибка, как раньше. */
+  autoName?: boolean;
+}
+
+/** Ответ POST /api/sessions: `session` — фактическое имя созданной сессии (при `autoName`
+ *  может отличаться от запрошенного); старый агент поля не отдаёт. */
+export interface CreateSessionResult {
+  ok: true;
+  session?: string;
 }
 
 /** Состояние удержания сна (caffeinate): активно и поддерживается ли платформой. */
@@ -126,7 +136,8 @@ export interface DiagInfo {
 export const api = {
   login: (password: string) => request<void>('POST', '/api/login', { body: { password }, redirectOnAuth: false }),
   sessions: () => request<SessionInfo[]>('GET', '/api/sessions'),
-  createSession: (input: CreateSessionInput) => request<void>('POST', '/api/sessions', { body: input }),
+  createSession: (input: CreateSessionInput) =>
+    request<CreateSessionResult | undefined>('POST', '/api/sessions', { body: input }),
   killSession: (name: string) => request<void>('DELETE', `/api/sessions/${encodeURIComponent(name)}`),
   renameSession: (from: string, to: string) => request<void>('POST', '/api/sessions/rename', { body: { from, to } }),
   dirs: () => request<DirGroup[]>('GET', '/api/dirs'),

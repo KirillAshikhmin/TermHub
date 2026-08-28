@@ -41,8 +41,8 @@ class ScriptedTransport implements Transport {
     return this.failing ? Promise.reject(new Error('boom')) : Promise.resolve([]);
   }
 
-  create(_req: CreateSessionInput): Promise<void> {
-    return Promise.resolve();
+  create(req: CreateSessionInput): Promise<string> {
+    return Promise.resolve(req.name);
   }
 
   kill(_name: string): Promise<void> {

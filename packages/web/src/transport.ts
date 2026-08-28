@@ -55,7 +55,9 @@ export interface Transport {
   /** Ограничение доступа гостя (relay, после первого list); null/undefined — полный доступ. */
   readonly clientScope?: DeviceScope | null;
   list(): Promise<SessionInfo[]>;
-  create(req: CreateSessionInput): Promise<void>;
+  /** Создать сессию; резолвится ФАКТИЧЕСКИМ именем — при `autoName` агент мог добавить
+   *  числовой суффикс. Старый агент имени не возвращает — тогда запрошенное (`req.name`). */
+  create(req: CreateSessionInput): Promise<string>;
   kill(name: string): Promise<void>;
   /** Переименование сессии (tmux rename-session). Оба режима: LAN — REST, relay — E2E. */
   rename(from: string, to: string): Promise<void>;
@@ -264,8 +266,8 @@ export class LanTransport implements Transport {
     return api.sessions();
   }
 
-  create(req: CreateSessionInput): Promise<void> {
-    return api.createSession(req);
+  create(req: CreateSessionInput): Promise<string> {
+    return api.createSession(req).then((r) => (typeof r?.session === 'string' && r.session ? r.session : req.name));
   }
 
   kill(name: string): Promise<void> {

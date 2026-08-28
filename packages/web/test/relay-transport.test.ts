@@ -428,11 +428,18 @@ describe('RelayTransport — create() дожидается подтвержде�
     return { transport, ws, agentEnc };
   }
 
-  it('резолвится по CreateOk (навигация уходит на уже созданную сессию)', async () => {
+  it('резолвится ФАКТИЧЕСКИМ именем из CreateOk.session (агент мог пронумеровать: x → x1)', async () => {
+    const { transport, ws, agentEnc } = driveToStreaming();
+    const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh', autoName: true });
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CreateOk, 0, { session: 'x1' })));
+    await expect(p).resolves.toBe('x1');
+  });
+
+  it('CreateOk без поля session (старый агент) → резолвится запрошенным именем', async () => {
     const { transport, ws, agentEnc } = driveToStreaming();
     const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh' });
-    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CreateOk, 0, { session: 'x' })));
-    await expect(p).resolves.toBeUndefined();
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CreateOk, 0, {})));
+    await expect(p).resolves.toBe('x');
   });
 
   it('отклоняется по Error(create-failed) с сообщением агента', async () => {

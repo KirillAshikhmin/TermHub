@@ -21,6 +21,12 @@ export function srepoHash(session: string, path: string): string {
   return `#/srepo/${encodeURIComponent(session)}/${path ? encodeURIComponent(path) : ''}`;
 }
 
+/** Экран терминала сессии: #/term/<session>. Единственный источник формата — сюда
+ *  уходит и модалка создания (close(termHash(<фактическое имя>))). */
+export function termHash(session: string): string {
+  return `#/term/${encodeURIComponent(session)}`;
+}
+
 /** Вкладка Gradle сессии: #/sgradle/<session> (подпути нет — вкладка одна на сессию). */
 export function sgradleHash(session: string): string {
   return `#/sgradle/${encodeURIComponent(session)}`;

@@ -637,8 +637,7 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
       transport,
       current: session,
       onSwitch: (name) => (location.hash = `#/srepo/${encodeURIComponent(name)}`),
-      onCreate: () =>
-        openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
+      onCreate: () => openCreateModal(transport),
     });
     teardownTop = sbar.teardown;
     let hideBar = (): void => {};

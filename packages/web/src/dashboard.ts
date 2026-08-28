@@ -13,6 +13,7 @@ import { formatRelativeTime } from './time';
 import type { Transport } from './transport';
 import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
+import { termHash } from './routes';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
@@ -420,10 +421,8 @@ export function mountDashboard(
   // выставит финальное состояние по transport.clientScope.
   // style.display, а НЕ .hidden: у .th-fab свой display в CSS, он перекрывает [hidden].
   fab.style.display = transport.mode === 'relay' ? 'none' : '';
-  // Создали сессию → сразу открываем её терминал (а не просто обновляем список).
-  fab.addEventListener('click', () =>
-    openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
-  );
+  // Создали сессию → модалка сама открывает её терминал (а не просто обновляем список).
+  fab.addEventListener('click', () => openCreateModal(transport));
   root.append(fab);
 
   let stopped = false;
@@ -441,7 +440,7 @@ export function mountDashboard(
       now,
       showActivity: hot,
       onOpen: () => {
-        location.hash = `#/term/${encodeURIComponent(session.name)}`;
+        location.hash = termHash(session.name);
       },
       // Управление сессиями — только владельцу; гость (scope) получает карту без меню.
       onKill: transport.clientScope ? undefined : () => void killSession(session.name),
@@ -652,16 +651,17 @@ function errorState(onRetry: () => void): HTMLElement {
   return box;
 }
 
-/** Модалка создания сессии: корень, каталог, имя, пресет. В remote-режиме
- *  (transport.dirs() пуст) — ручной ввод корня и подкаталога. onCreated
- *  получает имя созданной сессии (экран терминала переходит в неё). */
 /** Имя сессии для tmux: точка/двоеточие и прочие спецсимволы ломают адресацию target
  *  (session:window.pane) — оставляем только [A-Za-z0-9_-], остальное → «_», режем до 40. */
 function sanitizeSessionName(name: string): string {
   return name.replace(/[^\w-]/g, '_').slice(0, 40) || 'session';
 }
 
-export function openCreateModal(transport: Transport, onCreated: (name: string) => void): void {
+/** Модалка создания сессии: корень, каталог, имя, пресет. В remote-режиме
+ *  (transport.dirs() пуст) — ручной ввод корня и подкаталога. После создания сама
+ *  уходит в созданную сессию: close(termHash(<имя из ответа>)) — агент при autoName
+ *  мог пронумеровать имя, а запись модалки в history заменяется маршрутом (см. openModal). */
+export function openCreateModal(transport: Transport): void {
   openModal((close) => {
     const form = document.createElement('form');
     form.className = 'th-create';
@@ -734,12 +734,19 @@ export function openCreateModal(transport: Transport, onCreated: (name: string) 
         buildSegment((value) => (preset = value)),
       );
       syncDirs();
-      collect = () => ({
-        name: sanitizeSessionName(nameInput.value.trim() || dirSelect.value),
-        root: rootSelect.value,
-        dir: dirSelect.value,
-        preset,
-      });
+      collect = () => {
+        const typed = nameInput.value.trim();
+        const input: CreateSessionInput = {
+          name: sanitizeSessionName(typed || dirSelect.value),
+          root: rootSelect.value,
+          dir: dirSelect.value,
+          preset,
+        };
+        // Имя не вводили — оно из каталога, дубль агент пронумерует (MyProject1).
+        // Введённое руками уходит без признака: занято → ошибка, как раньше.
+        if (!typed) input.autoName = true;
+        return input;
+      };
       create.disabled = false;
       // Тело грузится асинхронно (после openModal), поэтому наводим фокус на
       // первое поле здесь — не на иконку «закрыть» в шапке.
@@ -774,7 +781,10 @@ export function openCreateModal(transport: Transport, onCreated: (name: string) 
         const root = rootInput.value.trim();
         const dir = dirInput.value.trim();
         if (!root || !dir) return null;
-        return { name: nameInput.value.trim() || dir, root, dir, preset };
+        const typed = nameInput.value.trim();
+        const input: CreateSessionInput = { name: typed || dir, root, dir, preset };
+        if (!typed) input.autoName = true; // как в форме со списком: имя из каталога → нумеруем
+        return input;
       };
       create.disabled = false;
       // Тело грузится асинхронно (после openModal), поэтому наводим фокус на
@@ -803,9 +813,8 @@ export function openCreateModal(transport: Transport, onCreated: (name: string) 
       create.disabled = true;
       create.replaceChildren(spinner());
       try {
-        await transport.create(input);
-        close();
-        onCreated(input.name);
+        const created = await transport.create(input);
+        close(termHash(created));
       } catch (err) {
         create.disabled = false;
         create.textContent = t('create.submit');

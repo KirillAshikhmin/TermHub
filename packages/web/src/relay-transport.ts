@@ -78,9 +78,11 @@ interface PendingList {
   timer: ReturnType<typeof setTimeout>;
 }
 
-/** Ожидающий CREATE_OK / Error(create-failed) (FIFO — создания сериализованы модалкой). */
+/** Ожидающий CREATE_OK / Error(create-failed) (FIFO — создания сериализованы модалкой).
+ *  `name` — запрошенное имя: им резолвимся, если CreateOk пришёл без `session` (старый агент). */
 interface PendingCreate {
-  resolve: () => void;
+  name: string;
+  resolve: (name: string) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -495,7 +497,13 @@ export class RelayTransport implements Transport {
         const pending = this.pendingCreate.shift();
         if (!pending) return;
         clearTimeout(pending.timer);
-        pending.resolve();
+        let created: { session?: unknown } = {};
+        try {
+          created = frameJson<{ session?: unknown }>(frame);
+        } catch {
+          /* битый payload — считаем, что создано запрошенное имя */
+        }
+        pending.resolve(typeof created.session === 'string' && created.session ? created.session : pending.name);
         return;
       }
       case FrameType.CaffeinateResult: {
@@ -855,17 +863,17 @@ export class RelayTransport implements Transport {
     });
   }
 
-  create(req: CreateSessionInput): Promise<void> {
+  create(req: CreateSessionInput): Promise<string> {
     if (this.stopped) return Promise.reject(new Error('relay closed'));
     // Дожидаемся CreateOk (или Error(create-failed)) от агента: создание не мгновенно,
     // а навигация модалки должна уйти на уже существующую сессию (паритет с LAN, где
-    // POST ждёт реального tmux new-session).
-    return new Promise<void>((resolve, reject) => {
+    // POST ждёт реального tmux new-session). Резолвимся фактическим именем из CreateOk.
+    return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCreate = this.pendingCreate.filter((p) => p.timer !== timer);
         reject(new Error('create timeout'));
       }, LIST_TIMEOUT_MS);
-      this.pendingCreate.push({ resolve, reject, timer });
+      this.pendingCreate.push({ name: req.name, resolve, reject, timer });
       this.sendFrame(jsonFrame(FrameType.Create, CONTROL_CHANNEL, req));
     });
   }

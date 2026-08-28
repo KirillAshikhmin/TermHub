@@ -213,7 +213,7 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
     transport,
     current: session,
     onSwitch: (name) => (location.hash = sgradleHash(name)),
-    onCreate: () => openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
+    onCreate: () => openCreateModal(transport),
   });
   let hideBar = (): void => {};
   const holo = renderHoloBar({ active: 'gradle', session, transport, onHide: () => hideBar() });

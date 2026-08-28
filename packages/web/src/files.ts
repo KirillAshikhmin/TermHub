@@ -245,8 +245,7 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
       transport,
       current: session,
       onSwitch: (name) => (location.hash = `#/sfiles/${encodeURIComponent(name)}`),
-      onCreate: () =>
-        openCreateModal(transport, (name) => (location.hash = `#/term/${encodeURIComponent(name)}`)),
+      onCreate: () => openCreateModal(transport),
     });
     teardownTop = sbar.teardown;
     let hideBar = (): void => {};

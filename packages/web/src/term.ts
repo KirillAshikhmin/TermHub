@@ -157,7 +157,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
     current: session,
     onSwitch: goTo,
     onKill: (name) => void killSession(name),
-    onCreate: () => openCreateModal(transport, goTo),
+    onCreate: () => openCreateModal(transport),
   });
   // Флаг: закрываем ТЕКУЩУЮ вкладку и уходим на соседнюю — onEnd не должен показать
   // оверлей «сессия завершена» (это не аварийный конец, а осознанное закрытие).
