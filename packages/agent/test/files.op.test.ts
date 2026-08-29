@@ -4,7 +4,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { FileService, runFileOp } from '../src/files.js';
 
@@ -120,5 +120,32 @@ describe('FileService — операции', () => {
       data: Buffer.from('payload').toString('base64'),
     });
     expect(await fsp.readFile(path.join(root, 'viaop', 'f.txt'), 'utf8')).toBe('payload');
+  });
+
+  it('open-host резолвит файл внутри root и передаёт opener только абсолютный realpath', async () => {
+    const opener = vi.fn(async () => undefined);
+    const service = new FileService({ roots: [root], opener });
+
+    await runFileOp(service, { action: 'open-host', root, path: 'sub/a.txt' });
+
+    expect(opener).toHaveBeenCalledOnce();
+    expect(opener).toHaveBeenCalledWith(path.join(root, 'sub', 'a.txt'));
+  });
+
+  it('open-host отклоняет каталог и symlink за пределы root, не вызывая opener', async () => {
+    const opener = vi.fn(async () => undefined);
+    const service = new FileService({ roots: [root], opener });
+    const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'th-fop-outside-'));
+    try {
+      await fsp.writeFile(path.join(outside, 'secret.txt'), 'secret');
+      await fsp.symlink(path.join(outside, 'secret.txt'), path.join(root, 'escape-link'));
+
+      await expect(service.openOnHost(root, 'sub')).rejects.toThrow(/not a file/i);
+      await expect(service.openOnHost(root, 'escape-link')).rejects.toThrow(/outside root/i);
+      expect(opener).not.toHaveBeenCalled();
+    } finally {
+      await fsp.rm(path.join(root, 'escape-link'), { force: true });
+      await fsp.rm(outside, { recursive: true, force: true });
+    }
   });
 });

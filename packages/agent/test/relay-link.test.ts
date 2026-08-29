@@ -35,6 +35,7 @@ import {
 } from '@termhub/protocol';
 import { startRelay, type RelayHandle } from '../../relay/src/index.js';
 import { RelayLink } from '../src/relay-link.js';
+import { FileService } from '../src/files.js';
 import { SessionService } from '../src/sessions.js';
 import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
@@ -853,6 +854,7 @@ describe('RelayLink — вкладка Gradle через relay', () => {
   let projectDir: string;
   let otherDir: string;
   let openedSessions: string[] = [];
+  let openedHostPaths: string[] = [];
 
   /** Терминал-пустышка: OPEN не должен спавнить настоящий pty — проверяем решение
    *  о доступе, а не работу tmux. */
@@ -878,6 +880,12 @@ describe('RelayLink — вкладка Gradle через relay', () => {
       identity: gradleIdentity,
       authorized: () => loadAuthorized(),
       sessions: { list: async () => listed } as unknown as SessionService,
+      files: new FileService({
+        roots: [root],
+        opener: async (file) => {
+          openedHostPaths.push(file);
+        },
+      }),
       roots: [root],
       socketName,
       attach: fakeAttach,
@@ -891,6 +899,7 @@ describe('RelayLink — вкладка Gradle через relay', () => {
 
   beforeEach(() => {
     openedSessions = [];
+    openedHostPaths = [];
   });
 
   interface Client {
@@ -936,6 +945,31 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     expect(r.id).toBe(7);
     return r;
   }
+
+  async function fileOp(c: Client, req: Record<string, unknown>): Promise<{ result?: unknown; error?: string }> {
+    c.ws.send(c.enc.push(jsonFrame(FrameType.FileOp, 0, { id: 8, ...req })), { binary: true });
+    const frame = await nextFrame(c);
+    expect(frame.type).toBe(FrameType.FileOpResult);
+    const r = frameJson<{ id?: number; result?: unknown; error?: string }>(frame);
+    expect(r.id).toBe(8);
+    return r;
+  }
+
+  it('open-host через relay требует write и повторно ограничивает путь shared-сессией', async () => {
+    const readOnly = await guestClient({ session: GUEST_SESSION, write: false, files: true });
+    const denied = await fileOp(readOnly, { action: 'open-host', root, path: 'gradle-proj/settings.gradle' });
+    expect(denied.error).toBe('no write permission');
+    expect(openedHostPaths).toEqual([]);
+
+    const writable = await guestClient({ session: GUEST_SESSION, write: true, files: true });
+    const own = await fileOp(writable, { action: 'open-host', root, path: 'gradle-proj/settings.gradle' });
+    expect(own.error).toBeUndefined();
+    expect(openedHostPaths).toEqual([fs.realpathSync(path.join(projectDir, 'settings.gradle'))]);
+
+    const foreign = await fileOp(writable, { action: 'open-host', root, path: 'gradle-other/foreign.txt' });
+    expect(foreign.error).toBe('path outside shared session');
+    expect(openedHostPaths).toHaveLength(1);
+  }, 25000);
 
   it('владелец (scope нет): detect отдаёт Gradle-проект каталога сессии', async () => {
     const c = await guestClient();

@@ -59,6 +59,7 @@ interface PushCtl {
 
 /** Минимум для файлового браузера из relay-моста (структурно совместим с FileService). */
 interface FilesCtl {
+  openOnHost(root: string, subpath: string): Promise<void>;
   listDir(root: string, subpath: string): Promise<FileEntry[]>;
   readFile(root: string, subpath: string): Promise<FileContent>;
   statFile(root: string, subpath: string): Promise<{ size: number; mime: string; kind: string }>;
@@ -930,7 +931,7 @@ export class RelayLink {
     }
   }
 
-  /** Файловые операции через relay (stat-full/remove/move/copy). Мутации требуют
+  /** Файловые операции через relay. Все side effects, включая open-host, требуют
    *  scope.write; stat-full — только чтение (scope.files). id — для сопоставления. */
   private async doFileOp(s: ClientSession, frame: Frame): Promise<void> {
     let req: Record<string, unknown>;

@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { WebSocket } from 'ws';
 import { issueCookie, checkCookie, LoginRateLimit } from '../src/auth.js';
 import { AgentServer } from '../src/server.js';
+import { FileService } from '../src/files.js';
 import { hashPassword } from '../src/config.js';
 import type { TermhubConfig, DeviceScope } from '../src/config.js';
 import type { SessionService } from '../src/sessions.js';
@@ -53,6 +54,7 @@ async function start(opts: {
   onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
   push?: { subscribe(sub: unknown): Promise<void>; vapidPublicKey(): string };
   caffeinate?: { readonly supported: boolean; isActive(): boolean; set(on: boolean): void };
+  files?: FileService;
   socketName?: string;
   staticDir?: string;
 }): Promise<Started> {
@@ -62,6 +64,7 @@ async function start(opts: {
     onShare: opts.onShare,
     push: opts.push,
     caffeinate: opts.caffeinate,
+    files: opts.files,
     socketName: opts.socketName,
     staticDir: opts.staticDir,
   });
@@ -585,6 +588,45 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     } finally {
       fs.rmSync(emptyStatic, { recursive: true, force: true });
     }
+  });
+});
+
+describe('AgentServer — POST /api/files/op open-host', () => {
+  let s: Started | undefined;
+  let root = '';
+
+  afterEach(async () => {
+    await s?.server.close();
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('LAN возвращает success от общего dispatcher и текст ошибки opener', async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-open-host-http-'));
+    fs.writeFileSync(path.join(root, 'file.txt'), 'hello');
+    let fail = false;
+    const files = new FileService({
+      roots: [root],
+      opener: async () => {
+        if (fail) throw new Error('host application refused');
+      },
+    });
+    const started = await start({ files });
+    s = started;
+    const post = () =>
+      fetch(`${started.base}/api/files/op`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: authCookie() },
+        body: JSON.stringify({ action: 'open-host', root, path: 'file.txt' }),
+      });
+
+    const ok = await post();
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({});
+
+    fail = true;
+    const refused = await post();
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({ error: 'host application refused' });
   });
 });
 

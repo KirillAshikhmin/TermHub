@@ -6,6 +6,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FileContent, FileEntry, FileInfo } from '@termhub/protocol';
+import { openPathOnHost } from './host-open.js';
 
 /** Лимиты инлайн-просмотра: больше — только скачивание (truncated). */
 const TEXT_LIMIT = 5 * 1024 * 1024;
@@ -64,9 +65,11 @@ function looksBinary(buf: Buffer): boolean {
 /** Обёртка над файловой системой в пределах корней (whitelist). */
 export class FileService {
   private readonly roots: string[];
+  private readonly opener: (filePath: string) => Promise<void>;
 
-  constructor(opts: { roots: string[] }) {
+  constructor(opts: { roots: string[]; opener?: (filePath: string) => Promise<void> }) {
     this.roots = opts.roots;
+    this.opener = opts.opener ?? openPathOnHost;
   }
 
   /** Резолвит (root, subpath) в реальный путь, проверяя, что он внутри корня.
@@ -157,6 +160,14 @@ export class FileService {
     const stat = await fsp.stat(file);
     if (!stat.isFile()) throw new Error('Not a file');
     return { path: file, size: stat.size, mime: mimeByExt(path.extname(file).toLowerCase()) };
+  }
+
+  /** Открывает обычный файл приложением хоста после roots/realpath-проверки. */
+  async openOnHost(root: string, subpath: string): Promise<void> {
+    const file = await this.resolveSafe(root, subpath);
+    const stat = await fsp.stat(file);
+    if (!stat.isFile()) throw new Error('Not a file');
+    await this.opener(file);
   }
 
   /** Чтение диапазона байт (для relay-чанков). */
@@ -315,6 +326,7 @@ function modeString(mode: number): string {
 
 /** Минимум для файловых операций (структурно; FileService удовлетворяет). */
 export interface FileOpCtl {
+  openOnHost(root: string, subpath: string): Promise<void>;
   statFull(root: string, subpath: string): Promise<FileInfo>;
   remove(root: string, subpath: string): Promise<void>;
   move(root: string, subpath: string, destRoot: string, dest: string): Promise<void>;
@@ -329,6 +341,8 @@ export async function runFileOp(files: FileOpCtl, req: Record<string, unknown>):
   const root = String(req.root ?? '');
   const sub = String(req.path ?? '');
   switch (String(req.action ?? '')) {
+    case 'open-host':
+      return files.openOnHost(root, sub);
     case 'stat-full':
       return files.statFull(root, sub);
     case 'remove':
