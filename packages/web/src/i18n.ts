@@ -216,6 +216,8 @@ const ru: Dict = {
     save: 'Сохранить',
     saved: 'Сохранено',
     openNota: 'Открыть в NotAText',
+    openHost: 'Открыть на хосте',
+    openedOnHost: 'Файл открыт на хосте',
     notaOnlyText: 'Только текстовые файлы (не бинарные/большие)',
   },
   repo: {
@@ -584,6 +586,8 @@ const en: Dict = {
     save: 'Save',
     saved: 'Saved',
     openNota: 'Open in NotAText',
+    openHost: 'Open on host',
+    openedOnHost: 'File opened on host',
     notaOnlyText: 'Text files only (not binary/large)',
   },
   repo: {

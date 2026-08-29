@@ -42,9 +42,13 @@ real mobile keyboard are required).
 - [ ] In a Codex process that was started without the preset, run `/title`, include
       `thread-title`, then `/rename Existing check` — TermHub starts showing that
       title without recreating or renaming the tmux session
-- [ ] Drag-select output in both Codex and Claude Code — releasing the pointer copies
-      the selected text automatically; after a redraw clears the highlight,
-      `Command+C`/`Ctrl+C` still copies the last non-empty selection
+- [ ] In Codex on macOS (with mouse tracking active), hold `Option` and drag over
+      output — releasing the pointer copies the selected text automatically; after
+      a redraw clears the highlight, `Command+C` still copies the last non-empty
+      selection. A drag without `Option` continues to reach the Codex TUI
+- [ ] Drag-select output in Claude Code — releasing the pointer copies the selected
+      text automatically; after a redraw clears the highlight, `Command+C`/`Ctrl+C`
+      still copies the last non-empty selection
 - [ ] Start a foreground command with no terminal selection and press `Ctrl+C` — the
       interrupt reaches the process (copy handling does not consume it)
 - [ ] Quick-key panel: Esc, Tab, Shift+Tab, arrows, Enter, Ctrl+C, y/n — each
@@ -58,6 +62,18 @@ real mobile keyboard are required).
       on its own
 - [ ] Return from a session workspace to the dashboard/login/pairing screen — the
       browser/PWA title returns to `TermHub`
+
+## Files
+
+- [ ] Open text, image, media, binary, and oversized/truncated files — every viewer
+      footer has an "Open on host" button next to its existing actions
+- [ ] Tap "Open on host" — exactly one native default application opens that file
+      on the Mac running the TermHub agent, a success toast appears, and the viewer
+      stays open
+- [ ] Make the host opener fail — the agent error appears, the viewer stays open,
+      and the button can be pressed again
+- [ ] Pair a read-only relay guest with file access — file previews work, but the
+      "Open on host" button is absent
 
 ## PWA installation (requires HTTPS — see docs/notifications.md)
 

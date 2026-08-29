@@ -117,6 +117,23 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
     };
     const downloadBtn = (): HTMLButtonElement =>
       btn(t('files.download'), true, () => streamDownload(transport, root, filePath, name));
+    const openHostBtn = (): HTMLButtonElement => {
+      const open = btn(t('files.openHost'), false, () => {
+        open.disabled = true;
+        transport.fileOp('open-host', { root, path: filePath }).then(
+          () => toast(t('files.openedOnHost'), 'info'),
+          (err) => toast(err instanceof Error ? err.message : t('files.error'), 'error'),
+        ).finally(() => {
+          open.disabled = false;
+        });
+      });
+      return open;
+    };
+    const showPreviewActions = (...actions: HTMLButtonElement[]): void => {
+      foot.replaceChildren(downloadBtn());
+      foot.append(...actions);
+      if (canWrite) foot.append(openHostBtn());
+    };
     const showNote = (text: string): void => {
       body.replaceChildren();
       const p = document.createElement('p');
@@ -134,9 +151,10 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
       highlightText(codeEl, data, name);
       pre.append(codeEl);
       body.append(pre);
-      foot.replaceChildren(downloadBtn());
-      if (canWrite) foot.append(btn(t('files.edit'), false, () => editText(data)));
-      foot.append(btn(t('files.openNota'), false, () => openTextInNotaText(data, name)));
+      const actions: HTMLButtonElement[] = [];
+      if (canWrite) actions.push(btn(t('files.edit'), false, () => editText(data)));
+      actions.push(btn(t('files.openNota'), false, () => openTextInNotaText(data, name)));
+      showPreviewActions(...actions);
     };
     // Простое редактирование: textarea + Сохранить/Отмена (write через fileOp).
     const editText = (data: string): void => {
@@ -186,7 +204,7 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
               () => showNote(t('files.error')),
             );
           }
-          foot.replaceChildren(downloadBtn());
+          showPreviewActions();
           return;
         }
         // Прочее — инлайн-просмотр (image/text) или скачивание (большое/binary).
@@ -194,7 +212,7 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
           (c) => {
             if (c.truncated) {
               showNote(t('files.tooLarge', { size: formatSize(c.size) }));
-              foot.replaceChildren(downloadBtn());
+              showPreviewActions();
               return;
             }
             if (c.kind === 'image') {
@@ -204,12 +222,12 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
               img.src = `data:${c.mime};base64,${c.data}`;
               img.alt = name;
               body.append(img);
-              foot.replaceChildren(downloadBtn());
+              showPreviewActions();
             } else if (c.kind === 'text') {
               showText(c.data);
             } else {
               showNote(t('files.binary'));
-              foot.replaceChildren(downloadBtn());
+              showPreviewActions();
             }
           },
           (err) => showNote(err instanceof Error ? err.message : t('files.error')),
