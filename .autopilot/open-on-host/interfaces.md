@@ -32,3 +32,16 @@ LAN route и DOM-harness модалки файла. Новых frame types и п
   realpath/roots/type safety и не раскрывает абсолютный путь клиенту.
 - `runFileOp(files, { action: 'open-host', root, path })` — единый LAN/relay action;
   relay требует `scope.write` и scoped path.
+
+## Из таска 02 — file viewer contract
+
+- `Transport.fileOp('open-host', { root, path }) -> Promise` используется без нового
+  protocol frame; кнопка доступна LAN/owner/write-scope и скрыта у read-only guest.
+- `files.openHost` и `files.openedOnHost` синхронно определены для ru/en.
+
+## Из таска 03 — Codex mouse-selection contract
+
+- `TerminalOptions.macOptionClickForcesSelection = true`: при active mouse tracking
+  обычный drag остаётся у TUI, а macOS Option+drag создаёт xterm selection.
+- Существующий copy-controller автоматически копирует selection на mouseup и хранит
+  его для последующего Command+C после redraw.

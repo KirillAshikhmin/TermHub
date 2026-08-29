@@ -70,6 +70,17 @@ LAN route и DOM-harness модалки файла. Новых frame types и п
 
 Нет.
 
+## Поправка: реальное копирование из Codex
+
+Codex включает mouse tracking в terminal TUI. Поэтому обычный drag попадает в
+приложение, а xterm не создаёт selection; прежний snapshot-контроллер получает пустую
+строку и ему нечего копировать. На macOS TermHub должен разрешить штатный принудительный
+selection xterm через Option+drag, после чего уже реализованные auto-copy и Command+C
+работают с этим selection. Обычный клик без Option остаётся доступен Codex.
+
+Приёмка: настройка передана настоящему `Terminal`, тест моделирует активный mouse mode,
+а EN/RU manual checklist явно называет Option+drag для Codex на Mac.
+
 ## Покрытие манифеста
 
 | Требование | Раздел спецификации |
@@ -84,3 +95,4 @@ LAN route и DOM-harness модалки файла. Новых frame types и п
 | R08 | История 15 |
 | R09i | Истории 7–9; Решения 2–4 |
 | R10i | Истории 10–11 |
+| R11 | Поправка «реальное копирование из Codex» |

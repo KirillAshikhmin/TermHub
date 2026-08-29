@@ -17,7 +17,9 @@ export class FakeTerminal {
   textarea = document.createElement('textarea');
   buffer = { active: { type: 'normal' as const, getLine: (): undefined => undefined } };
   unicode = { activeVersion: '' };
-  options: Record<string, unknown> = {};
+  options: Record<string, unknown>;
+  mouseModeActive = false;
+  mouseEvents: MouseEvent[] = [];
   parser = { registerOscHandler: disposable };
   focusCalls = 0;
   disposed = false;
@@ -26,7 +28,8 @@ export class FakeTerminal {
   private selectionHandler: (() => void) | null = null;
   private selection = '';
 
-  constructor() {
+  constructor(options: Record<string, unknown> = {}) {
+    this.options = { ...options };
     this.element.append(this.textarea);
     FakeTerminal.instances.push(this);
   }
@@ -77,6 +80,38 @@ export class FakeTerminal {
   select(text: string): void {
     this.selection = text;
     this.selectionHandler?.();
+  }
+  /** Моделирует xterm seam: при mouse tracking drag уходит TUI, кроме
+   * macOS Option+drag с macOptionClickForcesSelection. */
+  drag(text: string, opts: { altKey?: boolean } = {}): 'selection' | 'mouse' {
+    const forceSelection = this.mouseModeActive
+      && opts.altKey === true
+      && this.options.macOptionClickForcesSelection === true;
+    const down = new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      altKey: opts.altKey,
+    });
+    if (forceSelection) down.stopPropagation();
+    this.element.dispatchEvent(down);
+
+    if (this.mouseModeActive && !forceSelection) {
+      this.mouseEvents.push(down);
+    } else {
+      this.selection = text;
+      this.selectionHandler?.();
+    }
+
+    this.element.dispatchEvent(new MouseEvent('mouseup', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 0,
+      altKey: opts.altKey,
+    }));
+    return forceSelection || !this.mouseModeActive ? 'selection' : 'mouse';
   }
 }
 

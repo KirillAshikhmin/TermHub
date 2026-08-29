@@ -31,4 +31,26 @@ describe('копирование в mountTerminal', () => {
     await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
     handle.teardown();
   });
+
+  it('в mouse mode Codex Option+drag принудительно выделяет и копирует, а обычный drag уходит TUI', async () => {
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: execCommand });
+    const root = document.createElement('div');
+    document.body.append(root);
+    const { transport } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const xt = FakeTerminal.instances[0]!;
+    xt.mouseModeActive = true;
+
+    expect(xt.options.macOptionClickForcesSelection).toBe(true);
+    expect(xt.drag('обычный drag')).toBe('mouse');
+    expect(xt.mouseEvents).toHaveLength(1);
+    expect(execCommand).not.toHaveBeenCalled();
+
+    expect(xt.drag('строка из Codex', { altKey: true })).toBe('selection');
+    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    expect(xt.getSelection()).toBe('строка из Codex');
+    expect(xt.mouseEvents).toHaveLength(1);
+    handle.teardown();
+  });
 });

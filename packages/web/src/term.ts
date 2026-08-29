@@ -244,6 +244,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     // терминал всё же в обычном буфере (до attach, после detach).
     scrollback: 5000,
     macOptionIsMeta: true,
+    // Codex включает mouse tracking, поэтому обычный drag должен оставаться у TUI.
+    // На macOS Option+drag штатно обходит mouse mode и создаёт xterm selection.
+    macOptionClickForcesSelection: true,
     // Нужен для proposed API: unicode11 (unicode.activeVersion) и search-декорации.
     allowProposedApi: true,
     // OSC 8 гиперссылки (ESC]8;;URL) — так их выводит Claude Code и др. CLI, где
