@@ -1,5 +1,5 @@
-// Разбор заголовка панели tmux (`pane_title`), в который Claude Code кодирует
-// состояние сессии: ведущий символ-индикатор, затем текст задачи.
+// Разбор заголовка панели tmux (`pane_title`), в который Claude Code и Codex
+// кодируют состояние сессии: ведущий индикатор, затем текст задачи.
 //
 // Живёт в protocol, потому что одно и то же нужно и агенту (решает, работает ли
 // сессия, и что слать в пуше), и вебу (точка активности, имя карточки, вкладки).
@@ -12,6 +12,11 @@
 
 /** Символ ожидания ввода: Claude Code показывает его, когда ждёт ответа. */
 const WAITING = '\u2733'; // ✳
+
+/** Codex показывает оба этих служебных префикса, когда ждёт действия
+ * пользователя: `!` — основная фаза, `.` — скрытая фаза анимации.
+ * После префикса Codex добавляет thread-title через ` | `. */
+const CODEX_WAITING_RE = /^\s*(\[\s[!.]\s\])\s*Action Required(?:\s*\|\s*)?/u;
 
 /**
  * Ведущий индикатор: подряд идущие символы-знаки (категории So и Sm) до пробела.
@@ -32,31 +37,32 @@ const INDICATOR_RE =
 
 /** Ведущий индикатор заголовка или '' — если его нет. */
 export function titleIndicator(title: string): string {
+  const codex = CODEX_WAITING_RE.exec(title);
+  if (codex) return codex[1]!;
   const m = INDICATOR_RE.exec(title);
   return m ? m[1]!.replace(/[\uFE0E\uFE0F]/gu, '') : '';
 }
 
-/** Сессией управляет Claude Code: в заголовке есть индикатор статуса. Для прочих
+/** Сессией управляет Claude Code или Codex: в заголовке есть индикатор статуса. Для прочих
  *  сессий «работает ли» определяется fallback'ом по session_activity. */
 export function sessionManaged(title: string): boolean {
   return titleIndicator(title) !== '';
 }
 
-/** Claude сейчас работает: индикатор есть и это не «жду ответа». Любой новый
- *  спиннер попадёт сюда сам, потому что проверяем не глиф, а «не ✳». */
+/** Управляемая сессия сейчас работает: индикатор есть, но это не статус ожидания. */
 export function sessionWorking(title: string): boolean {
   const ind = titleIndicator(title);
-  return ind !== '' && ind !== WAITING;
+  return ind !== '' && !sessionWaiting(title);
 }
 
-/** Claude ждёт ответа пользователя (✳). */
+/** Claude (✳) или Codex (`[ ! ]` / `[ . ]`) ждут действия пользователя. */
 export function sessionWaiting(title: string): boolean {
-  return titleIndicator(title) === WAITING;
+  return CODEX_WAITING_RE.test(title) || titleIndicator(title) === WAITING;
 }
 
 /** Текст заголовка без ведущего индикатора: сам индикатор показывается отдельно
  *  (точкой активности), дублировать его в имени незачем. Пустая строка, если
  *  заголовок состоял из одного индикатора либо отсутствует. */
 export function sessionTitleText(title: string): string {
-  return title.replace(INDICATOR_RE, '').trim();
+  return title.replace(CODEX_WAITING_RE, '').replace(INDICATOR_RE, '').trim();
 }

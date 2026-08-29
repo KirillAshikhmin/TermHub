@@ -23,7 +23,7 @@ real mobile keyboard are required).
       (`zsh`/`claude`/…), "active N min ago", a count of connected clients
 - [ ] 🔔 indicator on a session with a bell (see the "Push notifications"
       section below)
-- [ ] Create a session (name + directory from the list + `zsh`/`claude`
+- [ ] Create a session (name + directory from the list + `zsh`/`claude`/`codex`
       preset) — it appears in the list and is confirmed by `tmux ls` on the Mac
 - [ ] Terminate a session (with confirmation) — it disappears from the list
       and from `tmux ls`
@@ -33,6 +33,20 @@ real mobile keyboard are required).
 
 - [ ] Open a session — the real output of the tmux session is visible
 - [ ] Input from the phone keyboard arrives and is displayed correctly
+- [ ] Create a session with the `codex` preset — its session tab shows the Codex
+      thread title (or thread identifier before it is named), and the browser/PWA
+      title has the form `<display title> · TermHub`
+- [ ] In that Codex session, run `/rename Copy check` — within one list-poll cycle
+      the existing session tab and browser title update in place; the tmux session
+      name itself remains unchanged
+- [ ] In a Codex process that was started without the preset, run `/title`, include
+      `thread-title`, then `/rename Existing check` — TermHub starts showing that
+      title without recreating or renaming the tmux session
+- [ ] Drag-select output in both Codex and Claude Code — releasing the pointer copies
+      the selected text automatically; after a redraw clears the highlight,
+      `Command+C`/`Ctrl+C` still copies the last non-empty selection
+- [ ] Start a foreground command with no terminal selection and press `Ctrl+C` — the
+      interrupt reaches the process (copy handling does not consume it)
 - [ ] Quick-key panel: Esc, Tab, Shift+Tab, arrows, Enter, Ctrl+C, y/n — each
       sends the expected sequence
 - [ ] A− / A+ change the terminal font size; the value is preserved across
@@ -42,6 +56,8 @@ real mobile keyboard are required).
 - [ ] 📱 Turn Wi-Fi/mobile data off and back on — a "reconnecting" banner
       appears; once the network is back, the terminal restores the connection
       on its own
+- [ ] Return from a session workspace to the dashboard/login/pairing screen — the
+      browser/PWA title returns to `TermHub`
 
 ## PWA installation (requires HTTPS — see docs/notifications.md)
 

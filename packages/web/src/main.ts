@@ -8,6 +8,7 @@ import './theme.css';
 
 import { api } from './api';
 import { mountDashboard, mountLogin } from './dashboard';
+import { resetDocumentTitle } from './document-title';
 import { mountDiag } from './diag';
 import { mountFiles } from './files';
 import { getLang, onLangChange } from './i18n';
@@ -101,6 +102,7 @@ function render(): void {
   // Иначе — сносим живой workspace и рендерим обычный экран.
   workspace?.teardown();
   workspace = null;
+  resetDocumentTitle();
   cleanup?.();
   cleanup = null;
   // Диагностика — отдельная страница (LAN-режим; в relay покажет подсказку).

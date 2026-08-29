@@ -5,6 +5,7 @@
 // живой workspace, пока не сменилась сессия/транспорт.
 
 import { mountFiles } from './files';
+import { resetDocumentTitle, setSessionDocumentTitle } from './document-title';
 import type { GradleTab } from './gradle';
 import { mountGradleTab } from './gradle';
 import { mountRepo } from './repo';
@@ -42,6 +43,7 @@ export function routeWorkspace(route: RemoteRoute): { session: string; tab: WsTa
 /** Монтирует рабочее пространство сессии в root; show(tab) переключает видимость. */
 export function mountWorkspace(root: HTMLElement, session: string, transport: Transport): WorkspaceHandle {
   root.replaceChildren();
+  setSessionDocumentTitle(session, session);
   const views = new Map<WsTab, WsView>();
   // Вкладка Gradle — единственная, у которой показ повторно спрашивает детект,
   // поэтому от неё держим хэндл, а не только teardown (см. show).
@@ -131,6 +133,7 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
       views.clear();
       gradleView = null;
       root.replaceChildren();
+      resetDocumentTitle();
     },
   };
 }

@@ -115,6 +115,39 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
 (Uint8Array/BlobPart) — не блокер, рантайму безразлично.
 
 <!-- autopilot:start -->
+## TermHub
+
+Self-hosted PWA и CLI для доступа к tmux-сессиям Codex, Claude Code и обычных TUI через LAN или E2E relay.
+
+## Проверенные команды
+
+```bash
+npm install
+npm run dev -w @termhub/web -- --host 127.0.0.1
+npm test
+npm run build
+npx tsc -p packages/web/tsconfig.json --noEmit
+```
+
+`npm test` на текущем дереве: 54 файла, 694 теста. Vite dev-server стартует на `127.0.0.1:5173`.
+
+## Структура
+
+- `packages/protocol/src/` — кадры, E2E-крипта и общий разбор `pane_title`.
+- `packages/agent/src/` — CLI/агент, HTTP/WS, tmux, relay-link и серверные операции.
+- `packages/relay/src/` — zero-knowledge WS-коммутатор и раздача remote web.
+- `packages/web/src/` — PWA, xterm, LAN/relay transports и session workspace.
+- `packages/protocol/test/`, `packages/agent/test/`, `packages/relay/test/`, `packages/web/test/` — Vitest по пакетам.
+- `docs/` — эксплуатация, безопасность и ADR; `README.md` — пользовательский обзор.
+
+## Подводные камни
+
+- Web-сборка запускает Vite без `tsc`; после правок `packages/web/src/` обязательна отдельная команда typecheck выше.
+- Codex preset задаёт `tui.animations=false` и `tui.terminal_title=["activity","thread-title"]` только argv нового процесса; `~/.codex/config.toml` не читается и не меняется.
+- tmux-id остаётся стабильным адресом сессии; подпись таба и browser title берутся из очищенного `pane_title`, обновляются поллингом раз в 3 секунды и откатываются к tmux-id.
+- `packages/web/src/term-copy.ts` хранит последний непустой selection до конца mount: mouseup копирует его, новый mousedown стирает старый snapshot, а `Ctrl+C` без selection продолжает уходить в TUI.
+- Разбор Claude/Codex title общий в `packages/protocol/src/session-title.ts`; web импортирует подпуть `@termhub/protocol/session-title`, чтобы не втянуть libsodium в LAN-бандл.
+
 ## Как здесь работает Autopilot
 
 Часть работы ведётся навыком `/autopilot`. Требования, спецификация и таски —
@@ -123,146 +156,4 @@ npx termhub connect|pair|devices|revoke|service   # см. cli.ts
 
 Если сборка прервалась — скажи «продолжи автопилот»: состояние поднимется
 из `.autopilot/state.js`, переспрашивать ничего не нужно.
-
-## Вкладка Gradle (4-й таб сессии)
-
-Кто чем владеет:
-
-- `packages/agent/src/gradle.ts` — детект проекта, `tasks --all` с кэшем, разбор
-  XML-конфигураций запуска IDEA, запуск/стоп/статус сборки, выбор JDK проекта.
-- `packages/agent/src/gradle-action.ts` — единственный обработчик экшенов
-  (`detect|tasks|configs|run|stop|status`) на оба транспорта: здесь резолв корня
-  сессии через `realpath` + whitelist `config.sessionRoots` и права гостя
-  (`scope.files` на чтение, `scope.write` на `run`/`stop`).
-  **`gradle.ts` папку НЕ проверяет — принимает на веру**, вся защита пути тут.
-- Транспорты: `server.ts` → `POST /api/gradle`; `relay-link.ts` → кадры
-  `FrameType.Gradle`/`GradleResult`; веб → `Transport.gradle(action, params)`
-  (`transport.ts` + `relay-transport.ts`, обе реализации).
-- Веб: `packages/web/src/gradle.ts` — экран (`mountGradle` для роутера,
-  `mountGradleTab` — тот же монтаж с хэндлом `{listPanel, run, recheck, teardown}` для тестов),
-  `gradle-view.ts` — чистые рендеры, группировка и «недавние».
-- Четвёртый таб рисует `renderHoloBar` (`web/src/ui.ts`) асинхронно, после
-  `detectGradle` (кэш детекта на сессию — там же, плюс синхронный `knownGradle`,
-  которым `workspace.ts` уводит с не-Gradle сессии).
-
-Подводные камни (из кода не выводятся):
-
-- Сборка идёт в **отдельной** tmux-сессии `_gradle_<имя>_<6 hex>` на том же сокете;
-  `SessionService.list()` прячет их по префиксу (`isBuildSessionName`). Забытые
-  сборочные сессии видно только напрямую: `tmux -L termhub ls`.
-- **Каждый запуск пересоздаёт эту сессию** (`kill-session` + `new-session`), чтобы на
-  экране не остался прошлый вывод, — приаттаченный веб-терминал в этот момент
-  отваливается, и `GradleTab.run` обязан переподключить `openTerm` ПОСЛЕ ответа.
-- Код выхода наружу не отдаётся: признак конца — строка `[termhub] gradle exit=N`
-  в выводе. Веб берёт ПОСЛЕДНЕЕ вхождение в 64 КБ хвоста (перерисовка экрана при
-  attach иначе показала бы итог прошлой сборки).
-- `runStatus` первые 5 с после старта (`START_GRACE_MS`) отдаёт `running` всегда:
-  login-оболочка не мгновенно доходит до команды. Следствие — мгновенно упавшая
-  сборка ~5 с числится идущей, и повторный запуск без `force` в это окно отказывает.
-- Второй «Стоп» подряд убивает сборочную сессию (первый шлёт только `C-c`); счётчик
-  живёт в памяти агента — после рестарта первый «Стоп» снова только `C-c`.
-- Кэш списка тасок инвалидируется по mtime build-файлов **корня** (+ выбранный JDK):
-  правка `app/build.gradle.kts` его не сбросит, актуализация — кнопкой «Обновить»
-  (`refresh: true`). Автообновления списка нет и не обещай.
-- JDK проекта ищется как в IDEA: `<проект>/gradle.properties` →
-  `${GRADLE_USER_HOME:-~/.gradle}/gradle.properties` (`org.gradle.java.home`) →
-  `<проект>/.gradle/config.properties` (`java.home`). **`.idea/gradle.xml` не парсится**
-  — при именованном SDK из IDEA молча уходим на JDK login-оболочки; симптом
-  «в IDEA собирается, а тут нет».
-- Путь к JDK никогда не попадает в строку команды: он едет `env` у `execFile` и
-  `-e JAVA_HOME=… -e TERMHUB_JAVA_HOME=…` у `tmux new-session`. Константный
-  `export JAVA_HOME="$TERMHUB_JAVA_HOME"; ` перед командой — не лишний: `~/.zshrc`
-  читается tmux уже после старта оболочки и иначе перебивает `-e` (проверено вживую).
-  `tmux new-session -e` требует tmux ≥ 3.0; аргументы добавляются, только если JDK найден.
-- **JDK намеренно может лежать вне корней сессии** (живой случай — JBR внутри
-  `/Applications/Android Studio.app/…`); проверку whitelist к пути JDK не добавлять.
-- Имена тасок и аргументы **отвергаются** регуляркой, а не экранируются
-  (`checkTaskName`/`checkArgs`, `MAX_ARGS`); строки команд в `gradle.ts` константны.
-- `FrameType.Gradle` есть в `FRESH_AUTH_CHECK`, но сознательно НЕ в общем scope-фильтре
-  `handleAppFrame`: гостю нужен внятный `GradleResult{error}`, а не молчаливый drop.
-  `doOpen` дополнительно пускает гостя в `buildSessionName(scope.session)` — иначе
-  вкладка не покажет ему вывод сборки.
-- Тайм-аут gradle-запроса через relay — `GRADLE_TIMEOUT_MS = 190_000` (у `tasks` на
-  агенте свой потолок 180 с): общий 10-секундный обрывал бы первое открытие вкладки.
-- Раскладка и «недавние» — в localStorage: `termhub.gradleSplit`,
-  `termhub.gradleExpanded`, `termhub.gradleRecent.<session>`.
-- `grep` по `packages/agent/src/gradle.ts` без `-a` молча не находит ничего: в `stopKey` разделитель
-  ключа — литеральный NUL (`${socketName}\0${name}`), и для grep/`file` файл бинарный.
-
-Тесты только этой вкладки (4 файла: `gradle.unit`/`gradle.tmux` в agent,
-`gradle-view`/`gradle-tab` в web):
-
-```bash
-npx vitest run gradle
-```
-
-`gradle.tmux.test.ts` поднимает настоящий tmux на изолированном сокете и идёт ~27 с —
-это нормально, не таймаут.
-
-## Имена сессий и экран сессии
-
-Кто чем владеет:
-
-- `packages/agent/src/sessions.ts` — `SessionService.create({name, root, dir, preset, autoName?})
-  → {name}`: при `autoName: true` занятое имя нумерует `pickFreeName(base, taken)` — `MyProject` →
-  `MyProject1` → `MyProject2` (`v2` → `v21`); занятые — сырой `list-sessions -F '#{session_name}'`
-  («no server» = пусто); гонка «duplicate session» переигрывается 5 раз. Без `autoName` — отказ tmux наружу.
-- Фактическое имя едет клиенту: `server.ts` `POST /api/sessions` → `{ok: true, session}`,
-  `relay-link.ts` `doCreate` → `CreateOk{session}`. Веб: `api.ts` `CreateSessionInput.autoName?`/
-  `CreateSessionResult.session?`; `Transport.create(req) → Promise<string>` (обе реализации)
-  резолвится именем из ответа, без поля — запрошенным; `routes.termHash(name)` — единственный сборщик `#/term/<name>`.
-- `ui.ts` `openModal(builder(close))`: `close()` → `history.back()`, `close(next: string)` →
-  `cleanup()` + `location.replace(next)`, нестроковое (Event) — обычное закрытие. `dashboard.ts`
-  `openCreateModal(transport)` без колбэка: пустое поле имени → `autoName: true` (имя из каталога,
-  `sanitizeSessionName`: `my.app` → `my_app`), введённое — без признака; потом `close(termHash(created))`.
-- `packages/agent/src/setup.ts` — `tmFunction(socket)`/`TM_FUNCTION`: `tm` без аргумента —
-  `basename "$PWD"` + та же нумерация на POSIX sh (`grep -qxF` по снимку `list-sessions`) и
-  `new -s`; `tm <имя>` — `new -As` (так зовёт и `tml`). `upgradeTmFunction(rc)` заменяет старую
-  однострочную `tm() { tmux … }` только ПОСЛЕ маркера `# termhub`, иначе `null` и печать определения.
-- `packages/web/src/term.ts` — `mountTerminal(root, session, transport) → TerminalHandle{focus, teardown}`
-  (`openTerminal` — обёртка для `remote.ts`), фокус при монтаже, очередь ввода до `connected`
-  (`INPUT_QUEUE_MAX` = 8 КБ), Enter через чистую `enterAction(e, enterSends) →
-  'send'|'newline'|'suppress'|'pass'` из `term-keys.ts` (тумблер — localStorage `termhub.enterSends`,
-  `'0'` = выкл); `workspace.ts` `show('term')` зовёт `focus()`; `tabs.ts` гасит `mousedown` на `.th-tab__btn`.
-
-Подводные камни (из кода не выводятся):
-
-- **`-t "=имя"` в tmux не защищает от точки/двоеточия:** для `=foo.bar` tmux ищет панель `bar`
-  в сессии `foo` (живой tmux 3.7b) — `has-session -t =v1.1` отвечает «нет» на живую `v1.1`.
-  Занятость проверяй только точным сравнением с `list-sessions -F '#{session_name}'` (так делают
-  `tm` и `create` с `autoName`); `kill-session -t "=$1"` в `tml`/`tmc` (`_th_kill`) этим ещё страдает.
-- Две регулярки имён: создать/убить/переименовать агент даёт только по `NAME_RE` (`/^[\w-]{1,40}$/`,
-  без точки), ссылаться на существующую (WS-апгрейд, гостевой scope) — `isExistingSessionName`, шире.
-  `tm` в папке `v1.1` такую сессию заведёт: дашборд покажет и откроет, «закрыть»/«переименовать» откажут.
-- `tm` без аргумента больше НЕ присоединяется к сессии папки — всегда следующая по номеру;
-  вернуться — `tml` или `tm <имя>`. Ручное имя в модалке не нумеруется: коллизия — ошибка.
-- `history.back()` модалки — асинхронная траверса, синхронная смена `location.hash` её обгоняет:
-  браузер пушит маршрут, потом исполняет back и возвращается на запись модалки со старым URL —
-  роутер сносит свежесмонтированный экран (баг R11). Уход из модалки — только `close(termHash(…))`,
-  никогда `close(); location.hash = …`. Закрыли модалку до ответа — сессия создастся, перехода не будет.
-- Ветка `newline` обработчика Enter ОБЯЗАНА `preventDefault()` + `return false`: на голый `false`
-  xterm выходит из `_keyDown` до своего cancel, браузер рождает `keypress`, и `_keyPress` шлёт
-  второй `\r` — перенос и отправка за одно нажатие. `keypress Enter` гасится всегда (`suppress`).
-- Очередь ввода: транспорт молча роняет байты до подключения (LAN — WS не OPEN, relay — до `OpenOk`),
-  а фокус стоит с монтажа. Накопленное уходит строго ПОСЛЕ `sendResize()` («первый кадр — RESIZE», иначе
-  агент не спавнит pty); не влезающий в 8 КБ чанк отбрасывается целиком (резать — рвать UTF-8); `reconnecting` копит заново.
-- Фокус: `term.focus()` при монтаже на пути workspace попадает в скрытый элемент (без `is-active`) и
-  игнорируется — рабочий даёт `show('term')` после показа и только при переходе (`wasActive`): повтор события
-  маршрута не крадёт фокус у compose-бара. Тумблер ⌨ — режим поля (`inputmode=none`), не условие фокуса.
-- `sw.ts` не может импортировать `routes` (классический воркер: rollup вынес бы общий чанк и оставил
-  `import`, на котором SW падает) — формат `#/term/` там продублирован дословно; меняешь `termHash` — меняй и `sw.ts`.
-- Тесты агента в `tsc`-сборку не входят (`packages/agent/tsconfig.json`: `include: ["src"]`), веб-тесты
-  в `tsc -p packages/web/tsconfig.json` входят. `create-modal.test.ts`: в happy-dom `History.back()`
-  синхронный — гонка R11 не воспроизводится, тест утверждает только механизм (`location.replace` вызван, back — нет).
-
-Тесты этой области (фильтры — подстроки имён файлов):
-
-```bash
-npx vitest run sessions tm-shell setup create-modal term-keys term-input-queue workspace
-```
-
-Живые: `sessions.tmux` — tmux на изолированном сокете, `tm-shell` — `tm` под sh/bash/zsh с подложным
-`tmux` в PATH; остальные — стаб `execFile` / happy-dom. Хелпер `packages/web/test/term-harness.ts`: поддельный
-xterm (`FakeTerminal`: `type()`, `key()`, `focusCalls`) и транспорт с журналом кадров (`termTransport()`), `@xterm/xterm` — через `vi.mock`.
-
 <!-- autopilot:end -->

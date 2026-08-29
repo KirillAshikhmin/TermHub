@@ -211,11 +211,16 @@ describe('SessionService.create — валидация', () => {
     expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'claude']);
   });
 
-  it('preset codex → команда codex в конце', async () => {
+  it('preset codex → process-local overrides для title и анимации без shell', async () => {
     const svc = new SessionService({ roots: [root] });
     await svc.create({ name: 'main', root, dir: 'projectA', preset: 'codex' });
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
-    expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'codex']);
+    expect(args).toEqual([
+      'new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'),
+      'codex',
+      '-c', 'tui.animations=false',
+      '-c', 'tui.terminal_title=["activity","thread-title"]',
+    ]);
   });
 
   it('отвергает недопустимый preset', async () => {

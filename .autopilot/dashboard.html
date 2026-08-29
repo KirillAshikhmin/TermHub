@@ -641,6 +641,10 @@ function render(lang){
     ? '<ul class="debt">' + arr.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>'
     : `<div class="empty">${L.none}</div>`;
 
+  const additionText = x => typeof x === 'string'
+    ? x
+    : [x?.id, x?.title, x?.parent ? `(${x.parent})` : ''].filter(Boolean).join(' ');
+
   const rows = T.map(t => `<tr>
     <td><b>${esc(t.id)}</b></td>
     <td><span class="dot" style="background:${statusColor(t.status)}"></span>${esc(t.title)}
@@ -773,7 +777,7 @@ function render(lang){
     <div class="card"><div class="k">${L.placeholders}</div>${list(S.debt?.placeholders)}</div>
     <div class="card"><div class="k">${L.assumptions}</div>${list(S.debt?.assumptions)}</div>
     <div class="card"><div class="k">${L.envVars}</div>${list(S.debt?.emptyEnv)}</div>
-    ${S.additions?.length ? `<div class="card"><div class="k">${L.additions}</div>${list(S.additions)}</div>` : ''}
+    ${S.additions?.length ? `<div class="card"><div class="k">${L.additions}</div>${list(S.additions.map(additionText))}</div>` : ''}
   </div>
 
   ${blind}

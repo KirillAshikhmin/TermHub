@@ -15,9 +15,11 @@ import { Terminal } from '@xterm/xterm';
 import type { ILinkProvider, ITheme } from '@xterm/xterm';
 
 import { openCreateModal } from './dashboard';
+import { resetDocumentTitle, setSessionDocumentTitle } from './document-title';
 import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
+import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
 import { markBellSeen, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
@@ -29,7 +31,7 @@ import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
 import { currentTheme } from './theme';
 import type { TermChannel, TermConnState, Transport } from './transport';
-import { hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
+import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
 const FONT_MIN = 10;
 const FONT_MAX = 22;
@@ -140,6 +142,7 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
 /** Монтирует терминал сессии в root через транспорт. */
 export function mountTerminal(root: HTMLElement, session: string, transport: Transport): TerminalHandle {
   root.replaceChildren();
+  setSessionDocumentTitle(session, session);
   let disposed = false;
   markBellSeen(session); // открыли сессию — её звонок прочитан
   updateAppBadge(unseenBellCount()); // бейдж на иконке гаснет сразу, не ждя полла
@@ -172,6 +175,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     onSwitch: goTo,
     onKill: (name) => void killSession(name),
     onCreate: () => openCreateModal(transport),
+    onCurrentTitle: (title) => setSessionDocumentTitle(title, session),
   });
   // Флаг: закрываем ТЕКУЩУЮ вкладку и уходим на соседнюю — onEnd не должен показать
   // оверлей «сессия завершена» (это не аварийный конец, а осознанное закрытие).
@@ -276,6 +280,19 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   const searchAddon = new SearchAddon();
   term.loadAddon(searchAddon);
   term.open(host);
+
+  // Часто перерисовывающиеся TUI успевают сбросить визуальное выделение xterm до
+  // mouseup/Command+C. Держим последний непустой снимок в пределах этого mount и
+  // используем общий clipboard helper (включая LAN HTTP fallback).
+  const copyController = createTerminalCopyController({
+    getSelection: () => term.getSelection(),
+    copy: copyToClipboard,
+  });
+  const selectionDisp = term.onSelectionChange(copyController.selectionChanged);
+  const onSelectionStart = (): void => copyController.gestureStarted();
+  const onSelectionEnd = (): void => copyController.gestureEnded();
+  host.addEventListener('mousedown', onSelectionStart);
+  host.addEventListener('mouseup', onSelectionEnd);
 
   // Кликабельные пути: путь в выводе открывает ПРОВОДНИК СЕССИИ (переключение вкладки,
   // терминал жив), если он внутри корня сессии; иначе — обычный файловый браузер.
@@ -539,6 +556,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // ещё и явно — страховка от второго \r и от \n в скрытой textarea.
   let enterSends = readEnterSends();
   term.attachCustomKeyEventHandler((e) => {
+    if (!copyController.keyEvent(e)) return false;
     const action = enterAction(e, enterSends);
     if (action === 'newline') {
       sendData(encoder.encode('\x1b\r'));
@@ -796,6 +814,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       dataDisp.dispose();
       binaryDisp.dispose();
       resizeDisp.dispose();
+      selectionDisp.dispose();
+      host.removeEventListener('mousedown', onSelectionStart);
+      host.removeEventListener('mouseup', onSelectionEnd);
       stopTouchScroll?.();
       stopTouchSelect?.();
       tabs.teardown();
@@ -808,6 +829,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
         // повторный dispose безопасен
       }
       root.replaceChildren();
+      resetDocumentTitle();
     },
   };
 }

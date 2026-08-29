@@ -23,6 +23,8 @@ export class FakeTerminal {
   disposed = false;
   private dataHandler: ((s: string) => void) | null = null;
   private keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
+  private selectionHandler: (() => void) | null = null;
+  private selection = '';
 
   constructor() {
     this.element.append(this.textarea);
@@ -46,6 +48,13 @@ export class FakeTerminal {
   onResize(): Disposable {
     return disposable();
   }
+  onSelectionChange(cb: () => void): Disposable {
+    this.selectionHandler = cb;
+    return disposable();
+  }
+  getSelection(): string {
+    return this.selection;
+  }
   attachCustomKeyEventHandler(cb: (e: KeyboardEvent) => boolean): void {
     this.keyHandler = cb;
   }
@@ -63,6 +72,11 @@ export class FakeTerminal {
   key(e: KeyboardEvent): boolean {
     if (!this.keyHandler) throw new Error('custom key handler not attached');
     return this.keyHandler(e);
+  }
+  /** Имитирует selection lifecycle xterm, включая очистку при TUI-redraw. */
+  select(text: string): void {
+    this.selection = text;
+    this.selectionHandler?.();
   }
 }
 

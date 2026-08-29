@@ -138,6 +138,21 @@ describe('mountSessionTabs', () => {
 
   const baseOpts = { current: 'a', onSwitch: noop, onKill: noop, onCreate: noop };
 
+  it('сообщает очищенный pane_title текущей сессии и обновляет его на месте', async () => {
+    const onCurrentTitle = vi.fn();
+    const { transport } = stubTransport([
+      [sessionFixture('a', { title: '⠋ Исправить копирование' })],
+      [sessionFixture('a', { title: '[ ! ] Action Required' })],
+    ]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, onCurrentTitle });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onCurrentTitle).toHaveBeenLastCalledWith('Исправить копирование');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(onCurrentTitle).toHaveBeenLastCalledWith('a');
+    tabs.teardown();
+  });
+
   it('точка активности загорается на табе после роста activityTs', async () => {
     const { transport } = stubTransport([
       [sessionFixture('a', { activityTs: 100 }), sessionFixture('b', { activityTs: 100 })], // baseline

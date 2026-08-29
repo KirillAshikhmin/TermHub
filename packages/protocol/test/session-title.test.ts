@@ -46,6 +46,19 @@ describe('session-title — ожидание', () => {
   });
 });
 
+describe('session-title — Codex Action Required', () => {
+  it('оба служебных префикса срезаются целиком, оставляя только thread-title', () => {
+    for (const prefix of ['[ ! ]', '[ . ]']) {
+      const title = `${prefix} Action Required`;
+      expect(sessionManaged(title)).toBe(true);
+      expect(sessionWorking(title)).toBe(false);
+      expect(sessionWaiting(title)).toBe(true);
+      expect(sessionTitleText(title)).toBe('');
+      expect(sessionTitleText(`${title} | Fix title parser`)).toBe('Fix title parser');
+    }
+  });
+});
+
 describe('session-title — устойчивость к смене глифа', () => {
   // Ради этого правило и обобщено: любой символ-индикатор, кроме ✳, = работа.
   it('незнакомые символы-спиннеры тоже считаются работой', () => {

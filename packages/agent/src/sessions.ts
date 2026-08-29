@@ -235,11 +235,19 @@ export class SessionService {
     }
     if (!isDir) throw new Error(`Directory «${req.dir}» not found in root ${req.root}`);
 
-    // Имя пресета и есть команда (кроме «zsh» — это просто оболочка по умолчанию).
     // Пресет уже сверен с whitelist выше, поэтому произвольная команда сюда не пройдёт.
+    // Codex overrides передаются как argv конкретного процесса: shell нет,
+    // глобальный ~/.codex/config.toml не читается и не изменяется.
     const newSession = (name: string) => {
       const args = ['new-session', '-d', '-s', name, '-c', dirPath];
-      if (req.preset !== 'zsh') args.push(req.preset);
+      if (req.preset === 'claude') args.push('claude');
+      if (req.preset === 'codex') {
+        args.push(
+          'codex',
+          '-c', 'tui.animations=false',
+          '-c', 'tui.terminal_title=["activity","thread-title"]',
+        );
+      }
       return this.tmux(args);
     };
 

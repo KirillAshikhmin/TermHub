@@ -6,6 +6,7 @@ import type { SessionInfo } from '@termhub/protocol';
 
 import type { TFn } from './i18n';
 import { t } from './i18n';
+import { setSessionDocumentTitle } from './document-title';
 import type { Transport } from './transport';
 import { iconButton, sortSelect, svgIcon, toast } from './ui';
 import { openRenameModal, renderSessionCard } from './dashboard';
@@ -63,6 +64,7 @@ export function mountSessionBar(opts: {
       else await tabs.refresh();
     },
     onCreate: opts.onCreate,
+    onCurrentTitle: (title) => setSessionDocumentTitle(title, opts.current),
   });
   bar.append(tabs.el);
   return { el: bar, teardown: tabs.teardown };
@@ -184,6 +186,8 @@ export interface SessionTabsOpts {
   /** Завершение сессии по крестику (подтверждение — на вызывающей стороне). */
   onKill(name: string): void;
   onCreate(): void;
+  /** Содержательная подпись текущей сессии для внешнего browser/PWA title. */
+  onCurrentTitle?(title: string): void;
 }
 
 /** Полоса табов с поллингом; el вставляется в шапку, teardown останавливает
@@ -339,6 +343,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     if (c) c.style.display = 'none';
   }
   strip.append(currentTab);
+  opts.onCurrentTitle?.(opts.current);
 
   // Точечное обновление, как в дашборде: не пересоздаём узлы, чтобы не сбрасывать
   // горизонтальный скролл полосы и фокус.
@@ -346,6 +351,8 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     latest = input; // снимок для панели быстрого переключения
     tabsCache.set(opts.transport, input); // переживёт пере-монтирование экрана
     const sessions = sortSessions(input, sortMode, bellUnseen, readManualOrder());
+    const currentInfo = input.find((session) => session.name === opts.current);
+    opts.onCurrentTitle?.(currentInfo ? sessionTitleText(currentInfo.title) || opts.current : opts.current);
     // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
     // крестики-закрытия табов.
     const guest = opts.transport.clientScope != null;

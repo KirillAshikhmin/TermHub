@@ -7,7 +7,7 @@ Watch progress, work in a full terminal, browse files and commit — locally ove
 Wi-Fi or remotely through your own end-to-end encrypted relay. Meanwhile, **not a
 single inbound port is opened on the Mac**.
 
-TermHub is built first and foremost for working with [Claude Code](https://claude.com/claude-code)
+TermHub is built first and foremost for working with Codex, [Claude Code](https://claude.com/claude-code)
 and other TUI agents running in tmux (answer the agent's questions from your phone,
 approve edits, top up prompts), but it is a plain remote terminal — good for any
 console work.
@@ -22,7 +22,8 @@ console work.
   for input" indicators (read from the window title, the way Claude Code paints it).
 - **Full terminal** in the browser (xterm.js): a quick-keys bar tuned for the mobile
   keyboard, a **compose bar** — a native input field with a live mirror of the terminal
-  line (swipe/autocorrect/Claude suggestions/Tab/history), clickable paths and links.
+  line (swipe/autocorrect/agent suggestions/Tab/history), clickable paths and links,
+  and redraw-resistant selection with copy-on-drag.
 - **File browser** — view/download files, preview images/video, simple text editing,
   a context menu (copy/move/rename/delete/properties), "Open in NotAText".
 - **Repository** — git / svn / mercurial: commit log, diff, commit with file selection,
@@ -142,6 +143,20 @@ the dashboard. `tm` and the "New session" (+) button on the dashboard follow the
 rule: `MyProject`; if that name is taken — `MyProject1`, then `MyProject2`, and so on. So `tm`
 without arguments always gives a fresh session; to get back into an existing one, use `tml`
 (pick from the list) or `tm <name>` (attach, or create if missing).
+
+### Codex sessions
+
+Choose the `codex` preset when creating a web session. TermHub starts that Codex process
+with session-local settings that disable terminal-title animation and make the public
+Codex thread title available to tmux. It does not read or modify `~/.codex/config.toml`.
+The session tab updates from that title, while the stable tmux session name remains the
+technical address used by TermHub; the browser/PWA title becomes `<thread> · TermHub`.
+
+For a Codex process that was already running before this preset was introduced, use
+Codex's `/title` command and include `thread-title` in the terminal title. Use `/rename`
+to give the current thread a meaningful name. Dragging over terminal output copies it
+automatically; if a TUI redraw removes the highlight, `Command+C`/`Ctrl+C` retries the
+last non-empty selection. With no selection, `Ctrl+C` still reaches the terminal process.
 
 ---
 

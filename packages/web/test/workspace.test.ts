@@ -34,6 +34,16 @@ describe("workspace.show('term')", () => {
     term.handle.focus.mockClear();
     term.state.el = null;
     term.state.activeAtFocus.length = 0;
+    document.title = 'TermHub';
+  });
+
+  it('ставит fallback tmux-id в browser title и возвращает базовый title при teardown', () => {
+    const root = document.createElement('div');
+    const ws = mountWorkspace(root, 'work', { mode: 'lan', clientScope: null } as unknown as Transport);
+
+    expect(document.title).toBe('work · TermHub');
+    ws.teardown();
+    expect(document.title).toBe('TermHub');
   });
 
   it('показ вкладки сессии фокусирует терминал — после показа и независимо от тумблера ⌨', () => {
