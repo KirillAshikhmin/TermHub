@@ -10,20 +10,20 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
   "startedAt": "2026-08-29T15:45:36+03:00",
-  "updatedAt": "2026-08-29T16:16:20+03:00",
-  "finishedAt": null,
+  "updatedAt": "2026-08-29T16:25:56+03:00",
+  "finishedAt": "2026-08-29T16:25:56+03:00",
   "stages": [
     { "id": "preflight", "status": "done", "startedAt": "2026-08-29T15:45:36+03:00", "finishedAt": "2026-08-29T15:46:32+03:00" },
     { "id": "manifest", "status": "done", "startedAt": "2026-08-29T15:46:32+03:00", "finishedAt": "2026-08-29T15:47:05+03:00" },
     { "id": "briefing", "status": "skipped", "startedAt": "2026-08-29T15:47:05+03:00", "finishedAt": "2026-08-29T15:47:24+03:00", "note": "вопросов не потребовалось" },
     { "id": "spec", "status": "done", "startedAt": "2026-08-29T15:47:24+03:00", "finishedAt": "2026-08-29T15:49:06+03:00", "note": "15 историй; G2: расхождений нет" },
     { "id": "plan", "status": "done", "startedAt": "2026-08-29T15:49:06+03:00", "finishedAt": "2026-08-29T15:49:50+03:00", "note": "3 таска, ярус T1, 2 волны; T03 добавлен по подтверждённой пользователем Codex-регрессии" },
-    { "id": "build", "status": "active", "startedAt": "2026-08-29T15:49:50+03:00", "note": "код 3 из 3 тасков готов; полный прогон 715/715; T02 ждёт commit/deploy/restart" },
-    { "id": "review", "status": "pending" },
-    { "id": "final", "status": "pending" }
+    { "id": "build", "status": "done", "startedAt": "2026-08-29T15:49:50+03:00", "finishedAt": "2026-08-29T16:22:30+03:00", "note": "3 из 3 тасков готовы; 715/715; build и deploy зелёные" },
+    { "id": "review", "status": "done", "startedAt": "2026-08-29T16:22:30+03:00", "finishedAt": "2026-08-29T16:25:56+03:00", "note": "blind acceptance: все пользовательские сценарии реализованы; служебные файлы закрываются финальным коммитом" },
+    { "id": "final", "status": "done", "startedAt": "2026-08-29T16:25:40+03:00", "finishedAt": "2026-08-29T16:25:56+03:00" }
   ],
   "requirements": {
-    "total": 11, "done": 8, "inTicket": 3, "inSpec": 0,
+    "total": 11, "done": 11, "inTicket": 0, "inSpec": 0,
     "placeholder": 0, "deferred": 0, "dropped": 0
   },
   "tickets": [
@@ -48,8 +48,9 @@ window.STATE =
       "blockedBy": ["01"],
       "wave": 2,
       "zone": ["packages/web/src/files.ts", "packages/web/src/i18n.ts", "packages/web/test/", "docs/manual-test-checklist*.md"],
-      "status": "review",
+      "status": "done",
       "startedAt": "2026-08-29T16:11:15+03:00",
+      "finishedAt": "2026-08-29T16:22:30+03:00",
       "retries": 0,
       "repairs": 0,
       "handoffs": 0
@@ -70,7 +71,14 @@ window.STATE =
     }
   ],
   "singlePass": null,
-  "tests": null,
+  "tests": {
+    "targetedHostOpen": "98/98",
+    "targetedWeb": "19/19",
+    "full": "715/715",
+    "build": "passed",
+    "deployHealth": "ok",
+    "doctor": "All good; 11 tmux sessions; relay reachable"
+  },
   "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
   "additions": [],
   "coverage": {
@@ -79,14 +87,17 @@ window.STATE =
     "extra": "7 защитных/ошибочных сценариев прикреплены к R03/R09i/R10i"
   },
   "concerns": [
-    "craft: resolveSafe/stat/isFile повторяется между resolveFile и openOnHost",
-    "craft: relay FilesCtl дублирует FileOpCtl",
-    "craft: relay open-host test использует общую Gradle fixture",
-    "craft: xterm mouse-mode semantics моделируется fake по зафиксированному installed-source contract",
-    "craft: T03 integration не объединяет redraw+Command+C в одном сценарии (швы покрыты раздельно)",
-    "craft: open-host pending живёт в DOM-экземпляре кнопки и может сброситься через edit/cancel",
-    "craft: double-click test не моделирует пересоздание footer во время pending"
+    "drop: дублирование resolveSafe/stat и FilesCtl — локальная структурная вкусовщина, публичный контракт не расходится",
+    "drop: relay open-host test использует Gradle fixture — тест изолирован по поведению и зелёный",
+    "drop: xterm mouse semantics закреплена fake — точный внешний контракт дополнительно проверен в исходниках установленного xterm",
+    "drop: redraw+Command+C покрыты отдельными тестами вместо одного сквозного — оба шва зелёные",
+    "report: при open-host можно войти в edit/cancel до завершения opener и получить новый активный экземпляр кнопки; обычный double-click заблокирован, edge-case не удерживает релиз"
   ],
   "reviewers": { "manifestSpec": "/root/host_open_review_ms", "craft": "/root/host_open_review_craft" },
-  "blind": null
+  "blind": {
+    "verdict": "agreed",
+    "implemented": ["open-on-host UI", "macOS host opener", "session preservation", "deploy", "Codex mouse-mode copy"],
+    "initialPartial": "служебные run/memory файлы были не закоммичены на момент проверки; закрываются финальным коммитом",
+    "drift": []
+  }
 }

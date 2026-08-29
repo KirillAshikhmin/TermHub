@@ -129,7 +129,7 @@ npm run build
 npx tsc -p packages/web/tsconfig.json --noEmit
 ```
 
-`npm test` на текущем дереве: 54 файла, 694 теста. Vite dev-server стартует на `127.0.0.1:5173`.
+`npm test` на текущем дереве: 56 файлов, 715 тестов. Vite стартует на loopback; если `5173` занят, фактический порт печатается в stdout.
 
 ## Структура
 
@@ -143,10 +143,12 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 ## Подводные камни
 
 - Web-сборка запускает Vite без `tsc`; после правок `packages/web/src/` обязательна отдельная команда typecheck выше.
-- Codex preset задаёт `tui.animations=false` и `tui.terminal_title=["activity","thread-title"]` только argv нового процесса; `~/.codex/config.toml` не читается и не меняется.
-- tmux-id остаётся стабильным адресом сессии; подпись таба и browser title берутся из очищенного `pane_title`, обновляются поллингом раз в 3 секунды и откатываются к tmux-id.
-- `packages/web/src/term-copy.ts` хранит последний непустой selection до конца mount: mouseup копирует его, новый mousedown стирает старый snapshot, а `Ctrl+C` без selection продолжает уходить в TUI.
-- Разбор Claude/Codex title общий в `packages/protocol/src/session-title.ts`; web импортирует подпуть `@termhub/protocol/session-title`, чтобы не втянуть libsodium в LAN-бандл.
+- Codex preset передаёт `tui.animations=false` и `tui.terminal_title=["activity","thread-title"]` только argv нового процесса; `~/.codex/config.toml` не читается и не меняется.
+- tmux-id остаётся стабильным адресом сессии; очищенный `pane_title` становится подписью таба и browser title, обновляется web-поллингом раз в 3 секунды и откатывается к tmux-id.
+- Parser Claude/Codex title общий в `packages/protocol/src/session-title.ts`; web импортирует `@termhub/protocol/session-title`, чтобы корневой crypto-экспорт с libsodium не попал в LAN-бандл.
+- `open-host` принимает только обычный файл внутри root после `realpath`, затем вызывает `open`/`xdg-open` отдельным argv с `shell: false`; побег, unsupported OS, spawn error и non-zero exit отклоняются.
+- LAN `open-host` проходит cookie-auth и Origin-check; relay требует `scope.write` и shared-session path, а UI скрывает кнопку у read-only гостя и блокирует её на время запроса.
+- При mouse tracking Codex обычный drag остаётся у TUI, а macOS Option+drag создаёт xterm selection и автокопирует его на mouseup; snapshot живёт до нового mousedown, `Ctrl+C` без selection уходит в TUI.
 
 ## Как здесь работает Autopilot
 
