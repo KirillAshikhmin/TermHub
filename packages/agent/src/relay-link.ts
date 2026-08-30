@@ -73,6 +73,7 @@ interface FilesCtl {
   uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void>;
 }
 import { attachTerminal, type TerminalHandle } from './bridge.js';
+import { defaultPtyPool, PtyUnavailableError, type PtyPool } from './pty-pool.js';
 import { runRepoAction } from './vcs.js';
 import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
@@ -191,6 +192,7 @@ export class RelayLink {
   /** Адреса прямого доступа к агенту (минуя relay); отдаются по кадру Addresses. */
   private readonly localUrls?: () => string[];
   private readonly attach: typeof attachTerminal;
+  private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
   private ws?: WebSocket;
@@ -235,6 +237,8 @@ export class RelayLink {
     helloTimeoutMs?: number;
     /** Инжектируется в тестах; по умолчанию — реальный attachTerminal. */
     attach?: typeof attachTerminal;
+    /** Общий budget живых pty: один на LAN и relay. */
+    ptyPool?: PtyPool;
   }) {
     this.url = opts.url;
     this.identity = opts.identity;
@@ -249,6 +253,7 @@ export class RelayLink {
     this.localUrls = opts.localUrls;
     this.helloTimeoutMs = opts.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
     this.attach = opts.attach ?? attachTerminal;
+    this.ptyPool = opts.ptyPool ?? defaultPtyPool;
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -1164,18 +1169,28 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'forbidden', message: 'session not shared' }));
       return;
     }
-    const handle = this.attach({
-      session,
-      socketName: this.socketName,
-      cols: DEFAULT_COLS,
-      rows: DEFAULT_ROWS,
-      onData: (b) => this.sendFrameBytes(s, encodeFrame({ type: FrameType.Data, channel, payload: b })),
-      onBell: (sess) => this.sendFrameBytes(s, jsonFrame(FrameType.Bell, channel, { session: sess })),
-      onExit: () => {
-        this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
-        s.terminals.delete(channel);
-      },
-    });
+    let handle: TerminalHandle;
+    try {
+      handle = this.attach({
+        session,
+        socketName: this.socketName,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS,
+        onData: (b) => this.sendFrameBytes(s, encodeFrame({ type: FrameType.Data, channel, payload: b })),
+        onBell: (sess) => this.sendFrameBytes(s, jsonFrame(FrameType.Bell, channel, { session: sess })),
+        onExit: () => {
+          this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
+          s.terminals.delete(channel);
+        },
+        ptyPool: this.ptyPool,
+      });
+    } catch (err) {
+      this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, {
+        code: err instanceof PtyUnavailableError ? 'pty-unavailable' : 'terminal-attach-failed',
+        message: 'Could not create a pseudo-terminal. Restart the TermHub agent if the problem persists.',
+      }));
+      return;
+    }
     s.terminals.set(channel, handle);
     this.sendFrameBytes(s, jsonFrame(FrameType.OpenOk, channel, { session }));
   }

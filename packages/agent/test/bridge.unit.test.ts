@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawn } from 'node-pty';
-import { encodeFrame, jsonFrame, decodeFrame, FrameType } from '@termhub/protocol';
+import { encodeFrame, jsonFrame, decodeFrame, frameJson, FrameType } from '@termhub/protocol';
 import { attachTerminal, wireTerminalWs } from '../src/bridge.js';
+import { PtyPool } from '../src/pty-pool.js';
 
 // node-pty мокаем целиком: полный контроль над spawn, включая синхронный throw
 // (кейс «бинарь tmux отсутствует»), без реального tmux/pty.
@@ -294,14 +295,16 @@ describe('attachTerminal', () => {
 });
 
 describe('wireTerminalWs', () => {
-  it('I-1: синхронное падение attach (инжектированный бросающий спавнер) → ws.close(1011), исключение не выходит наружу, процесс жив', () => {
+  it('I-1: синхронное падение attach → финальный Error и ws.close(1011), без исключения из обработчика', () => {
     const throwingAttach = (): never => {
       throw new Error('spawn tmux ENOENT');
     };
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { ws, emit, getCloseCode } = makeFakeWs();
+    const { ws, emit, sent, getCloseCode } = makeFakeWs();
     wire({ attach: throwingAttach as never })(ws as never, 'sess');
     expect(() => emit('message', resizeFrame(80, 24))).not.toThrow();
+    const error = sent.map((b) => decodeFrame(new Uint8Array(b))).find((f) => f.type === FrameType.Error);
+    expect(error && frameJson<{ code: string }>(error).code).toBe('terminal-attach-failed');
     expect(getCloseCode()).toBe(1011);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
@@ -368,6 +371,46 @@ describe('wireTerminalWs', () => {
     emit('message', resizeFrame(80, 24));
     emit('close');
     expect(fake.isKilled()).toBe(true);
+  });
+
+  it('закрытие WS освобождает слот PTY для следующей вкладки сессии', () => {
+    const pool = new PtyPool(1);
+    const first = makeFakePty();
+    const second = makeFakePty();
+    stubSpawn(() => (mockSpawn.mock.calls.length === 1 ? first.pty : second.pty));
+
+    const one = makeFakeWs();
+    wire({ ptyPool: pool })(one.ws as never, 'one');
+    one.emit('message', resizeFrame(80, 24));
+    one.emit('close');
+
+    const two = makeFakeWs();
+    wire({ ptyPool: pool })(two.ws as never, 'two');
+    two.emit('message', resizeFrame(80, 24));
+
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(second.isKilled()).toBe(false);
+  });
+
+  it('исчерпанный PTY-budget отклоняет новую вкладку Error-кадром без нового forkpty', () => {
+    const pool = new PtyPool(1);
+    const first = makeFakePty();
+    stubSpawn(() => first.pty);
+
+    const one = makeFakeWs();
+    wire({ ptyPool: pool })(one.ws as never, 'one');
+    one.emit('message', resizeFrame(80, 24));
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const two = makeFakeWs();
+    wire({ ptyPool: pool })(two.ws as never, 'two');
+    two.emit('message', resizeFrame(80, 24));
+    errSpy.mockRestore();
+
+    const error = two.sent.map((b) => decodeFrame(new Uint8Array(b))).find((f) => f.type === FrameType.Error);
+    expect(error && frameJson<{ code: string }>(error).code).toBe('pty-unavailable');
+    expect(two.getCloseCode()).toBe(1011);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('I-2: buffered>1MiB → pty.pause(); слив буфера <256KiB на таймере → pty.resume()', () => {

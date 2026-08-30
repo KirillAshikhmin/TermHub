@@ -6,6 +6,7 @@ import { spawn } from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { WebSocket, RawData } from 'ws';
 import { encodeFrame, jsonFrame, frameJson, decodeFrame, FrameType } from '@termhub/protocol';
+import { defaultPtyPool, PtyUnavailableError, type PtyPool } from './pty-pool.js';
 
 /** Байт BEL: его появление в выводе pty → колокольчик. */
 const BEL = 0x07;
@@ -56,19 +57,29 @@ export function attachTerminal(opts: {
   onData: (b: Uint8Array) => void;
   onExit: () => void;
   onBell: (session: string) => void;
+  /** Общий budget назначается bridge-обвязкой; прямой attach остаётся тестируемым без него. */
+  ptyPool?: PtyPool;
 }): TerminalHandle {
   const args = [...(opts.socketName ? ['-L', opts.socketName] : []), 'attach', '-t', `=${opts.session}`];
-  const child: IPty = spawn('tmux', args, {
-    name: 'xterm-256color',
-    cols: clamp(opts.cols, MIN_COLS, MAX_COLS),
-    rows: clamp(opts.rows, MIN_ROWS, MAX_ROWS),
-    // encoding:null → node-pty отдаёт сырые Buffer'ы (в d.ts тип — string): вывод
-    // терминала бинарен, декодировать в строку нельзя (порвёт multibyte и BEL-скан).
-    encoding: null,
-    env: { ...process.env, TERM: 'xterm-256color' },
-  });
+  const lease = opts.ptyPool?.acquire();
+  let child: IPty;
+  try {
+    child = spawn('tmux', args, {
+      name: 'xterm-256color',
+      cols: clamp(opts.cols, MIN_COLS, MAX_COLS),
+      rows: clamp(opts.rows, MIN_ROWS, MAX_ROWS),
+      // encoding:null → node-pty отдаёт сырые Buffer'ы (в d.ts тип — string): вывод
+      // терминала бинарен, декодировать в строку нельзя (порвёт multibyte и BEL-скан).
+      encoding: null,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+  } catch (err) {
+    lease?.release();
+    throw err;
+  }
 
   let disposed = false;
+  const release = (): void => lease?.release();
 
   // Скан на «звонок» с переносом состояния между чанками: BEL (0x07) считается
   // звонком, только если он НЕ терминатор OSC-последовательности. Shell ставит
@@ -113,6 +124,7 @@ export function attachTerminal(opts: {
   const onExitDisp = child.onExit((): void => {
     if (disposed) return;
     disposed = true;
+    release();
     onDataDisp.dispose();
     onExitDisp.dispose();
     opts.onExit();
@@ -138,6 +150,7 @@ export function attachTerminal(opts: {
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      release();
       onDataDisp.dispose();
       onExitDisp.dispose();
       try {
@@ -162,6 +175,7 @@ function toBuffer(data: RawData): Buffer {
 export function wireTerminalWs(opts: {
   socketName?: string;
   attach?: typeof attachTerminal;
+  ptyPool?: PtyPool;
 }): (ws: WebSocket, session: string) => void {
   const attach = opts.attach ?? attachTerminal;
   return (ws: WebSocket, session: string): void => {
@@ -221,9 +235,19 @@ export function wireTerminalWs(opts: {
               send(jsonFrame(FrameType.Close, LAN_CHANNEL, { session }));
               if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1000);
             },
+            ptyPool: opts.ptyPool ?? defaultPtyPool,
           });
         } catch (err) {
           console.error(`[bridge] attach failed for session ${session}:`, err);
+          send(
+            jsonFrame(FrameType.Error, LAN_CHANNEL, {
+              code: err instanceof PtyUnavailableError ? 'pty-unavailable' : 'terminal-attach-failed',
+              message:
+                err instanceof PtyUnavailableError
+                  ? 'Too many terminal connections are open. Close unused terminal tabs and try again.'
+                  : 'Could not create a pseudo-terminal. Restart the TermHub agent if the problem persists.',
+            }),
+          );
           if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1011);
         }
       } else if (frame.type === FrameType.Data) {

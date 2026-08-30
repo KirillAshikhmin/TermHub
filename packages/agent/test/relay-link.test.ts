@@ -600,6 +600,47 @@ describe('RelayLink — обслуживание клиента', () => {
 });
 
 describe('RelayLink — мультиплекс каналов и idle-таймаут', () => {
+  it('неудачный attach терминала возвращает Error на его канал, а не оставляет клиент ждать OpenOk', async () => {
+    const failingIdentity = generateIdentity();
+    const failingId = fingerprint(failingIdentity.edPub);
+    const failingLink = new RelayLink({
+      url: `ws://127.0.0.1:${relayHandle.port}/relay`,
+      identity: failingIdentity,
+      authorized: () => loadAuthorized(),
+      sessions,
+      attach: (() => {
+        throw new Error('forkpty(3) failed');
+      }) as never,
+    });
+    failingLink.start();
+
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name: 'failing-laptop', edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now() },
+    ]);
+
+    try {
+      const { ws, col } = await connectClient(relayHandle.port, failingId);
+      ws.send(helloFrame(clientId, crypto.randomBytes(32), 'failing-laptop'), { binary: true });
+      const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+        header: string;
+        nonce: string;
+      };
+      const { rx, tx } = sessionKeys('client', clientId, failingIdentity.edPub);
+      const dec = makeDecryptor(rx, unb64(ok.header));
+      const enc = makeEncryptor(tx);
+      ws.send(finFrame(clientId, enc, ok), { binary: true });
+
+      ws.send(enc.push(jsonFrame(FrameType.Open, 7, { session: 'work' })), { binary: true });
+      const frame = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(frame.type).toBe(FrameType.Error);
+      expect(frame.channel).toBe(7);
+      expect(frameJson<{ code: string }>(frame).code).toBe('terminal-attach-failed');
+    } finally {
+      await failingLink.stop();
+    }
+  });
+
   it('pre-hello idle-таймаут: молчащего клиента агент закрывает и освобождает слот', async () => {
     const idleIdentity = generateIdentity();
     const idleId = fingerprint(idleIdentity.edPub);
