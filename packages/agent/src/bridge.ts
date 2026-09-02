@@ -24,6 +24,9 @@ const WS_HIGH_WATER = 1 << 20; // 1 MiB — порог паузы pty
 const WS_LOW_WATER = 256 * 1024; // 256 KiB — порог возобновления
 const WS_DRAIN_INTERVAL_MS = 50; // период опроса bufferedAmount при паузе
 
+/** `destroy()` есть у UnixTerminal и закрывает master-FD, но отсутствует в IPty d.ts. */
+type DestroyablePty = IPty & { destroy(): void };
+
 // Историю scrollback клиенту НЕ дотягиваем. `tmux attach` первым же байтом шлёт
 // `ESC[?1049h` (вход в alt-screen) и не выходит из него до detach, поэтому любой дамп,
 // отданный клиенту, лёг бы в невидимый normal-буфер xterm. Глубокая история доступна
@@ -154,7 +157,9 @@ export function attachTerminal(opts: {
       onDataDisp.dispose();
       onExitDisp.dispose();
       try {
-        child.kill();
+        // kill() посылает только SIGHUP и оставляет master-FD node-pty открытым.
+        // destroy() закрывает его перед сигналом дочернему tmux.
+        (child as DestroyablePty).destroy();
       } catch {
         // pty уже мёртв — идемпотентно
       }

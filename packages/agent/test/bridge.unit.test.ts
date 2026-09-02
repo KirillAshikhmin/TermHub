@@ -14,13 +14,13 @@ const mockSpawn = vi.mocked(spawn);
 const wire = (o: Parameters<typeof wireTerminalWs>[0] = {}): ReturnType<typeof wireTerminalWs> =>
   wireTerminalWs(o);
 
-/** Управляемый фейк IPty: перехватывает колбэки и запоминает write/resize/kill. */
+/** Управляемый фейк IPty: перехватывает колбэки и запоминает write/resize/destroy. */
 function makeFakePty() {
   let dataCb: ((chunk: string) => void) | undefined;
   let exitCb: (() => void) | undefined;
   const writes: Buffer[] = [];
   const resizes: Array<[number, number]> = [];
-  let killed = false;
+  let destroyed = false;
   let paused = 0;
   let resumed = 0;
   const pty = {
@@ -44,8 +44,8 @@ function makeFakePty() {
     resume: () => {
       resumed += 1;
     },
-    kill: () => {
-      killed = true;
+    destroy: () => {
+      destroyed = true;
     },
   };
   return {
@@ -54,7 +54,7 @@ function makeFakePty() {
     emitExit: () => exitCb?.(),
     writes,
     resizes,
-    isKilled: () => killed,
+    isDestroyed: () => destroyed,
     pausedCount: () => paused,
     resumedCount: () => resumed,
   };
@@ -254,7 +254,7 @@ describe('attachTerminal', () => {
     expect(fake.resumedCount()).toBe(1);
   });
 
-  it('onExit идемпотентен: dispose после выхода не зовёт onExit повторно и не killит', () => {
+  it('onExit идемпотентен: dispose после выхода не зовёт onExit повторно и не уничтожает pty', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     let exits = 0;
@@ -271,10 +271,10 @@ describe('attachTerminal', () => {
     fake.emitExit();
     handle.dispose();
     expect(exits).toBe(1);
-    expect(fake.isKilled()).toBe(false); // pty уже вышел — повторного kill нет
+    expect(fake.isDestroyed()).toBe(false); // pty уже вышел — повторного destroy нет
   });
 
-  it('dispose живого pty → kill; write/resize после dispose — no-op', () => {
+  it('dispose живого pty закрывает master-FD через destroy; write/resize после dispose — no-op', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const handle = attachTerminal({
@@ -286,7 +286,9 @@ describe('attachTerminal', () => {
       onBell: () => {},
     });
     handle.dispose();
-    expect(fake.isKilled()).toBe(true);
+    // node-pty.kill() шлёт только SIGHUP. destroy() дополнительно закрывает
+    // master socket, без чего /dev/ptmx остаётся открыт в агенте.
+    expect(fake.isDestroyed()).toBe(true);
     handle.write(new TextEncoder().encode('x'));
     handle.resize(100, 40);
     expect(fake.writes).toHaveLength(0);
@@ -363,14 +365,14 @@ describe('wireTerminalWs', () => {
     expect(getCloseCode()).toBe(1000);
   });
 
-  it('закрытие WS → dispose отсоединяет pty (kill), сессия не трогается напрямую', () => {
+  it('закрытие WS → dispose уничтожает pty, сессия не трогается напрямую', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const { ws, emit } = makeFakeWs();
     wire()(ws as never, 'sess');
     emit('message', resizeFrame(80, 24));
     emit('close');
-    expect(fake.isKilled()).toBe(true);
+    expect(fake.isDestroyed()).toBe(true);
   });
 
   it('закрытие WS освобождает слот PTY для следующей вкладки сессии', () => {
