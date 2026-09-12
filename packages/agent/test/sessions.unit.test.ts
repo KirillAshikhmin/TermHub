@@ -211,7 +211,7 @@ describe('SessionService.create — валидация', () => {
     expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'claude']);
   });
 
-  it('preset codex → process-local overrides для title и анимации без shell', async () => {
+  it('preset codex → process-local overrides и inline-режим без альтернативного экрана', async () => {
     const svc = new SessionService({ roots: [root] });
     await svc.create({ name: 'main', root, dir: 'projectA', preset: 'codex' });
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
@@ -220,6 +220,7 @@ describe('SessionService.create — валидация', () => {
       'codex',
       '-c', 'tui.animations=false',
       '-c', 'tui.terminal_title=["activity","thread-title"]',
+      '--no-alt-screen',
     ]);
   });
 

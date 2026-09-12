@@ -3,7 +3,7 @@
 
 import { initCrypto } from '@termhub/protocol';
 import { runSetup } from './setup.js';
-import { loadConfig, loadIdentity, loadAuthorized, TMUX_SOCKET } from './config.js';
+import { loadConfig, loadIdentity, loadAuthorized, readTerminalMode, TMUX_SOCKET } from './config.js';
 import { SessionService } from './sessions.js';
 import { FileService } from './files.js';
 import { VcsService } from './vcs.js';
@@ -28,6 +28,8 @@ function usage(cmd: string | undefined): string {
 /** Запуск агента: конфиг → SessionService → HTTP/WS-сервер (+ relay-мост). Не завершается. */
 async function runStart(): Promise<number> {
   const config = loadConfig();
+  // Способ подключения терминала один на оба пути: LAN и relay ведут в один attachTerminal.
+  const terminalMode = readTerminalMode(config);
   const sessions = new SessionService({ roots: config.sessionRoots, socketName: TMUX_SOCKET });
   const files = new FileService({ roots: config.sessionRoots });
   const vcs = new VcsService({ roots: config.sessionRoots });
@@ -50,6 +52,7 @@ async function runStart(): Promise<number> {
       vcs,
       roots: config.sessionRoots,
       socketName: TMUX_SOCKET,
+      configMode: terminalMode,
       localUrls: () => localUrls({ port: config.port, tls: config.tls !== null }),
     });
   }
@@ -68,7 +71,7 @@ async function runStart(): Promise<number> {
       : undefined,
     relayStatus: () => link?.status() ?? null,
   });
-  server.attachTerminalWs(wireTerminalWs({ socketName: TMUX_SOCKET }));
+  server.attachTerminalWs(wireTerminalWs({ socketName: TMUX_SOCKET, configMode: terminalMode }));
   sessions.onBell((name, task) => void push.notifyBell(name, task));
   const port = await server.listen();
   sessions.startPolling();

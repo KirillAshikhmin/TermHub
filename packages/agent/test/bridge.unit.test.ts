@@ -12,7 +12,7 @@ const mockSpawn = vi.mocked(spawn);
 
 /** Короткая обёртка над wireTerminalWs (опции по умолчанию — пустые). */
 const wire = (o: Parameters<typeof wireTerminalWs>[0] = {}): ReturnType<typeof wireTerminalWs> =>
-  wireTerminalWs(o);
+  wireTerminalWs({ configMode: 'attach', ...o });
 
 /** Управляемый фейк IPty: перехватывает колбэки и запоминает write/resize/destroy. */
 function makeFakePty() {
@@ -58,6 +58,27 @@ function makeFakePty() {
     pausedCount: () => paused,
     resumedCount: () => resumed,
   };
+}
+
+
+/** Ответы фейкового control-клиента: блок с номером команды, как у tmux -CC. */
+function blockFor(id: number, lines: string[] = []): Buffer {
+  const body = lines.map((l) => `${l}\r\n`).join('');
+  return Buffer.from(`%begin 1000 ${id} 1\r\n${body}%end 1000 ${id} 1\r\n`);
+}
+
+/** Последняя команда, отправленная в stdin control-клиента. */
+function lastCommand(fake: ReturnType<typeof makeFakePty>): string {
+  return Buffer.concat(fake.writes).toString().trim().split('\n').at(-1) ?? '';
+}
+
+/** Доводит control-клиента до готовности: приветственный блок → ответы на init-команды.
+ *  Номера блоков идут подряд от 0, как их раздаёт tmux. */
+async function handshake(fake: ReturnType<typeof makeFakePty>, pane = '%0', alt = '0'): Promise<void> {
+  fake.emitData(blockFor(0)); // приветственный блок: от него известен номер следующего
+  await vi.waitFor(() => expect(lastCommand(fake)).toContain('display-message'));
+  fake.emitData(blockFor(1)); // refresh-client
+  fake.emitData(blockFor(2, [`${pane} @0 ${alt}`])); // display-message
 }
 
 /** Управляемый фейк WebSocket: копит отправленное и код закрытия, эмитит события. */
@@ -113,6 +134,11 @@ beforeEach(() => {
   mockSpawn.mockReset();
 });
 
+/** Прежние тесты описывают путь `tmux attach`: режим объявляется явно, утверждения —
+ *  ровно те же. Control mode проверяется отдельным describe ниже. */
+const attachOld = (o: Omit<Parameters<typeof attachTerminal>[0], 'configMode'>): ReturnType<typeof attachTerminal> =>
+  attachTerminal({ configMode: 'attach', ...o });
+
 describe('attachTerminal', () => {
   it('передаёт -L <socket>, =session в аргументы и xterm-256color в spawn', () => {
     let file = '';
@@ -122,7 +148,7 @@ describe('attachTerminal', () => {
       args = a;
       return makeFakePty().pty;
     });
-    attachTerminal({
+    attachOld({
       session: 'mysess',
       socketName: 'sock1',
       cols: 80,
@@ -141,7 +167,7 @@ describe('attachTerminal', () => {
       opts = o;
       return makeFakePty().pty;
     });
-    attachTerminal({ session: 's', cols: 9999, rows: 1, onData: () => {}, onExit: () => {}, onBell: () => {} });
+    attachOld({ session: 's', cols: 9999, rows: 1, onData: () => {}, onExit: () => {}, onBell: () => {} });
     expect(opts.cols).toBe(500);
     expect(opts.rows).toBe(5);
   });
@@ -151,7 +177,7 @@ describe('attachTerminal', () => {
     stubSpawn(() => fake.pty);
     const bells: string[] = [];
     const chunks: Uint8Array[] = [];
-    attachTerminal({
+    attachOld({
       session: 'sess',
       cols: 80,
       rows: 24,
@@ -168,7 +194,7 @@ describe('attachTerminal', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const bells: string[] = [];
-    attachTerminal({
+    attachOld({
       session: 'sess',
       cols: 80,
       rows: 24,
@@ -185,7 +211,7 @@ describe('attachTerminal', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const bells: string[] = [];
-    attachTerminal({
+    attachOld({
       session: 'sess',
       cols: 80,
       rows: 24,
@@ -201,7 +227,7 @@ describe('attachTerminal', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const bells: string[] = [];
-    attachTerminal({
+    attachOld({
       session: 'sess',
       cols: 80,
       rows: 24,
@@ -218,7 +244,7 @@ describe('attachTerminal', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     const bells: string[] = [];
-    attachTerminal({
+    attachOld({
       session: 'sess',
       cols: 80,
       rows: 24,
@@ -234,7 +260,7 @@ describe('attachTerminal', () => {
   it('I-2: pause/resume делегируют в child.pause/resume', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
-    const handle = attachTerminal({
+    const handle = attachOld({
       session: 's',
       cols: 80,
       rows: 24,
@@ -258,7 +284,7 @@ describe('attachTerminal', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     let exits = 0;
-    const handle = attachTerminal({
+    const handle = attachOld({
       session: 's',
       cols: 80,
       rows: 24,
@@ -277,7 +303,7 @@ describe('attachTerminal', () => {
   it('dispose живого pty закрывает master-FD через destroy; write/resize после dispose — no-op', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
-    const handle = attachTerminal({
+    const handle = attachOld({
       session: 's',
       cols: 80,
       rows: 24,
@@ -454,6 +480,208 @@ describe('wireTerminalWs', () => {
     const { ws, emit } = makeFakeWs();
     wire()(ws as never, 'sess');
     expect(() => emit('message', Buffer.from([0x00]))).not.toThrow(); // короче заголовка
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+});
+
+describe('attachTerminal в control mode', () => {
+  const base = {
+    session: 'sess',
+    cols: 80,
+    rows: 24,
+    onData: (): void => {},
+    onExit: (): void => {},
+    onBell: (): void => {},
+  };
+
+  it('по умолчанию открывает control-клиента: в аргументах -CC', () => {
+    let args: string[] = [];
+    stubSpawn((_f, a) => {
+      args = a;
+      return makeFakePty().pty;
+    });
+    attachTerminal({ ...base, socketName: 'sock1' });
+    expect(args).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess']);
+  });
+
+  it('просьба клиента открывает прежний клиент; настройка агента и мусор в просьбе старше неё', () => {
+    const args: string[][] = [];
+    stubSpawn((_f, a) => {
+      args.push(a);
+      return makeFakePty().pty;
+    });
+    attachTerminal({ ...base, socketName: 'sock1', requestedMode: 'attach' });
+    attachTerminal({ ...base, socketName: 'sock1', configMode: 'attach', requestedMode: 'control' });
+    attachTerminal({ ...base, socketName: 'sock1', requestedMode: 'telnet' });
+    expect(args[0]).toEqual(['-L', 'sock1', 'attach', '-t', '=sess']);
+    expect(args[1]).toEqual(['-L', 'sock1', 'attach', '-t', '=sess']);
+    expect(args[2]).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess']);
+  });
+
+  it('снимок экрана уходит клиенту раньше живого вывода, пришедшего до него', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const chunks: string[] = [];
+    const dec = new TextDecoder();
+    attachTerminal({ ...base, onData: (b) => chunks.push(dec.decode(b)) });
+    await handshake(fake);
+    // Вывод пришёл после готовности, но до ответа на capture-pane: на экране он должен
+    // оказаться ПОСЛЕ снимка, поверх которого его и напечатали.
+    fake.emitData(Buffer.from('%output %0 live\r\n'));
+    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    fake.emitData(blockFor(3, ['screen']));
+    await vi.waitFor(() => expect(chunks.length).toBe(2));
+    expect(chunks[0]).toBe('screen');
+    expect(chunks[1]).toBe('live');
+  });
+
+  it('сообщает выбранный режим и смену альтернативного экрана', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const modes: string[] = [];
+    const alts: boolean[] = [];
+    attachTerminal({ ...base, onMode: (m) => modes.push(m), onAltScreen: (a) => alts.push(a) });
+    await handshake(fake);
+    await vi.waitFor(() => expect(modes).toEqual(['control']));
+    expect(alts).toEqual([false]);
+    // Приложение ушло в альтернативный экран: ESC[?1049h в выводе активной панели.
+    fake.emitData(Buffer.from('%output %0 \\033[?1049h\r\n'));
+    expect(alts).toEqual([false, true]);
+  });
+
+  it('BEL в живом выводе звонит: байты доезжают через разэкранирование', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const bells: string[] = [];
+    const chunks: Uint8Array[] = [];
+    attachTerminal({ ...base, onBell: (x) => bells.push(x), onData: (b) => chunks.push(b) });
+    await handshake(fake);
+    // tmux экранирует управляющие байты восьмерично: \007 — это BEL.
+    fake.emitData(Buffer.from('%output %0 ding\\007\r\n'));
+    expect(bells).toEqual(['sess']);
+    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    fake.emitData(blockFor(3, []));
+    await vi.waitFor(() => expect(chunks.length).toBe(1));
+    expect(Array.from(chunks[0])).toContain(0x07);
+  });
+
+  it('BEL из снимка не звонит: в истории он уже отзвонил', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const bells: string[] = [];
+    const chunks: string[] = [];
+    const dec = new TextDecoder();
+    attachTerminal({ ...base, onBell: (x) => bells.push(x), onData: (b) => chunks.push(dec.decode(b)) });
+    await handshake(fake);
+    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    fake.emitData(blockFor(3, ['bell\u0007 in history']));
+    // Ждём именно доставки снимка в onData: до неё звонить было бы нечему.
+    await vi.waitFor(() => expect(chunks).toEqual(['bell\u0007 in history']));
+    expect(bells).toEqual([]);
+  });
+
+  it('придержано больше мегабайта — снимок отменяется, вывод уходит сразу', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const chunks: string[] = [];
+    const dec = new TextDecoder();
+    attachTerminal({ ...base, onData: (b) => chunks.push(dec.decode(b)) });
+    await handshake(fake);
+    // Три куска по 400 КБ: предел придержания — мегабайт, и на третьем он пройден.
+    const big = 'x'.repeat(400_000);
+    for (let i = 0; i < 3; i += 1) fake.emitData(Buffer.from(`%output %0 ${big}\r\n`));
+    expect(chunks.map((c) => c.length)).toEqual([400_000, 400_000, 400_000]);
+    // Снимок пришёл, но экран уже перерисован этим выводом — на экран он не идёт.
+    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    fake.emitData(blockFor(3, ['screen']));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chunks).toHaveLength(3);
+    expect(chunks.join('')).not.toContain('screen');
+  });
+
+  it('молчащий capture-pane отпускает придержанный вывод по сроку, а не по сроку команды', async () => {
+    vi.useFakeTimers();
+    const handles: ReturnType<typeof attachTerminal>[] = [];
+    try {
+      const fake = makeFakePty();
+      stubSpawn(() => fake.pty);
+      const chunks: string[] = [];
+      const dec = new TextDecoder();
+      handles.push(attachTerminal({ ...base, onData: (b) => chunks.push(dec.decode(b)) }));
+      fake.emitData(blockFor(0));
+      fake.emitData(blockFor(1));
+      fake.emitData(blockFor(2, ['%0 @0 0']));
+      await Promise.resolve(); // разбор ответа про панель: режим выбран, снимок ещё не запрошен
+      fake.emitData(Buffer.from('%output %0 live\r\n'));
+      expect(chunks).toEqual([]);
+      // tmux на capture-pane не отвечает: ждать его срок (10 с) — держать экран пустым.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(chunks).toEqual(['live']);
+      // Отмена снимка оставляет след: иначе пропажа истории экрана ничем не видна.
+      expect(warnSpy.mock.calls.map((c) => String(c[0])).join(' ')).toContain('snapshot skipped');
+      warnSpy.mockRestore();
+      // Отвечаем на зависшую команду: иначе dispose отвергнет её строкой в лог прогона.
+      fake.emitData(blockFor(3, []));
+      await Promise.resolve();
+    } finally {
+      for (const h of handles) h.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('wireTerminalWs и режим подключения', () => {
+  /** Поддельный attach: запоминает опции открытия, чтобы дёргать их колбэки снаружи. */
+  function captureAttach(): { opts: Parameters<typeof attachTerminal>[0]; attach: typeof attachTerminal } {
+    const opts = {} as Parameters<typeof attachTerminal>[0];
+    const attach = ((o: Parameters<typeof attachTerminal>[0]) => {
+      Object.assign(opts, o);
+      return { write: () => {}, resize: () => {}, pause: () => {}, resume: () => {}, dispose: () => {} };
+    }) as typeof attachTerminal;
+    return { opts, attach };
+  }
+
+  it('просьба режима из первого RESIZE и настройка агента доезжают до attach', () => {
+    const { opts, attach } = captureAttach();
+    const { ws, emit } = makeFakeWs();
+    wireTerminalWs({ attach, configMode: 'control' })(ws as never, 'sess');
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 80, rows: 24, mode: 'attach' })));
+    expect(opts.requestedMode).toBe('attach');
+    expect(opts.configMode).toBe('control');
+  });
+
+  it('нестроковая просьба режима отбрасывается так же, как на relay-пути', () => {
+    const { opts, attach } = captureAttach();
+    const { ws, emit } = makeFakeWs();
+    wireTerminalWs({ attach })(ws as never, 'sess');
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 80, rows: 24, mode: { evil: true } })));
+    expect(opts.requestedMode).toBeUndefined();
+  });
+
+  it('режим и альтернативный экран уходят клиенту кадром состояния терминала', () => {
+    const { opts, attach } = captureAttach();
+    const { ws, emit, sent } = makeFakeWs();
+    wireTerminalWs({ attach })(ws as never, 'sess');
+    emit('message', resizeFrame(80, 24));
+    opts.onMode!('control');
+    opts.onAltScreen!(true);
+    const states = sent
+      .map((b) => decodeFrame(new Uint8Array(b)))
+      .filter((f) => f.type === FrameType.TerminalState)
+      .map((f) => frameJson<{ mode?: string; altScreen?: boolean }>(f));
+    expect(states).toEqual([
+      { mode: 'control', altScreen: false },
+      { mode: 'control', altScreen: true },
+    ]);
+  });
+
+  it('кадр незнакомого типа от клиента пропускается: pty не спавнится, исключения нет', () => {
+    stubSpawn(() => makeFakePty().pty);
+    const { ws, emit } = makeFakeWs();
+    wire()(ws as never, 'sess');
+    expect(() => emit('message', msg(jsonFrame(FrameType.TerminalState, 0, { mode: 'control' })))).not.toThrow();
+    expect(() => emit('message', msg(jsonFrame(250 as FrameType, 0, { x: 1 })))).not.toThrow();
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 });

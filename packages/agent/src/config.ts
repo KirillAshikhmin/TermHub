@@ -4,7 +4,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { generateIdentity } from '@termhub/protocol';
-import type { Identity } from '@termhub/protocol';
+import type { Identity, TerminalMode } from '@termhub/protocol';
 import { isExistingSessionName } from './sessions.js';
 import {
   configDir,
@@ -15,7 +15,7 @@ import {
 } from './paths.js';
 
 export { configDir };
-export type { Identity };
+export type { Identity, TerminalMode };
 
 // Выделенный tmux-сокет для рабочих сессий TermHub. Изолирует их от дефолтного
 // сервера, чтобы случайный `tmux kill-server` (без -L) не сносил рабочие сессии.
@@ -43,6 +43,22 @@ export interface TermhubConfig {
   relayUrl: string | null;
   vapid: { publicKey: string; privateKey: string; subject: string };
   locale: null | 'ru' | 'en';
+  /** Способ подключения терминала к tmux. Поля может не быть — это `control`;
+   *  `attach` запрещает control mode на всей машине и просьбой клиента не перебивается. */
+  terminalMode?: TerminalMode;
+}
+
+/** Читает `terminalMode`: чужое значение — не повод отключать терминал, поэтому оно
+ *  читается как режим по умолчанию, но молча это делать нельзя — владелец правил конфиг. */
+export function readTerminalMode(
+  config: TermhubConfig,
+  log: (message: string) => void = console.warn,
+): TerminalMode {
+  const value = config.terminalMode;
+  if (value === undefined || value === 'control') return 'control';
+  if (value === 'attach') return 'attach';
+  log(`[config] unknown terminalMode "${String(value)}" in config.json, using control`);
+  return 'control';
 }
 
 /** Ограничение доступа гостевого устройства (шаринг одной сессии).

@@ -246,6 +246,9 @@ export class SessionService {
           'codex',
           '-c', 'tui.animations=false',
           '-c', 'tui.terminal_title=["activity","thread-title"]',
+          // Inline вместо альтернативного экрана: только так у сессии Codex остаётся
+          // история, которую можно листать (иначе её не бывает вовсе).
+          '--no-alt-screen',
         );
       }
       return this.tmux(args);

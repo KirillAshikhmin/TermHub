@@ -641,6 +641,68 @@ describe('RelayLink — мультиплекс каналов и idle-тайма
     }
   });
 
+  it('OPEN несёт просьбу режима, а выбранный режим и альтернативный экран уходят кадром состояния', async () => {
+    let seen: { configMode?: unknown; requestedMode?: unknown } = {};
+    let onMode: ((m: string) => void) | undefined;
+    let onAltScreen: ((a: boolean) => void) | undefined;
+    const modeIdentity = generateIdentity();
+    const modeId = fingerprint(modeIdentity.edPub);
+    const modeLink = new RelayLink({
+      url: `ws://127.0.0.1:${relayHandle.port}/relay`,
+      identity: modeIdentity,
+      authorized: () => loadAuthorized(),
+      sessions,
+      configMode: 'control',
+      attach: ((opts: {
+        configMode?: unknown;
+        requestedMode?: unknown;
+        onMode?: (m: string) => void;
+        onAltScreen?: (a: boolean) => void;
+      }): TerminalHandle => {
+        seen = { configMode: opts.configMode, requestedMode: opts.requestedMode };
+        onMode = opts.onMode;
+        onAltScreen = opts.onAltScreen;
+        return { write: () => {}, resize: () => {}, pause: () => {}, resume: () => {}, dispose: () => {} };
+      }) as never,
+    });
+    modeLink.start();
+
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name: 'mode-laptop', edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now() },
+    ]);
+
+    try {
+      const { ws, col } = await connectClient(relayHandle.port, modeId);
+      ws.send(helloFrame(clientId, crypto.randomBytes(32), 'mode-laptop'), { binary: true });
+      const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+        header: string;
+        nonce: string;
+      };
+      const { rx, tx } = sessionKeys('client', clientId, modeIdentity.edPub);
+      const dec = makeDecryptor(rx, unb64(ok.header));
+      const enc = makeEncryptor(tx);
+      ws.send(finFrame(clientId, enc, ok), { binary: true });
+
+      ws.send(enc.push(jsonFrame(FrameType.Open, 4, { session: 'work', mode: 'attach' })), { binary: true });
+      const opened = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(opened.type).toBe(FrameType.OpenOk);
+      expect(seen).toEqual({ configMode: 'control', requestedMode: 'attach' });
+
+      onMode!('attach');
+      const first = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(first.type).toBe(FrameType.TerminalState);
+      expect(first.channel).toBe(4);
+      expect(frameJson<{ mode?: string; altScreen?: boolean }>(first)).toEqual({ mode: 'attach', altScreen: false });
+
+      onAltScreen!(true);
+      const second = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(frameJson<{ mode?: string; altScreen?: boolean }>(second)).toEqual({ mode: 'attach', altScreen: true });
+    } finally {
+      await modeLink.stop();
+    }
+  });
+
   it('pre-hello idle-таймаут: молчащего клиента агент закрывает и освобождает слот', async () => {
     const idleIdentity = generateIdentity();
     const idleId = fingerprint(idleIdentity.edPub);

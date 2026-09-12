@@ -38,6 +38,7 @@ import {
   type FileEntry,
   type FileContent,
   type FileInfo,
+  type TerminalMode,
 } from '@termhub/protocol';
 import type { AuthorizedDevice } from './config.js';
 import { saveAuthorized, parseScope } from './config.js';
@@ -192,6 +193,8 @@ export class RelayLink {
   /** Адреса прямого доступа к агенту (минуя relay); отдаются по кадру Addresses. */
   private readonly localUrls?: () => string[];
   private readonly attach: typeof attachTerminal;
+  /** Настройка агента: способ подключения терминала (`config.terminalMode`). */
+  private readonly configMode?: TerminalMode;
   private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
@@ -237,6 +240,8 @@ export class RelayLink {
     helloTimeoutMs?: number;
     /** Инжектируется в тестах; по умолчанию — реальный attachTerminal. */
     attach?: typeof attachTerminal;
+    /** Способ подключения терминала из конфига агента; клиентом не перебивается. */
+    configMode?: TerminalMode;
     /** Общий budget живых pty: один на LAN и relay. */
     ptyPool?: PtyPool;
   }) {
@@ -253,6 +258,7 @@ export class RelayLink {
     this.localUrls = opts.localUrls;
     this.helloTimeoutMs = opts.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
     this.attach = opts.attach ?? attachTerminal;
+    this.configMode = opts.configMode;
     this.ptyPool = opts.ptyPool ?? defaultPtyPool;
   }
 
@@ -1155,14 +1161,17 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'too-many-terminals', message: 'too many terminals' }));
       return;
     }
-    let req: { session?: unknown };
+    let req: { session?: unknown; mode?: unknown };
     try {
-      req = frameJson<{ session?: unknown }>(frame);
+      req = frameJson<{ session?: unknown; mode?: unknown }>(frame);
     } catch {
       return;
     }
     if (typeof req.session !== 'string') return;
     const session = req.session;
+    // Просьба клиента о способе подключения едет в OPEN: терминал relay открывает здесь,
+    // до первого RESIZE, и позже выбор режима уже не пересматривается.
+    const requestedMode = typeof req.mode === 'string' ? req.mode : undefined;
     // Гость может открыть только свою сессию — и сборочную сессию ЕЁ сборки
     // (вкладка Gradle показывает вывод через тот же openTerm), но не чужую.
     if (s.scope && session !== s.scope.session && session !== buildSessionName(s.scope.session)) {
@@ -1170,14 +1179,30 @@ export class RelayLink {
       return;
     }
     let handle: TerminalHandle;
+    // Что клиент знает о терминале: способ подключения и альтернативный экран. Кадр
+    // состояния новый — клиент прежней версии его не знает и обязан пропустить.
+    let mode: TerminalMode | undefined;
+    let altScreen = false;
+    const sendState = (): void =>
+      this.sendFrameBytes(s, jsonFrame(FrameType.TerminalState, channel, { mode, altScreen }));
     try {
       handle = this.attach({
         session,
         socketName: this.socketName,
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
+        configMode: this.configMode,
+        requestedMode,
         onData: (b) => this.sendFrameBytes(s, encodeFrame({ type: FrameType.Data, channel, payload: b })),
         onBell: (sess) => this.sendFrameBytes(s, jsonFrame(FrameType.Bell, channel, { session: sess })),
+        onMode: (m) => {
+          mode = m;
+          sendState();
+        },
+        onAltScreen: (active) => {
+          altScreen = active;
+          sendState();
+        },
         onExit: () => {
           this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
           s.terminals.delete(channel);
