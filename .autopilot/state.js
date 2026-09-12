@@ -10,8 +10,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
   "startedAt": "2026-09-12T19:37:09+03:00",
-  "updatedAt": "2026-09-12T20:48:31+03:00",
-  "finishedAt": null,
+  "updatedAt": "2026-09-12T20:48:39+03:00",
+  "finishedAt": "2026-09-12T20:48:39+03:00",
   "stages": [
     { "id": "preflight", "status": "done", "startedAt": "2026-09-12T19:37:09+03:00", "finishedAt": "2026-09-12T19:37:13+03:00" },
     { "id": "manifest",  "status": "done", "startedAt": "2026-09-12T19:37:13+03:00", "finishedAt": "2026-09-12T19:38:59+03:00" },
@@ -20,7 +20,7 @@ window.STATE =
     { "id": "plan",      "status": "done", "startedAt": "2026-09-12T20:29:48+03:00", "finishedAt": "2026-09-12T20:30:02+03:00", "note": "2 таска, ярус T1, одна волна параллельно"  },
     { "id": "build",     "status": "done", "startedAt": "2026-09-12T20:30:02+03:00", "finishedAt": "2026-09-12T20:42:38+03:00", "note": "3 из 3 тасков готовы" },
     { "id": "review",    "status": "active", "startedAt": "2026-09-12T20:34:38+03:00", "note": "оба таска: по 2 оси, дозапросы отправлены"  },
-    { "id": "final",     "status": "active", "startedAt": "2026-09-12T20:42:38+03:00", "note": "слепая приёмка: 2 расхождения, оба исправлены" }
+    { "id": "final",     "status": "done", "startedAt": "2026-09-12T20:42:38+03:00", "note": "слепая приёмка: 2 расхождения, оба исправлены", "finishedAt": "2026-09-12T20:48:39+03:00" }
   ],
   "requirements": {
     "total": 31, "done": 26, "inTicket": 0, "inSpec": 0,
