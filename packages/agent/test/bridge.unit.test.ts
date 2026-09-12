@@ -391,7 +391,7 @@ describe('wireTerminalWs', () => {
     two.emit('message', resizeFrame(80, 24));
 
     expect(mockSpawn).toHaveBeenCalledTimes(2);
-    expect(second.isKilled()).toBe(false);
+    expect(second.isDestroyed()).toBe(false);
   });
 
   it('исчерпанный PTY-budget отклоняет новую вкладку Error-кадром без нового forkpty', () => {

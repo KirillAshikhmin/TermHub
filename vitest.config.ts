@@ -7,6 +7,10 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
 const TMUX_SEAM = 'packages/agent/test/gradle.tmux.test.ts';
+// Внутри репозитория живёт git-worktree владельца: его копия сюиты иначе
+// попадает в прогон и удваивает число тестов. Проекты vitest общий exclude не
+// наследуют, поэтому список раздаётся в обе группы.
+const BASE_EXCLUDE = [...configDefaults.exclude, '**/.worktrees/**'];
 
 export default defineConfig({
   test: {
@@ -14,13 +18,14 @@ export default defineConfig({
       {
         test: {
           name: 'suite',
-          exclude: [...configDefaults.exclude, TMUX_SEAM],
+          exclude: [...BASE_EXCLUDE, TMUX_SEAM],
           sequence: { groupOrder: 0 },
         },
       },
       {
         test: {
           name: 'tmux',
+          exclude: BASE_EXCLUDE,
           include: [TMUX_SEAM],
           sequence: { groupOrder: 1 },
         },
