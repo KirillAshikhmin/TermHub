@@ -83,7 +83,8 @@ function options(over: Partial<SessionLinkOptions> = {}): SessionLinkOptions {
   return { cols: 80, rows: 24, onData: noop, onExit: noop, log: noop, ...over };
 }
 
-const GREETING = '%begin 1 0 1\n%end 1 0 1\n';
+// Флаг у приветствия ноль, у ответов на наши команды — единица: так отвечает живой tmux.
+const GREETING = '%begin 1 0 0\n%end 1 0 0\n';
 
 /** Ответ на команду: номер должен совпадать с порядком отправки (tmux отвечает по очереди). */
 function reply(id: number, ...lines: string[]): string {
@@ -144,7 +145,7 @@ describe('open: выбор режима', () => {
       const lines: string[] = [];
       const link = open('sess', options({ log: (m) => lines.push(m) }));
       // Такая сборка tmux отвечает на -CC attach только уведомлениями: протокол живой,
-      // а номера, которым адресуется ответ, до первого блока взять неоткуда.
+      // а непрошеного блока, после которого можно слать команды, всё нет.
       await vi.advanceTimersByTimeAsync(1500);
       control.feed('%window-add @1\n');
       control.feed('%window-renamed @1 work\n');
@@ -152,7 +153,7 @@ describe('open: выбор режима', () => {
       expect(link.mode).toBeUndefined(); // отката не было
       expect(mockSpawn).toHaveBeenCalledTimes(1); // attach-клиент не спавнился
       // Ожидание видно в логе, но ровно одной строкой: по строке на уведомление залило бы лог.
-      expect(lines.filter((m) => m.includes('waiting for the first block number'))).toHaveLength(1);
+      expect(lines.filter((m) => m.includes('waiting for the first block'))).toHaveLength(1);
       control.feed(GREETING); // блок наконец пришёл — дальше обычная готовность
       control.feed(reply(1));
       control.feed(reply(2, '%0 @0 0'));
@@ -332,46 +333,40 @@ describe('open: выбор режима', () => {
 });
 
 describe('сопоставление ответов', () => {
-  it('блок с номером меньше ожидаемого не сдвигает очередь и не роняет режим', async () => {
+  it('номера блоков идут с разрывом, как у живого tmux: адресует порядок отправки', async () => {
     const fake = makeFakePty();
     stubSpawns(fake);
     const link = open('sess', options());
-    fake.feed(GREETING); // приветственный блок: после него уходят init-команды
-    // Номер 0 уже был у приветствия: этот блок не принадлежит ни одной нашей команде.
-    // Отдать ему ответ значило бы увести очередь на шаг, и разбор про активную панель
-    // увидел бы чужую строку — ложный откат на живом tmux.
-    fake.feed(reply(0, 'stray block'));
-    fake.feed(reply(1)); // refresh-client
-    fake.feed(reply(2, '%0 @0 0')); // display-message получает свой ответ, а не чужой
+    // Ровно то, что увидел живой шов на tmux 3.7b: приветствие 308, а ответ на первую нашу
+    // команду — уже 313. Промежуточные номера tmux потратил сам, предсказать их нельзя.
+    fake.feed('%begin 1 308 0\n%end 1 308 0\n');
+    fake.feed('%begin 1 313 1\n%end 1 313 1\n'); // refresh-client
+    fake.feed('%begin 1 314 1\n%0 @0 0\n%end 1 314 1\n'); // display-message
     expect(await link.ready).toBe('control');
   });
 
-  it('блок с номером больше ожидаемого отвергает ждущую команду сразу, а не по сроку', async () => {
-    vi.useFakeTimers();
-    try {
-      const fake = makeFakePty();
-      stubSpawns(fake);
-      const link = open('sess', options());
-      await bringUp(fake, link, '%0');
-      const pending = link.snapshot(); // уходит командой с предсказанным номером 3
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fake.commands()).toContain('capture-pane -t %0 -p -e -S -200');
-      // Предсказание разошлось: tmux уже отвечает пятым блоком, значит ответа на третью
-      // команду не будет никогда. Время не сдвигается вовсе — срок команды тут не при чём.
-      fake.feed(reply(5, 'answer to somebody else'));
-      expect(await pending).toEqual(new Uint8Array(0));
-      expect(link.mode).toBe('control'); // терминал жив: это отказ команды, а не протокола
-    } finally {
-      vi.useRealTimers();
-    }
+  it('блок, которого никто не ждёт, очередь не двигает: ждущая команда получает свой ответ', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const chunks: string[] = [];
+    const link = open('sess', options({ onData: (b) => chunks.push(dec.decode(b)) }));
+    await bringUp(fake, link, '%0');
+    // Очередь пуста: адресата у этого блока нет, и «съесть» им будущий ответ нельзя.
+    fake.feed(reply(50, 'nobody asked for this'));
+    const pending = link.snapshot();
+    await tick();
+    fake.feed(reply(51, 'screen'));
+    expect(dec.decode(await pending)).toBe('screen');
+    expect(link.mode).toBe('control'); // терминал жив: чужой блок — не повод для отката
   });
 
-  it('%session-changed до первого блока не гонит команды вслепую: они ждут номера', async () => {
+  it('%session-changed до первого блока не гонит команды вслепую: они ждут приветствия', async () => {
     const fake = makeFakePty();
     stubSpawns(fake);
     const link = open('sess', options());
     fake.feed('%session-changed $0 work\n');
-    expect(fake.commands()).toEqual([]); // номер следующего блока ещё неизвестен
+    // Приветственный блок ещё впереди: отправленной сейчас команде он достался бы ответом.
+    expect(fake.commands()).toEqual([]);
     fake.feed(GREETING);
     fake.feed(reply(1));
     fake.feed(reply(2, '%0 @0 0'));

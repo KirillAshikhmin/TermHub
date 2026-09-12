@@ -93,9 +93,10 @@ function wantedMode(configMode: TerminalMode | undefined, requested: string | un
   return requested === 'attach' ? 'attach' : 'control';
 }
 
-/** Ожидаемый ответ: адресуется номером блока, который tmux даст этой команде. */
+/** Ожидаемый ответ: адресуется порядком отправки, поэтому номера в нём нет — только
+ *  имя команды, чтобы отказ было видно в логе. */
 interface Pending {
-  id: number;
+  label: string;
   /** Команда снимка: пока она в полёте, вывод панели на экран не идёт. */
   capture: boolean;
   timer: ReturnType<typeof setTimeout>;
@@ -116,9 +117,9 @@ class SessionLink implements Link {
   private childDisposers: Array<{ dispose(): void }> = [];
   /** Команды, ждущие своего блока: каждая знает номер, по которому её узнают. */
   private readonly pending: Pending[] = [];
-  /** Номер, который tmux даст следующему блоку. Пока он неизвестен, команду отправлять
-   *  нельзя: её ответ будет не с чем сопоставить. */
-  private nextBlockId: number | undefined;
+  /** Непрошеный блок control mode уже прошёл. До него команду отправлять нельзя:
+   *  приветствие досталось бы ей как ответ (см. matchBlock). */
+  private greeted = false;
   /** Init-команды отправлены: второй раз их слать некуда. */
   private initStarted = false;
   private resolveReady!: (mode: TerminalMode) => void;
@@ -180,16 +181,16 @@ class SessionLink implements Link {
    *  общий предел (READY_MAX_WAIT_MS от открытия). Незаведённый срок значит, что режим уже
    *  выбран или Link закрыт: там продлевать нечего. */
   private extendReady(): void {
-    if (this.readyTimer === undefined || this.nextBlockId !== undefined) return;
+    if (this.readyTimer === undefined || this.greeted) return;
     const left = this.readyDeadline - performance.now();
     if (left <= 0) return; // предел исчерпан: доживаем уже заведённый срок
     if (!this.readyExtendLogged) {
       // Одна строка на всё продление: снаружи ожидание номера блока иначе неотличимо
       // от зависшего терминала — пользователь до предела смотрит в пустой экран.
       this.readyExtendLogged = true;
-      this.log(`session ${this.session}: control protocol answers, waiting for the first block number`);
+      this.log(`session ${this.session}: control protocol answers, waiting for the first block`);
     }
-    this.armReady(Math.min(READY_TIMEOUT_MS, left), `no block number in ${READY_MAX_WAIT_MS} ms of notifications`);
+    this.armReady(Math.min(READY_TIMEOUT_MS, left), `no control block in ${READY_MAX_WAIT_MS} ms of notifications`);
   }
 
   /** Спавнит клиента tmux; аргументы — только массивом, без shell. */
@@ -280,30 +281,27 @@ class SessionLink implements Link {
     }
   }
 
-  /** Ответ адресуется номером команды. Блок с номером меньше ожидаемого (приветственный или
-   *  чужой) очередь не сдвигает: иначе следующий ответ достался бы не той команде, и
-   *  разбор про активную панель увидел бы чужую строку — ложный откат на живом tmux.
-   *  Номер больше ожидаемого, наоборот, очередь чистит: см. ниже. */
+  /** Ответ адресуется ПОРЯДКОМ отправки, а не номером блока: номер предсказать нельзя.
+   *  На живом tmux 3.7b приветствие пришло блоком 308, а ответ на первую же нашу команду —
+   *  блоком 313: промежуточные номера tmux потратил сам, и «последний виденный плюс один»
+   *  расходится с действительностью на первом же подключении.
+   *
+   *  Порядок надёжен, потому что control-клиент получает блоки только на свои команды плюс
+   *  единственное непрошеное приветствие, а команды уходят строго после него (maybeInit).
+   *  Значит приветствие всегда встречает пустую очередь — и «блок при пустой очереди» это и
+   *  есть тот самый блок, которого никто не ждёт: очередь он не двигает и режим не роняет.
+   *  Номер остаётся меткой для логов. Надёжнее было бы смотреть флаги `%begin` (у приветствия
+   *  ноль, у ответов на наши команды единица), но разбор их наружу не отдаёт. */
   private matchBlock(id: number, lines: string[], failed: boolean): void {
-    // Счётчик блоков у control-клиента сквозной: неадресованный блок тоже занимает номер.
-    if (this.nextBlockId === undefined || id >= this.nextBlockId) this.nextBlockId = id + 1;
-    // Номер команды предсказан («последний виденный плюс один»), а отвечает tmux по
-    // возрастанию номеров: блок с номером больше ожидаемого — доказательство, что
-    // предсказание разошлось и своего ответа команда уже не дождётся. Отвергаем сразу:
-    // иначе ждущий снимок висел бы до COMMAND_TIMEOUT_MS, показывая пустой экран.
-    while (this.pending.length > 0 && this.pending[0].id < id) {
-      const missed = this.pending.shift();
-      if (missed) this.settle(missed, new Error(`command ${missed.id} overtaken by block ${id}`), []);
-    }
-    const head = this.pending[0];
-    if (head === undefined || head.id !== id) {
+    this.greeted = true;
+    const head = this.pending.shift();
+    if (head === undefined) {
       // Отказ, которого никто не ждал, до выбора режима — доказательство, что control
       // mode тут не работает; после выбора терминал остаётся живым.
       if (failed && this.mode === undefined) this.fallback(`control stream error: ${lines.join(' ')}`);
       return;
     }
-    this.pending.shift();
-    this.settle(head, failed ? new Error(lines.join(' ')) : undefined, lines);
+    this.settle(head, failed ? new Error(`block ${id}: ${lines.join(' ')}`) : undefined, lines);
   }
 
   /** Снимает команду с очереди. Глушение вывода отпускается здесь, в момент разбора
@@ -325,7 +323,7 @@ class SessionLink implements Link {
   /** Init уходит, только когда известен номер следующего блока: до этого ответ не с чем
    *  сопоставить. Если номера так и не будет, сработает двухсекундный срок готовности. */
   private maybeInit(): void {
-    if (this.initStarted || !this.protocolSeen || this.nextBlockId === undefined) return;
+    if (this.initStarted || !this.protocolSeen || !this.greeted) return;
     if (this.disposed || this.mode === 'attach') return;
     this.initStarted = true;
     // Размер уходит первым: снимок, который вызывающий возьмёт сразу после готовности,
@@ -445,25 +443,24 @@ class SessionLink implements Link {
     return new Promise<string[]>((resolve, reject) => {
       // Команда tmux имеет смысл только в control mode: в attach тот же текст ушёл бы
       // в сессию нажатиями клавиш.
-      if (this.disposed || this.mode === 'attach' || this.nextBlockId === undefined) {
+      if (this.disposed || this.mode === 'attach' || !this.greeted) {
         const reason = this.disposed
           ? 'link disposed'
           : this.mode === 'attach'
             ? 'link runs in attach mode'
-            : 'control client has no block number yet';
+            : 'control client has not greeted yet';
         reject(new Error(reason));
         return;
       }
-      const id = this.nextBlockId;
-      this.nextBlockId = id + 1;
+      const label = line.split(' ')[0];
       const entry: Pending = {
-        id,
+        label,
         capture,
         timer: setTimeout((): void => {
           const at = this.pending.indexOf(entry);
           if (at === -1) return;
           this.pending.splice(at, 1);
-          this.settle(entry, new Error(`no answer to command ${id} in ${COMMAND_TIMEOUT_MS} ms`), []);
+          this.settle(entry, new Error(`no answer to ${label} in ${COMMAND_TIMEOUT_MS} ms`), []);
         }, COMMAND_TIMEOUT_MS),
         resolve,
         reject,
@@ -534,8 +531,8 @@ class SessionLink implements Link {
       this.child.resize(this.cols, this.rows);
       return;
     }
-    // До первого блока команду слать нечем: размер уйдёт вместе с init.
-    if (this.nextBlockId !== undefined) {
+    // До приветственного блока команду слать нельзя: размер уйдёт вместе с init.
+    if (this.greeted) {
       this.command(`refresh-client -C ${this.cols}x${this.rows}`).catch((err: Error): void =>
         this.log(`session ${this.session}: resize failed (${err.message})`),
       );
