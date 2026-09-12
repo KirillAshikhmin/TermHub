@@ -140,6 +140,11 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - `packages/protocol/test/`, `packages/agent/test/`, `packages/relay/test/`, `packages/web/test/` — Vitest по пакетам.
 - `docs/` — эксплуатация, безопасность и ADR; `README.md` — пользовательский обзор.
 
+## Решения и дорожная карта
+
+- `docs/terminal-and-agents.ru.md` — разбор задачи «свой терминал и работа с агентами»: что измерено, шесть вердиктов и дорожная карта из девяти этапов (control mode → история → возобновление → эхо → одна полоса ввода → ответы кнопками → редактор промпта → дашборд → жесты).
+- `docs/adr/0013`–`0018` — принятые решения и отвергнутые варианты: ядро xterm остаётся, `tmux -CC` вместо `attach`, mosh как транспорт отвергнут (взяты три идеи его протокола), история на устройстве с лимитом и без шифрования, рамка агента скрывается обратимо, совместимость агента и PWA — через объявление возможностей.
+
 ## Подводные камни
 
 - Web-сборка запускает Vite без `tsc`; после правок `packages/web/src/` обязательна отдельная команда typecheck выше.
@@ -149,6 +154,10 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - `open-host` принимает только обычный файл внутри root после `realpath`, затем вызывает `open`/`xdg-open` отдельным argv с `shell: false`; побег, unsupported OS, spawn error и non-zero exit отклоняются.
 - LAN `open-host` проходит cookie-auth и Origin-check; relay требует `scope.write` и shared-session path, а UI скрывает кнопку у read-only гостя и блокирует её на время запроса.
 - При mouse tracking Codex обычный drag остаётся у TUI, а macOS Option+drag создаёт xterm selection и автокопирует его на mouseup; snapshot живёт до нового mousedown, `Ctrl+C` без selection уходит в TUI.
+- Замер на живом tmux 3.7b 12.09.2026: `tmux attach` первым байтом шлёт `ESC[?1049h` и держит клиента в alt-screen до detach, поэтому локального scrollback в таком подключении нет.
+- `tmux -CC` (control mode) alt-screen не шлёт и статусную строку клиенту не отдаёт; подключение стоит 83 байта без перерисовки экрана.
+- Из control mode ввод идёт через `send-keys -H`, размер окна — `refresh-client -C` (держится после ухода клиента), история панели — `capture-pane -p -e -S -`, около 89 байт на строку.
+- Второй alt-screen приходит от приложения в панели, а не от tmux: `vim` уходит в alt-screen, Claude Code и Codex работают inline (`alternate_on=0`).
 
 ## Как здесь работает Autopilot
 
