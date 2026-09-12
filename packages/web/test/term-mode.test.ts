@@ -66,6 +66,27 @@ describe('пометка альтернативного экрана', () => {
     expect(modeBtn(root).textContent).toBe(t('term.modeControl')); // кадр без режима его не стёр
     handle.teardown();
   });
+
+  it('гаснет на каждом подключении канала: пережить его она не вправе', () => {
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onStatus('connected');
+    opened[0]!.opts.onTerminalState!({ altScreen: true });
+    expect(altBadge(root).hidden).toBe(false);
+
+    // Связь оборвалась и поднялась заново — за ней у агента новый терминал, и что в нём
+    // на экране, известно только из нового кадра.
+    opened[0]!.opts.onStatus('reconnecting');
+    opened[0]!.opts.onStatus('connected');
+
+    expect(altBadge(root).hidden).toBe(true); // прошлое «включён» с подключением не переехало
+    opened[0]!.opts.onTerminalState!({ mode: 'control' }); // кадр без altScreen её не зажигает
+    expect(altBadge(root).hidden).toBe(true);
+
+    opened[0]!.opts.onTerminalState!({ altScreen: true }); // зажечь вправе только новый кадр
+    expect(altBadge(root).hidden).toBe(false);
+    handle.teardown();
+  });
 });
 
 describe('переключатель способа подключения', () => {
@@ -129,6 +150,26 @@ describe('переключатель способа подключения', () 
 
     expect(modeBtn(root).classList.contains('is-pending')).toBe(false);
     expect(modeBtn(root).classList.contains('is-overridden')).toBe(true); // расхождение никуда не делось
+    handle.teardown();
+  });
+
+  it('переподключение стирает показанный режим: он тоже приходит кадром', () => {
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onStatus('connected');
+    opened[0]!.opts.onTerminalState!({ mode: 'attach' });
+    expect(modeBtn(root).textContent).toBe(t('term.modeAttach'));
+    expect(modeBtn(root).classList.contains('is-overridden')).toBe(true);
+
+    opened[0]!.opts.onStatus('reconnecting');
+    opened[0]!.opts.onStatus('connected'); // просьба уехала заново, ответа на неё ещё нет
+
+    expect(modeBtn(root).textContent).toBe('—'); // для этого подключения агент режим не называл
+    expect(modeBtn(root).classList.contains('is-overridden')).toBe(false); // расхождение — из прошлого
+
+    opened[0]!.opts.onTerminalState!({ mode: 'attach' }); // назвал — тогда и показываем
+    expect(modeBtn(root).textContent).toBe(t('term.modeAttach'));
+    expect(modeBtn(root).classList.contains('is-overridden')).toBe(true);
     handle.teardown();
   });
 

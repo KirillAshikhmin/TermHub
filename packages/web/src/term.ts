@@ -255,6 +255,16 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     modeBtn.setAttribute('aria-label', label);
   };
   syncMode();
+  // Пометка экрана и показанный режим живут ровно одним подключением: оба знает только
+  // агент и оба приходят кадром состояния. Пережить смену канала им нельзя — иначе
+  // «включён» от терминала, открытого до перезапуска агента, горит над новой сессией,
+  // которой оно не касается. Поэтому каждое подключение начинает с «агент ещё ничего
+  // не называл», а зажечь пометку и назвать режим вправе только пришедший следом кадр.
+  const forgetAgentState = (): void => {
+    altBadge.hidden = true;
+    activeMode = undefined;
+    syncMode();
+  };
   modeBtn.addEventListener('click', () => {
     requestedMode = otherTerminalMode(requestedMode);
     setTerminalModeRequest(requestedMode);
@@ -595,6 +605,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       setDot(state);
       connected = state === 'connected';
       if (state === 'connected') {
+        // Новое подключение — новый терминал у агента: всё, что он называл прошлому,
+        // здесь недействительно (см. forgetAgentState).
+        forgetAgentState();
         banner.classList.remove('is-shown');
         doFit();
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.
