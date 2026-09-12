@@ -24,9 +24,11 @@ import {
   type SessionInfo,
   type FileEntry,
   type FileContent,
+  type TerminalMode,
 } from '@termhub/protocol';
 
 import { b64, unb64 } from './b64';
+import { parseTerminalState } from './ws-frames';
 import type { CaffeinateState, DeviceInfo, DeviceScope, FileStat, ShareInfo } from './api';
 import type {
   CreateSessionInput,
@@ -69,6 +71,12 @@ interface TermEntry {
   opts: TermChannelOpts;
   /** true после OPEN_OK; сбрасывается на реконнекте (пере-OPEN). */
   opened: boolean;
+}
+
+/** Полезная нагрузка OPEN. Просьба о режиме едет именно здесь: терминал relay
+ *  создаётся на OPEN, и к первому RESIZE решение агентом уже принято. */
+function openPayload(entry: TermEntry): { session: string; mode?: TerminalMode } {
+  return entry.opts.mode ? { session: entry.session, mode: entry.opts.mode } : { session: entry.session };
 }
 
 /** Ожидающий LIST_RESULT (FIFO — за раз в полёте обычно один). */
@@ -451,7 +459,7 @@ export class RelayTransport implements Transport {
   private onStreamReady(): void {
     for (const entry of this.terminals.values()) {
       entry.opened = false;
-      this.sendEncrypted(jsonFrame(FrameType.Open, entry.channel, { session: entry.session }));
+      this.sendEncrypted(jsonFrame(FrameType.Open, entry.channel, openPayload(entry)));
     }
     const queued = this.outbox;
     this.outbox = [];
@@ -697,6 +705,10 @@ export class RelayTransport implements Transport {
       }
       case FrameType.Bell: {
         this.terminals.get(frame.channel)?.opts.onBell();
+        return;
+      }
+      case FrameType.TerminalState: {
+        this.terminals.get(frame.channel)?.opts.onTerminalState?.(parseTerminalState(frame));
         return;
       }
       case FrameType.Close: {
@@ -1165,7 +1177,7 @@ export class RelayTransport implements Transport {
     this.terminals.set(channel, entry);
     // OPEN шлём сразу только если поток уже установлен; иначе терминал откроет
     // onStreamReady — так закрытие до установления потока не оставит «висячий» OPEN.
-    if (this.state === 'streaming') this.sendEncrypted(jsonFrame(FrameType.Open, channel, { session }));
+    if (this.state === 'streaming') this.sendEncrypted(jsonFrame(FrameType.Open, channel, openPayload(entry)));
     return {
       write: (bytes: Uint8Array): void => this.sendFrame(encodeFrame({ type: FrameType.Data, channel, payload: bytes })),
       resize: (cols: number, rows: number): void => this.sendFrame(jsonFrame(FrameType.Resize, channel, { cols, rows })),

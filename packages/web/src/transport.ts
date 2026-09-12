@@ -3,14 +3,14 @@
 // WS-соединение с мультиплексом терминалов, remote.ts, грузится лениво). Крипто
 // сюда НЕ импортируется, чтобы LAN-бандл не тянул libsodium.
 
-import type { FileContent, FileEntry, SessionInfo } from '@termhub/protocol/frames';
+import type { FileContent, FileEntry, SessionInfo, TerminalMode, TerminalState } from '@termhub/protocol/frames';
 
 import { api } from './api';
 import type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileStat, ShareInfo } from './api';
-import { dataFrame, decodeFrame, FrameType, parseError, resizeFrame } from './ws-frames';
+import { dataFrame, decodeFrame, FrameType, parseError, parseTerminalState, resizeFrame } from './ws-frames';
 
 export type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileStat, ShareInfo };
-export type { FileContent, FileEntry };
+export type { FileContent, FileEntry, TerminalMode, TerminalState };
 
 /** Состояние соединения одного терминала — управляет индикатором/баннером. */
 export type TermConnState = 'connected' | 'reconnecting' | 'closed';
@@ -25,6 +25,11 @@ export interface TermEndReason {
 export interface TermChannelOpts {
   cols: number;
   rows: number;
+  /** Просьба о способе подключения. Едет первым кадром, которым клиент открывает
+   *  терминал (LAN — RESIZE, relay — OPEN), и снимается один раз на открытие: смена
+   *  настройки не трогает живой терминал. Настройка агента старше просьбы, поэтому
+   *  работающий режим — только тот, что пришёл в `onTerminalState`. */
+  mode?: TerminalMode;
   /** Сырые байты вывода pty. */
   onData(bytes: Uint8Array): void;
   /** Звонок (BELL) от сессии. */
@@ -33,6 +38,9 @@ export interface TermChannelOpts {
   onEnd(reason: TermEndReason): void;
   /** Смена состояния соединения (для индикатора/баннера). */
   onStatus(state: TermConnState): void;
+  /** Состояние терминала на агенте: выбранный режим и альтернативный экран.
+   *  Поля независимы — обновлять только пришедшие. */
+  onTerminalState?(state: TerminalState): void;
 }
 
 /** Дуплекс терминала: ввод/ресайз/закрытие. */
@@ -119,6 +127,9 @@ class LanTermChannel implements TermChannel {
   private attempt = 0;
   private disposed = false;
   private ended = false;
+  /** Просьба о режиме ещё не ушла на этом соединении. Каждое подключение создаёт
+   *  агенту новый терминал, поэтому просьба повторяется после каждого реконнекта. */
+  private modePending = false;
   private readonly url: string;
 
   constructor(
@@ -167,6 +178,7 @@ class LanTermChannel implements TermChannel {
   private connect(): void {
     if (this.disposed) return;
     this.dropStaleSocket();
+    this.modePending = !!this.opts.mode;
     const sock = new WebSocket(this.url);
     sock.binaryType = 'arraybuffer';
     this.ws = sock;
@@ -194,6 +206,7 @@ class LanTermChannel implements TermChannel {
       }
       if (frame.type === FrameType.Data) this.opts.onData(frame.payload);
       else if (frame.type === FrameType.Bell) this.opts.onBell();
+      else if (frame.type === FrameType.TerminalState) this.opts.onTerminalState?.(parseTerminalState(frame));
       else if (frame.type === FrameType.Close) this.finish({ kind: 'ended' });
       else if (frame.type === FrameType.Error) {
         const { code, message } = parseError(frame);
@@ -236,7 +249,10 @@ class LanTermChannel implements TermChannel {
   }
 
   resize(cols: number, rows: number): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(resizeFrame(cols, rows));
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const mode = this.modePending ? this.opts.mode : undefined;
+    this.modePending = false;
+    this.ws.send(resizeFrame(cols, rows, mode));
   }
 
   close(): void {

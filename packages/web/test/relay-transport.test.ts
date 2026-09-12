@@ -94,8 +94,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function noopOpts(): TermChannelOpts {
-  return { cols: 80, rows: 24, onData: () => {}, onBell: () => {}, onEnd: () => {}, onStatus: () => {} };
+function noopOpts(extra: Partial<TermChannelOpts> = {}): TermChannelOpts {
+  return { cols: 80, rows: 24, onData: () => {}, onBell: () => {}, onEnd: () => {}, onStatus: () => {}, ...extra };
 }
 
 function makeTransport(clientIdentity: Identity, agentIdentity: Identity): RelayTransport {
@@ -322,26 +322,93 @@ describe('RelayTransport — list() пока поток не установле�
   });
 });
 
+/** Хендшейк на уже созданном сокете (первое подключение или реконнект): средства
+ *  «агента» для ответов и индекс первого ЗАШИФРОВАННОГО кадра клиента в ws.sent. */
+function restream(
+  ws: FakeWebSocket,
+  agentIdentity: Identity,
+): {
+  agentEnc: ReturnType<typeof makeEncryptor>;
+  agentDec: ReturnType<typeof makeDecryptor>;
+  firstEncrypted: number;
+} {
+  const hello = driveToHelloSent(ws);
+  const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
+  const agentEnc = makeEncryptor(tx);
+  const before = ws.sent.length;
+  ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, hello.nonce));
+  const fin = JSON.parse(td.decode(decodeFrame(ws.sent[before] as Uint8Array).payload)) as { header: string };
+  return { agentEnc, agentDec: makeDecryptor(rx, unb64(fin.header)), firstEncrypted: before + 1 };
+}
+
+/** Доводит новый транспорт до streaming и возвращает средства «агента» для ответов. */
+function streaming(): {
+  transport: RelayTransport;
+  ws: FakeWebSocket;
+  agentIdentity: Identity;
+  agentEnc: ReturnType<typeof makeEncryptor>;
+  agentDec: ReturnType<typeof makeDecryptor>;
+  firstEncrypted: number;
+} {
+  const clientIdentity = generateIdentity();
+  const agentIdentity = generateIdentity();
+  const transport = makeTransport(clientIdentity, agentIdentity);
+  const ws = sockets[0]!;
+  return { transport, ws, agentIdentity, ...restream(ws, agentIdentity) };
+}
+
+describe('RelayTransport — способ подключения терминала', () => {
+  it('OPEN несёт просьбу о режиме: терминал relay создаётся на OPEN, к RESIZE решение уже принято', () => {
+    const { transport, ws, agentDec, firstEncrypted } = streaming();
+
+    transport.openTerm('work', noopOpts({ mode: 'attach' }));
+
+    const open = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(open.type).toBe(FrameType.Open);
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work', mode: 'attach' });
+  });
+
+  it('без просьбы OPEN прежней формы — {session}', () => {
+    const { transport, ws, agentDec, firstEncrypted } = streaming();
+
+    transport.openTerm('work', noopOpts());
+
+    const open = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work' });
+  });
+
+  it('после обрыва re-OPEN снова несёт просьбу: агент выбирает режим заново на каждое открытие', () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentIdentity } = streaming();
+    transport.openTerm('work', noopOpts({ mode: 'attach' }));
+
+    ws.close();
+    vi.advanceTimersByTime(1000); // backoff реконнекта
+    expect(sockets).toHaveLength(2);
+    const ws2 = sockets[1]!;
+    const again = restream(ws2, agentIdentity);
+
+    const open = decodeFrame(again.agentDec.pull(ws2.sent[again.firstEncrypted] as Uint8Array));
+    expect(open.type).toBe(FrameType.Open);
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work', mode: 'attach' });
+  });
+
+  it('кадр состояния терминала доходит до своего канала, а не до соседнего', () => {
+    const { transport, ws, agentEnc, agentDec, firstEncrypted } = streaming();
+    const work: unknown[] = [];
+    const play: unknown[] = [];
+    transport.openTerm('work', noopOpts({ onTerminalState: (s) => work.push(s) }));
+    transport.openTerm('play', noopOpts({ onTerminalState: (s) => play.push(s) }));
+    const workChannel = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array)).channel;
+
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.TerminalState, workChannel, { mode: 'control', altScreen: true })));
+
+    expect(work).toEqual([{ mode: 'control', altScreen: true }]);
+    expect(play).toEqual([]);
+  });
+});
+
 describe('RelayTransport — сопоставление ответов по id, а не по порядку', () => {
-  /** Доводит до streaming и возвращает средства «агента» для ответов. */
-  function streaming(): {
-    transport: RelayTransport;
-    ws: FakeWebSocket;
-    agentEnc: ReturnType<typeof makeEncryptor>;
-    agentDec: ReturnType<typeof makeDecryptor>;
-  } {
-    const clientIdentity = generateIdentity();
-    const agentIdentity = generateIdentity();
-    const transport = makeTransport(clientIdentity, agentIdentity);
-    const ws = sockets[0]!;
-    const hello = driveToHelloSent(ws);
-    const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
-    const agentEnc = makeEncryptor(tx);
-    const before = ws.sent.length;
-    ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, hello.nonce));
-    const fin = JSON.parse(td.decode(decodeFrame(ws.sent[before] as Uint8Array).payload)) as { header: string };
-    return { transport, ws, agentEnc, agentDec: makeDecryptor(rx, unb64(fin.header)) };
-  }
 
   /** Расшифровывает запросы, отправленные клиентом после хендшейка. */
   function sentRequests(ws: FakeWebSocket, agentDec: ReturnType<typeof makeDecryptor>, fromIdx: number): Array<Record<string, unknown>> {

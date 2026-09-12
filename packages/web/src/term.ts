@@ -21,6 +21,13 @@ import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
 import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
+import {
+  noteTerminalMode,
+  otherTerminalMode,
+  setTerminalModeRequest,
+  terminalModeName,
+  terminalModeRequest,
+} from './term-mode';
 import { markBellSeen, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { detectPaths, filePathParts, parentRel } from './termlinks';
@@ -30,7 +37,7 @@ import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
 import { currentTheme } from './theme';
-import type { TermChannel, TermConnState, Transport } from './transport';
+import type { TerminalMode, TermChannel, TermConnState, Transport } from './transport';
 import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
 const FONT_MIN = 10;
@@ -202,10 +209,63 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     if (name === session) location.hash = neighbor ? termHash(neighbor) : '#/';
     else await tabs.refresh();
   }
+  // ── Способ подключения и пометка альтернативного экрана ──────────────
+  // Режим выбирает агент (его настройка старше просьбы клиента), поэтому чип
+  // показывает то, что пришло кадром состояния, а переключатель меняет просьбу
+  // для СЛЕДУЮЩЕГО открытия терминала — живой терминал остаётся в своём режиме.
+  // Просьба, с которой открыт ЭТОТ терминал (уезжает в кадр открытия ниже), и просьба,
+  // выбранная переключателем сейчас: расходятся ровно тогда, когда переключили уже после
+  // открытия — тогда просьба ждёт следующего.
+  const openedMode: TerminalMode = terminalModeRequest();
+  let requestedMode: TerminalMode = openedMode;
+  let activeMode: TerminalMode | undefined;
+
+  const altBadge = document.createElement('button');
+  altBadge.type = 'button';
+  altBadge.className = 'th-termbar__alt';
+  altBadge.hidden = true;
+  altBadge.textContent = t('term.altScreen');
+  altBadge.title = t('term.altScreenHint');
+  altBadge.setAttribute('aria-label', `${t('term.altScreen')}: ${t('term.altScreenHint')}`);
+  // На телефоне подсказки по наведению нет, а объяснение — половина смысла пометки:
+  // по нажатию говорим, почему история в этом приложении не листается.
+  altBadge.addEventListener('click', () => toast(t('term.altScreenHint')));
+
+  const modeBtn = document.createElement('button');
+  modeBtn.type = 'button';
+  modeBtn.className = 'th-termbar__mode';
+  const syncMode = (): void => {
+    modeBtn.textContent = activeMode ? terminalModeName(activeMode) : '—';
+    // Просьбу переключили после открытия — она уедет только в следующий терминал.
+    // Совпала с работающим режимом (агент уже подключил так) — обещать нечего.
+    const awaitsOpen = requestedMode !== openedMode && requestedMode !== activeMode;
+    // Агент ответил не тем, что просили: его настройка старше просьбы, плюс возможен
+    // откат на attach. Просьба уже уехала, ждать её нечего — но расхождение видно.
+    const overridden = activeMode !== undefined && activeMode !== openedMode;
+    modeBtn.classList.toggle('is-pending', awaitsOpen);
+    modeBtn.classList.toggle('is-overridden', overridden);
+    const parts = [
+      activeMode ? t('term.modeActive', { mode: terminalModeName(activeMode) }) : t('term.modeUnknown'),
+    ];
+    if (overridden) parts.push(t('term.modeOverridden', { mode: terminalModeName(openedMode) }));
+    if (awaitsOpen) parts.push(t('term.modeNext', { mode: terminalModeName(requestedMode) }));
+    parts.push(t('term.modeSwitch'));
+    const label = parts.join(' · ');
+    modeBtn.title = label;
+    modeBtn.setAttribute('aria-label', label);
+  };
+  syncMode();
+  modeBtn.addEventListener('click', () => {
+    requestedMode = otherTerminalMode(requestedMode);
+    setTerminalModeRequest(requestedMode);
+    syncMode();
+    toast(t('term.modeNext', { mode: terminalModeName(requestedMode) }));
+  });
+
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
   dot.setAttribute('role', 'status');
-  bar.append(tabs.el, dot);
+  bar.append(tabs.el, altBadge, modeBtn, dot);
   screen.append(bar);
 
   // Баннер переподключения (скрыт, пока соединение живо).
@@ -238,10 +298,10 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     fontSize,
     theme: xtermTheme(),
     cursorBlink: true,
-    // Локальный scrollback почти не задействован: `tmux attach` держит терминал в
-    // alt-screen (ESC[?1049h) всё время сессии, а у alt-буфера истории нет — прокрутка
-    // идёт через copy-mode самого tmux. Держим умеренное значение для случаев, когда
-    // терминал всё же в обычном буфере (до attach, после detach).
+    // В control mode локальный scrollback — основной путь: tmux не держит терминал в
+    // alt-screen, вывод ложится в обычный буфер, и история листается без сети. При
+    // откате на `tmux attach` (и в приложениях, ушедших в alt-screen) прокрутка снова
+    // идёт через copy-mode самого tmux — тач-скролл выбирает путь по активному буферу.
     scrollback: 5000,
     macOptionIsMeta: true,
     // Codex включает mouse tracking, поэтому обычный drag должен оставаться у TUI.
@@ -515,8 +575,21 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   channel = transport.openTerm(session, {
     cols: term.cols,
     rows: term.rows,
+    // Снимок просьбы на момент открытия: переключатель после этого меняет только
+    // то, что уедет в следующий терминал.
+    mode: openedMode,
     onData: (bytes) => term.write(bytes),
     onBell: () => playBell(),
+    onTerminalState: (state) => {
+      if (disposed) return;
+      // Поля независимы: пришло одно — второе не трогаем.
+      if (state.mode) {
+        activeMode = state.mode;
+        noteTerminalMode(state.mode);
+        syncMode();
+      }
+      if (state.altScreen !== undefined) altBadge.hidden = !state.altScreen;
+    },
     onStatus: (state) => {
       if (disposed) return;
       setDot(state);
