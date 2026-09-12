@@ -83,6 +83,13 @@ function isNoServerError(err: unknown): boolean {
   return e.code === 1 && /no server running|error connecting|no such file or directory/i.test(stderr);
 }
 
+/** Выключение альтернативного экрана на сокете агента. У альтернативного буфера истории
+ *  не бывает по стандарту, поэтому панель, уведённая туда приложением (Claude Code), остаётся
+ *  и без прокрутки, и без вывода, накопленного до запуска. Опция глобальная и живёт ровно
+ *  столько, сколько живёт сервер tmux: ставится на старте агента, первой create() и заново
+ *  на каждом следующем сервере (см. disableAlternateScreen и serverGone). */
+const ALT_SCREEN_OFF = ['set-option', '-g', 'alternate-screen', 'off'];
+
 /** Сырой формат «только имя» — для подбора свободного имени (см. takenNames). */
 const NAME_ONLY_FORMAT = '#{session_name}';
 /** Сколько раз create с autoName переигрывает «duplicate session» от tmux (гонка двух создающих). */
@@ -154,6 +161,9 @@ export class SessionService {
   /** Последняя задача сессии (текст из брайлевого заголовка) — для тела пуша. */
   private readonly lastTask = new Map<string, string>();
   private timer?: ReturnType<typeof setInterval>;
+  /** ALT_SCREEN_OFF ещё не лёг на текущий сервер сокета: взводится обратно, как только
+   *  tmux ответил «нет сервера» (см. disableAlternateScreen и serverGone). */
+  private altScreenPending = true;
 
   constructor(opts: { roots: string[]; socketName?: string }) {
     this.roots = opts.roots;
@@ -175,19 +185,51 @@ export class SessionService {
     });
   }
 
+  /** Выключает альтернативный экран на сокете агента — один раз на каждый сервер tmux.
+   *  Только на своём сокете: без -L это был бы дефолтный сервер владельца со своим
+   *  ~/.tmux.conf, туда не лезем. Сервера может ещё не быть (tmux не держит его без
+   *  сессий) — это штатно, опция уедет тем же вызовом, что создаст первую сессию
+   *  (см. create). Ничего не бросает: без неё терминал работает, просто без истории. */
+  async disableAlternateScreen(): Promise<void> {
+    if (!this.altScreenPending || this.socketName === undefined) return;
+    try {
+      await this.tmux(ALT_SCREEN_OFF);
+    } catch (err) {
+      if (!this.serverGone(err)) console.warn('[sessions] alternate-screen off failed:', err);
+      return;
+    }
+    this.markAltScreenOff();
+  }
+
+  /** «Нет сервера» в ответе tmux — и одновременно взвод защёлки опции: сервер умирает
+   *  вместе с последней сессией и уносит глобальную опцию с собой, а поднять его могут
+   *  и мимо агента (алиас `tm` в терминале). Значит следующий сервер — новый, и
+   *  alternate-screen off на нём надо ставить заново. */
+  private serverGone(err: unknown): boolean {
+    if (!isNoServerError(err)) return false;
+    this.altScreenPending = true;
+    return true;
+  }
+
+  /** Единственное место, где опция считается выставленной, — отсюда же строка в лог. */
+  private markAltScreenOff(): void {
+    this.altScreenPending = false;
+    console.log(`[sessions] alternate-screen off on socket ${this.socketName}`);
+  }
+
   async list(): Promise<SessionInfo[]> {
     let sessionsOut: string;
     try {
       sessionsOut = await this.tmux(['list-sessions', '-F', SESSION_FORMAT]);
     } catch (err) {
-      if (isNoServerError(err)) return [];
+      if (this.serverGone(err)) return [];
       throw err;
     }
     let panesOut = '';
     try {
       panesOut = await this.tmux(['list-panes', '-a', '-F', PANE_FORMAT]);
     } catch (err) {
-      if (!isNoServerError(err)) throw err;
+      if (!this.serverGone(err)) throw err;
     }
     // Сборочные сессии Gradle наружу не отдаём: иначе они полезли бы в дашборд,
     // в полосу вкладок и в поллинг звонков. Attach на них при этом работает —
@@ -202,7 +244,7 @@ export class SessionService {
     try {
       return new Set(nonEmptyLines(await this.tmux(['list-sessions', '-F', NAME_ONLY_FORMAT])));
     } catch (err) {
-      if (isNoServerError(err)) return new Set();
+      if (this.serverGone(err)) return new Set();
       throw err;
     }
   }
@@ -238,7 +280,7 @@ export class SessionService {
     // Пресет уже сверен с whitelist выше, поэтому произвольная команда сюда не пройдёт.
     // Codex overrides передаются как argv конкретного процесса: shell нет,
     // глобальный ~/.codex/config.toml не читается и не изменяется.
-    const newSession = (name: string) => {
+    const newSession = async (name: string): Promise<void> => {
       const args = ['new-session', '-d', '-s', name, '-c', dirPath];
       if (req.preset === 'claude') args.push('claude');
       if (req.preset === 'codex') {
@@ -251,7 +293,13 @@ export class SessionService {
           '--no-alt-screen',
         );
       }
-      return this.tmux(args);
+      // Опция ещё не легла — значит, на старте агента сервера не было. Ставим её тем же
+      // вызовом tmux ПЕРЕД new-session (сервер поднимет она же): отдельный вызов после
+      // опоздает — приложение панели успеет уйти в альтернативный экран. «;» — разделитель
+      // команд самого tmux, отдельным аргументом argv: shell тут нет (execFile).
+      const withOption = this.altScreenPending && this.socketName !== undefined;
+      await this.tmux(withOption ? [...ALT_SCREEN_OFF, ';', ...args] : args);
+      if (withOption) this.markAltScreenOff();
     };
 
     if (!req.autoName) {
@@ -338,6 +386,10 @@ export class SessionService {
     } catch {
       return;
     }
+    // Сервер могли поднять мимо агента (алиас `tm` в терминале) — уже с разрешённым
+    // альтернативным экраном. Ставим опцию, как только видим живые сессии: пока защёлка
+    // опущена, вызов пустой, а пока сервера нет — сессий не видно и дёргать tmux незачем.
+    if (sessions.length > 0) await this.disableAlternateScreen();
     const seen = new Set<string>();
     for (const s of sessions) {
       seen.add(s.name);

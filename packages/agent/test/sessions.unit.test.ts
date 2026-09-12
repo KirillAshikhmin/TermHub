@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -196,6 +196,9 @@ describe('SessionService.create — валидация', () => {
 
   it('preset zsh → new-session без команды; -c указывает на каталог', async () => {
     const svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    // Опция alternate-screen уже легла на старте агента — create её не повторяет
+    // (первый create при мёртвом сервере несёт её сам: см. describe ниже).
+    await svc.disableAlternateScreen();
     await svc.create({ name: 'main', root, dir: 'projectA', preset: 'zsh' });
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
     expect(args).toEqual([
@@ -242,6 +245,135 @@ describe('SessionService.create — валидация', () => {
     const svc = new SessionService({ roots: [root] });
     await expect(svc.rename('bad name!', 'ok')).rejects.toThrow(/name/i);
     await expect(svc.rename('ok', 'a.b')).rejects.toThrow(/name/i);
+  });
+});
+
+describe('SessionService.disableAlternateScreen — старт агента', () => {
+  const NO_SERVER = {
+    err: Object.assign(new Error('exit 1'), { code: 1 }),
+    stderr: 'error connecting to /tmp/tmux-501/termhub (No such file or directory)\n',
+  };
+  let root: string;
+  let log: MockInstance<typeof console.log>;
+
+  /** Сколько раз опцию реально ставили (её вызов узнаётся по set-option в argv). */
+  function setOptionCalls(): number {
+    return mockExecFile.mock.calls.filter((c) => (c[1] as string[]).includes('set-option')).length;
+  }
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-alt-'));
+    fs.mkdirSync(path.join(root, 'projectA'));
+    log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    log.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('живой сервер → set-option -g alternate-screen off на своём сокете, одна строка в лог', async () => {
+    stubTmux(() => ({}));
+    const svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    await svc.disableAlternateScreen();
+    expect(mockExecFile.mock.calls.at(-1)![1]).toEqual([
+      '-L', 'termhub-test-u', 'set-option', '-g', 'alternate-screen', 'off',
+    ]);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]![0]).toContain('termhub-test-u');
+
+    // Один раз на сервер: повторный вызов tmux уже не дёргает.
+    await svc.disableAlternateScreen();
+    expect(setOptionCalls()).toBe(1);
+  });
+
+  it('сервер умер и поднялся заново → опция ставится по новой (её поднимают и мимо агента)', async () => {
+    let alive = true;
+    stubTmux((args) => {
+      if (args.includes('list-sessions')) return alive ? { stdout: 'tm\t/p\t1\t0\ttm\n' } : NO_SERVER;
+      if (args.includes('list-panes')) return alive ? { stdout: 'tm\tzsh\t0\n' } : NO_SERVER;
+      return {};
+    });
+    const svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    await svc.disableAlternateScreen();
+    expect(setOptionCalls()).toBe(1);
+
+    vi.useFakeTimers();
+    svc.startPolling();
+    // Последняя сессия закрылась — сервер ушёл и унёс глобальную опцию. Агент видит это по
+    // ответу tmux; ставить её сейчас не на что, лишнего вызова поллинг не делает.
+    alive = false;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(setOptionCalls()).toBe(1);
+
+    // Новый сервер поднял владелец алиасом `tm` — поллинг увидел живую сессию и поставил опцию.
+    alive = true;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(setOptionCalls()).toBe(2);
+    svc.stopPolling();
+  });
+
+  it('сервер всё время жив → ни одного лишнего вызова tmux', async () => {
+    stubTmux((args) => {
+      if (args.includes('list-sessions')) return { stdout: 'tm\t/p\t1\t0\ttm\n' };
+      if (args.includes('list-panes')) return { stdout: 'tm\tzsh\t0\n' };
+      return {};
+    });
+    const svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    await svc.disableAlternateScreen();
+    vi.useFakeTimers();
+    svc.startPolling();
+    await vi.advanceTimersByTimeAsync(6000); // три цикла поллинга
+    svc.stopPolling();
+    vi.useRealTimers();
+    await svc.create({ name: 'main', root, dir: 'projectA', preset: 'zsh' });
+    expect(setOptionCalls()).toBe(1);
+    expect(mockExecFile.mock.calls.at(-1)![1]).toEqual([
+      '-L', 'termhub-test-u', 'new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'),
+    ]);
+  });
+
+  it('сервера нет → без исключения и без лога; опцию несёт первый create, вторую сессию — нет', async () => {
+    stubTmux((args) => (args.includes('new-session') ? {} : NO_SERVER));
+    const svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    await expect(svc.disableAlternateScreen()).resolves.toBeUndefined();
+    expect(log).not.toHaveBeenCalled();
+
+    // Опция уходит тем же вызовом tmux и ДО new-session: сервер поднимает она же,
+    // а отдельный вызов после неё опоздал бы к запуску приложения в панели.
+    await svc.create({ name: 'main', root, dir: 'projectA', preset: 'claude' });
+    expect(mockExecFile.mock.calls.at(-1)![1]).toEqual([
+      '-L', 'termhub-test-u',
+      'set-option', '-g', 'alternate-screen', 'off', ';',
+      'new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'claude',
+    ]);
+    expect(log).toHaveBeenCalledTimes(1);
+
+    await svc.create({ name: 'second', root, dir: 'projectA', preset: 'zsh' });
+    expect(mockExecFile.mock.calls.at(-1)![1]).toEqual([
+      '-L', 'termhub-test-u', 'new-session', '-d', '-s', 'second', '-c', path.join(root, 'projectA'),
+    ]);
+  });
+
+  it('без своего сокета (дефолтный сервер владельца) tmux не вызывается вовсе', async () => {
+    stubTmux(() => ({}));
+    const svc = new SessionService({ roots: [root] });
+    await svc.disableAlternateScreen();
+    expect(mockExecFile).not.toHaveBeenCalled();
+    await svc.create({ name: 'main', root, dir: 'projectA', preset: 'zsh' });
+    expect(mockExecFile.mock.calls.at(-1)![1]).toEqual([
+      'new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'),
+    ]);
+  });
+
+  it('иная ошибка tmux не роняет старт агента (предупреждение в лог)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    stubTmux(() => ({ err: Object.assign(new Error('boom'), { code: 1 }), stderr: 'unknown option\n' }));
+    const svc = new SessionService({ roots: [root], socketName: 'termhub-test-u' });
+    await expect(svc.disableAlternateScreen()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(log).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

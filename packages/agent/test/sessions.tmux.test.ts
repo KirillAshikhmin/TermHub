@@ -77,3 +77,67 @@ describe.skipIf(!tmuxAvailable)('SessionService — реальный tmux (из�
     expect(dirs).toEqual([{ root, dirs: ['projectA'] }]);
   });
 });
+
+// Альтернативный экран выключается на сокете агента: у того буфера нет истории, и панель
+// с Claude Code оставалась без прокрутки. Свой сокет (и свой kill-server) — дефолтный
+// сервер владельца не трогаем ни в проверке, ни в коде.
+describe.skipIf(!tmuxAvailable)('alternate-screen off — реальный tmux (изолированный сокет)', () => {
+  const socketName = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
+  let root: string;
+
+  /** Значение глобальной опции на сокете (сервер обязан быть живым). */
+  function shownOption(): string {
+    return execFileSync('tmux', ['-L', socketName, 'show-options', '-g', 'alternate-screen'], {
+      encoding: 'utf8',
+    }).trim();
+  }
+
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-altscreen-'));
+    fs.mkdirSync(path.join(root, 'projectA'));
+  });
+
+  afterAll(() => {
+    try {
+      execFileSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore' });
+    } catch {
+      // сервер мог не подниматься — не ошибка
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('сервера нет → старт не падает, опция приезжает с первой же сессией', async () => {
+    const svc = new SessionService({ roots: [root], socketName });
+    // Сервера на сокете ещё нет (tmux не держит его без сессий) — это штатно.
+    await expect(svc.disableAlternateScreen()).resolves.toBeUndefined();
+    expect(await svc.list()).toEqual([]);
+
+    await svc.create({ name: 'alt', root, dir: 'projectA', preset: 'zsh' });
+    expect(shownOption()).toBe('alternate-screen off');
+    expect((await svc.list()).map((s) => s.name)).toEqual(['alt']);
+  });
+
+  it('сервер уже живёт → опция ставится прямо на старте агента', async () => {
+    // Возвращаем дефолт и поднимаем «новый агент» на том же живом сервере.
+    execFileSync('tmux', ['-L', socketName, 'set-option', '-g', 'alternate-screen', 'on']);
+    expect(shownOption()).toBe('alternate-screen on');
+
+    await new SessionService({ roots: [root], socketName }).disableAlternateScreen();
+    expect(shownOption()).toBe('alternate-screen off');
+  });
+
+  it('сервер умер вместе с последней сессией → на новом опция ставится заново, а не теряется', async () => {
+    const svc = new SessionService({ roots: [root], socketName });
+    await svc.disableAlternateScreen(); // сервер жив (сессия alt) — опция легла
+    expect(shownOption()).toBe('alternate-screen off');
+
+    await svc.kill('alt');
+    // Последняя сессия ушла — сервер умер и унёс глобальную опцию с собой; агент узнаёт
+    // об этом из ответа tmux и снова считает опцию невыставленной.
+    expect(await svc.list()).toEqual([]);
+
+    await svc.create({ name: 'again', root, dir: 'projectA', preset: 'zsh' });
+    // На новом сервере дефолт — «on»: «off» здесь значит, что агент поставил опцию заново.
+    expect(shownOption()).toBe('alternate-screen off');
+  });
+});
