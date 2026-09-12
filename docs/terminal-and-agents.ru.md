@@ -60,10 +60,11 @@
 | Первые байты `tmux -CC attach` | alt-screen не приходит вообще |
 | Протокол control mode | строчный: `%begin/%end`, `%output`, `%layout-change` |
 | Статусная строка tmux в control mode | клиенту не приходит: UI рисует клиент |
-| Стоимость подключения в control mode | 83 байта, перерисовки экрана нет |
+| Стоимость подключения в control mode | десятки байт, перерисовки экрана нет |
 | Ввод байтов из control mode | `send-keys -t <сессия> -H <hex>` — работает |
 | Размер окна из control mode | `refresh-client -C 100x30`, держится после ухода клиента |
-| История панели | `capture-pane -p -e -S -` отдаёт всё до `history-limit` (4000 строк) |
+| История панели | `capture-pane -p -e -S -` отдаёт всё до `history-limit` |
+| Объём пробы истории | 4000 строк; сам `history-limit` — 50 000 по настройке проекта |
 | Цена истории | 89 байт на строку; 3000 строк = 266 КБ, 57 мс на стороне tmux |
 | Второй alt-screen: `vim` | `alternate_on=1` — истории у приложения нет |
 | Второй alt-screen: Claude Code, Codex | `alternate_on=0` — работают inline |
