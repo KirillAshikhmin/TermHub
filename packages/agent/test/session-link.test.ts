@@ -1,26 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { spawn } from 'node-pty';
+import { spawnPty } from '../src/pty-spawn.js';
 import { open, type Link, type SessionLinkOptions } from '../src/session-link.js';
 import { PtyPool } from '../src/pty-pool.js';
 
-// node-pty мокаем целиком, как в bridge.unit.test.ts: настоящий tmux в этом шве
+// Шов pty мокаем целиком, как в bridge.unit.test.ts: настоящий tmux здесь
 // не запускается, весь control-поток подаётся руками.
-vi.mock('node-pty', () => ({ spawn: vi.fn() }));
+vi.mock('../src/pty-spawn.js', () => ({ spawnPty: vi.fn() }));
 
-const mockSpawn = vi.mocked(spawn);
+const mockSpawn = vi.mocked(spawnPty);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 /** Управляемый фейк IPty: копит команды, отданные клиенту, и эмитит поток. */
 function makeFakePty() {
-  let dataCb: ((chunk: string) => void) | undefined;
+  let dataCb: ((chunk: Buffer) => void) | undefined;
   let exitCb: (() => void) | undefined;
   const writes: string[] = [];
   let destroyed = false;
   let paused = 0;
   let resumed = 0;
   const pty = {
-    onData: (cb: (c: string) => void) => {
+    onData: (cb: (c: Buffer) => void) => {
       dataCb = cb;
       return { dispose: () => {} };
     },
@@ -47,7 +47,7 @@ function makeFakePty() {
   return {
     pty,
     /** Кусок потока от tmux (текстом — control mode строчный). */
-    feed: (text: string) => dataCb?.(Buffer.from(text, 'utf8') as unknown as string),
+    feed: (text: string) => dataCb?.(Buffer.from(text, 'utf8')),
     emitExit: () => exitCb?.(),
     writes,
     /** Команды без служебного перевода строки — так их читать глазами. */

@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { spawn } from 'node-pty';
+import { spawnPty } from '../src/pty-spawn.js';
 import { encodeFrame, jsonFrame, decodeFrame, frameJson, FrameType } from '@termhub/protocol';
 import { attachTerminal, wireTerminalWs } from '../src/bridge.js';
 import { PtyPool } from '../src/pty-pool.js';
 
-// node-pty мокаем целиком: полный контроль над spawn, включая синхронный throw
+// Шов pty мокаем целиком: полный контроль над спавном, включая синхронный throw
 // (кейс «бинарь tmux отсутствует»), без реального tmux/pty.
-vi.mock('node-pty', () => ({ spawn: vi.fn() }));
+vi.mock('../src/pty-spawn.js', () => ({ spawnPty: vi.fn() }));
 
-const mockSpawn = vi.mocked(spawn);
+const mockSpawn = vi.mocked(spawnPty);
 
 /** Короткая обёртка над wireTerminalWs (опции по умолчанию — пустые). */
 const wire = (o: Parameters<typeof wireTerminalWs>[0] = {}): ReturnType<typeof wireTerminalWs> =>
@@ -16,7 +16,7 @@ const wire = (o: Parameters<typeof wireTerminalWs>[0] = {}): ReturnType<typeof w
 
 /** Управляемый фейк IPty: перехватывает колбэки и запоминает write/resize/destroy. */
 function makeFakePty() {
-  let dataCb: ((chunk: string) => void) | undefined;
+  let dataCb: ((chunk: Buffer) => void) | undefined;
   let exitCb: (() => void) | undefined;
   const writes: Buffer[] = [];
   const resizes: Array<[number, number]> = [];
@@ -24,7 +24,7 @@ function makeFakePty() {
   let paused = 0;
   let resumed = 0;
   const pty = {
-    onData: (cb: (c: string) => void) => {
+    onData: (cb: (c: Buffer) => void) => {
       dataCb = cb;
       return { dispose: () => {} };
     },
@@ -312,8 +312,8 @@ describe('attachTerminal', () => {
       onBell: () => {},
     });
     handle.dispose();
-    // node-pty.kill() шлёт только SIGHUP. destroy() дополнительно закрывает
-    // master socket, без чего /dev/ptmx остаётся открыт в агенте.
+    // Одного SIGHUP мало: destroy() закрывает и master, без чего /dev/ptmx
+    // остаётся открытым в агенте до самого его перезапуска.
     expect(fake.isDestroyed()).toBe(true);
     handle.write(new TextEncoder().encode('x'));
     handle.resize(100, 40);

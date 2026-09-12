@@ -2,11 +2,10 @@
 // панель, очередь команд и ввода, снимок экрана и откат на прежний `tmux attach`.
 // Про разбор строк протокола модуль не знает — это control-protocol.ts.
 
-import { spawn } from 'node-pty';
-import type { IPty } from 'node-pty';
+import { spawnPty, type PtyClient } from './pty-spawn.js';
 import { ControlParser, escapeInput, type ControlEvent } from './control-protocol.js';
 import type { PtyPool, PtyLease } from './pty-pool.js';
-import { clampCols, clampRows, destroyPty } from './pty-common.js';
+import { clampCols, clampRows } from './pty-common.js';
 
 /** Каким способом клиент подключён к сессии: новым control mode или прежним attach. */
 export type TerminalMode = 'control' | 'attach';
@@ -109,7 +108,7 @@ class SessionLink implements Link {
   readonly ready: Promise<TerminalMode>;
 
   private readonly lease: PtyLease | undefined;
-  private child: IPty;
+  private child: PtyClient;
   /** Поколение pty: колбэки мёртвого клиента (откат) не должны ничего делать. */
   private generation = 0;
   private parser = new ControlParser();
@@ -194,20 +193,20 @@ class SessionLink implements Link {
   }
 
   /** Спавнит клиента tmux; аргументы — только массивом, без shell. */
-  private spawnClient(control: boolean): IPty {
+  private spawnClient(control: boolean): PtyClient {
     const socket = this.opts.socketName ? ['-L', this.opts.socketName] : [];
     const args = [...socket, ...(control ? ['-CC'] : []), 'attach', '-t', `=${this.session}`];
-    const child = spawn('tmux', args, {
-      name: 'xterm-256color',
+    const generation = this.generation;
+    const child = spawnPty('tmux', args, {
       cols: this.cols,
       rows: this.rows,
-      // encoding:null → сырые Buffer'ы: вывод терминала бинарен (в d.ts тип — string).
-      encoding: null,
       env: { ...process.env, TERM: 'xterm-256color' },
+      // Не запустился сам бинарь: наружу это придёт как exit, но без строки в
+      // логе причина осталась бы невидимой — снаружи терминал просто закрылся.
+      onError: (err): void => this.log(`session ${this.session}: tmux client failed to start: ${err.message}`),
     });
-    const generation = this.generation;
     this.childDisposers = [
-      child.onData((chunk: string): void => this.handleData(chunk as unknown as Buffer, generation)),
+      child.onData((chunk: Buffer): void => this.handleData(chunk, generation)),
       child.onExit((): void => this.handleExit(generation)),
     ];
     return child;
@@ -224,7 +223,7 @@ class SessionLink implements Link {
   /** То же плюс гашение самого клиента — для живого pty. */
   private killChild(): void {
     this.detachChild();
-    destroyPty(this.child);
+    this.child.destroy();
   }
 
   private handleData(chunk: Buffer, generation: number): void {

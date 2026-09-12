@@ -1,8 +1,5 @@
-// Общее для всех мостов к pty: границы размера терминала и гашение клиента.
-// Модуль существует ровно затем, чтобы эти числа и эта идиома жили в одном месте:
+// Модуль существует ровно затем, чтобы эти числа жили в одном месте:
 // разъехавшись по файлам, они разъедутся и по смыслу.
-
-import type { IPty } from 'node-pty';
 
 /** Границы размера терминала: мусор с клиента не должен ронять pty. */
 const MIN_COLS = 20;
@@ -22,17 +19,4 @@ export function clampCols(value: number): number {
 
 export function clampRows(value: number): number {
   return clamp(value, MIN_ROWS, MAX_ROWS);
-}
-
-/** `destroy()` есть у UnixTerminal и закрывает master-FD, но отсутствует в IPty d.ts. */
-type DestroyablePty = IPty & { destroy(): void };
-
-/** Гасит клиента: kill() шлёт только SIGHUP и оставляет master-FD node-pty открытым,
- *  destroy() закрывает его перед сигналом. Уже мёртвый pty — не ошибка. */
-export function destroyPty(child: IPty): void {
-  try {
-    (child as DestroyablePty).destroy();
-  } catch {
-    // pty уже мёртв — гашение идемпотентно
-  }
 }
