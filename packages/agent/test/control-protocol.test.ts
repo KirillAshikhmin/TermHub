@@ -284,3 +284,30 @@ describe('escapeInput', () => {
     expect(restored).toEqual(Array.from(source));
   });
 });
+
+describe('ControlParser: обёртка iTerm2 в потоке -CC', () => {
+  it('снимает обёртку начала потока и опознаёт склеенный с ней первый %begin', () => {
+    // Байты сняты с живого tmux 3.7b: поток -CC начинается обёрткой iTerm2, приклеенной
+    // к приветственному %begin. Без её снятия номер первого блока неизвестен, отправить
+    // команду не с чем — и подключение скатывается на прежний tmux attach.
+    const parser = new ControlParser();
+    const greeting = '\x1bP1000p%begin 1789244339 306 0\n%end 1789244339 306 0\n';
+    expect(feed(parser, greeting)).toEqual([{ type: 'block', id: 306, lines: [] }]);
+    expect(outputs(feed(parser, '%output %0 живой\n'))).toHaveLength(1);
+  });
+
+  it('завершитель обёртки наружу не выходит — ни отдельной строкой, ни приклеенным', () => {
+    // Так поток и кончается: %exit, затем завершитель без перевода строки.
+    const parser = new ControlParser();
+    expect(feed(parser, '%exit\r\n\x1b\\')).toEqual([{ type: 'notification', name: 'exit', args: [] }]);
+    const glued = new ControlParser();
+    expect(feed(glued, '%exit\x1b\\\n')).toEqual([{ type: 'notification', name: 'exit', args: [] }]);
+  });
+
+  it('внутри блока обёртку не снимаем: тело ответа — это содержимое, а не обрамление', () => {
+    // capture-pane -e отдаёт строки с управляющими последовательностями; трогать их нельзя.
+    const body = '\x1bP1000pтекст\x1b\\';
+    const events = feed(new ControlParser(), `%begin 1 40 1\n${body}\n%end 1 40 1\n`);
+    expect(events).toEqual([{ type: 'block', id: 40, lines: [body] }]);
+  });
+});

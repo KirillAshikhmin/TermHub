@@ -42,10 +42,14 @@ export type ControlEvent =
 
 const LF = 0x0a;
 const CR = 0x0d;
+const ESC = 0x1b;
 const SPACE = 0x20;
+const SEMICOLON = 0x3b;
+const DCS = 0x50; // `P` — вторая буква вводной последовательности DCS
 const BACKSLASH = 0x5c;
 const ZERO = 0x30;
 const SEVEN = 0x37;
+const NINE = 0x39;
 const MAX_BYTE = 0xff;
 
 /** Предел длины одной строки протокола. `%output` tmux сбрасывает за проход цикла
@@ -69,6 +73,25 @@ function concat(head: Uint8Array, rest: Uint8Array): Uint8Array {
   joined.set(head, 0);
   joined.set(rest, head.length);
   return joined;
+}
+
+/** Снимает со строки обёртку iTerm2. Поток `tmux -CC` открывается вводной
+ *  последовательностью `ESC P 1000 p`, приклеенной прямо к первому `%begin`, и закрывается
+ *  завершителем `ESC \`. Не снять её — значит не опознать приветственный блок: номер
+ *  команды остаётся неизвестным и подключение уходит в откат при живом control mode.
+ *  У одиночного `-C` обёртки нет, и такая строка возвращается как есть. */
+function unwrapDcs(line: Uint8Array): Uint8Array {
+  let from = 0;
+  let to = line.length;
+  if (line.length >= 2 && line[0] === ESC && line[1] === DCS) {
+    // ESC P, параметры (цифры и `;`), затем один финальный байт — у tmux это `1000p`.
+    let i = 2;
+    while (i < to && ((line[i] >= ZERO && line[i] <= NINE) || line[i] === SEMICOLON)) i++;
+    if (i < to) i++;
+    from = i;
+  }
+  if (to - from >= 2 && line[to - 2] === ESC && line[to - 1] === BACKSLASH) to -= 2;
+  return from === 0 && to === line.length ? line : line.subarray(from, to);
 }
 
 /** Индекс первого пробела начиная с from; -1, если пробела дальше нет. */
@@ -167,10 +190,13 @@ export class ControlParser {
   }
 
   /** Одна завершённая строка протокола, без перевода строки. */
-  private line(line: Uint8Array, events: ControlEvent[]): void {
+  private line(raw: Uint8Array, events: ControlEvent[]): void {
+    const open = this.block;
+    // Вне блока строка приходит в обёртке iTerm2 (поток `-CC`). Внутри блока строки —
+    // содержимое ответа, и управляющие последовательности в нём принадлежат ему.
+    const line = open ? raw : unwrapDcs(raw);
     const firstSpace = spaceAt(line, 0);
     const head = decoder.decode(firstSpace === -1 ? line : line.subarray(0, firstSpace));
-    const open = this.block;
     if (open) {
       // Внутри блока закрывает только строка с тем же номером команды: тело ответа
       // (например вывод capture-pane) само может начинаться с `%`.
