@@ -437,9 +437,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     // Без WebGL — дефолтный рендер xterm.
   }
 
-  // Мобильный скролл: транслируем тач-драг в wheel на корне xterm (touch xterm
-  // в приложение не форвардит; touch-action:none в CSS не даёт жесту утечь в
-  // страницу/pull-to-refresh). Цель — .xterm; если ещё не создан, host.
+  // Мобильный скролл: в обычном буфере тач-драг листает историю через term.scrollLines,
+  // в alt-screen — транслируется в wheel на корне xterm (touch xterm в приложение не
+  // форвардит; touch-action:none в CSS не даёт жесту утечь в страницу/pull-to-refresh).
   // По умолчанию тач-драг скроллит историю; в режиме выделения (тумблер в панели)
   // тот же драг выделяет текст для копирования — активен ровно один из двух.
   let stopTouchScroll: (() => void) | null = enableTouchScroll(host, term);

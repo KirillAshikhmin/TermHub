@@ -79,6 +79,10 @@ real mobile keyboard are required).
 - [ ] In a Claude/Codex session (control mode) scroll the output with a finger —
       the history scrolls locally, without the network, and no tmux status line is
       visible
+- [ ] 📱 In that same agent session, drag a finger across the output — it is the
+      terminal history that scrolls, while the app window with its panels stays put
+      (the page itself does not move and pull-to-refresh does not fire); a slow
+      short drag moves the history too instead of standing still
 - [ ] A Claude Code session scrolls too — but only after Claude itself is
       restarted: the alternate screen is forbidden on the agent socket
       (`alternate-screen off`, ADR 0019), while an already running process stays
