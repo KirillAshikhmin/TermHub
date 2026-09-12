@@ -1,57 +1,50 @@
 window.STATE =
 {
-  "slug": "own-terminal-mosh-ux",
-  "title": "Свой терминал, mosh и удобство работы с агентами",
-  "mode": "interview",
+  "slug": "control-mode",
+  "title": "Этап 1: control mode вместо attach",
+  "mode": "semi",
   "depth": "deep",
   "polish": null,
-  "tier": "T1",
+  "tier": "T2",
   "briefFile": "2026-09-12-brief.md",
   "memoryFile": "CLAUDE.md",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
-  "startedAt": "2026-09-12T19:37:09+03:00",
-  "updatedAt": "2026-09-12T20:48:39+03:00",
-  "finishedAt": "2026-09-12T20:48:39+03:00",
+  "startedAt": "2026-09-12T20:59:18+03:00",
+  "updatedAt": "2026-09-12T23:43:49+03:00",
+  "finishedAt": null,
   "stages": [
-    { "id": "preflight", "status": "done", "startedAt": "2026-09-12T19:37:09+03:00", "finishedAt": "2026-09-12T19:37:13+03:00" },
-    { "id": "manifest",  "status": "done", "startedAt": "2026-09-12T19:37:13+03:00", "finishedAt": "2026-09-12T19:38:59+03:00" },
-    { "id": "briefing",  "status": "done", "startedAt": "2026-09-12T19:38:59+03:00", "finishedAt": "2026-09-12T20:24:08+03:00", "note": "12 вопросов; премортем: 7 находок"  },
-    { "id": "spec",      "status": "done", "startedAt": "2026-09-12T20:24:08+03:00", "finishedAt": "2026-09-12T20:29:48+03:00", "note": "39 историй; G2: 7 расхождений, все закрыты"  },
-    { "id": "plan",      "status": "done", "startedAt": "2026-09-12T20:29:48+03:00", "finishedAt": "2026-09-12T20:30:02+03:00", "note": "2 таска, ярус T1, одна волна параллельно"  },
-    { "id": "build",     "status": "done", "startedAt": "2026-09-12T20:30:02+03:00", "finishedAt": "2026-09-12T20:42:38+03:00", "note": "3 из 3 тасков готовы" },
-    { "id": "review",    "status": "done", "startedAt": "2026-09-12T20:34:38+03:00", "note": "оба таска: по 2 оси, дозапросы отправлены"  },
-    { "id": "final",     "status": "done", "startedAt": "2026-09-12T20:42:38+03:00", "note": "слепая приёмка: 2 расхождения, оба исправлены", "finishedAt": "2026-09-12T20:48:39+03:00" }
+    { "id": "preflight", "status": "done", "startedAt": "2026-09-12T20:59:18+03:00", "finishedAt": "2026-09-12T20:59:24+03:00" },
+    { "id": "manifest",  "status": "done", "startedAt": "2026-09-12T20:59:24+03:00", "finishedAt": "2026-09-12T21:02:56+03:00" },
+    { "id": "briefing",  "status": "done", "startedAt": "2026-09-12T21:02:56+03:00", "finishedAt": "2026-09-12T21:02:56+03:00", "note": "1 вопрос: ручка отката" },
+    { "id": "spec",      "status": "done", "startedAt": "2026-09-12T21:02:56+03:00", "finishedAt": "2026-09-12T21:02:56+03:00", "note": "29 историй; G2 идёт" },
+    { "id": "plan",      "status": "done", "startedAt": "2026-09-12T21:02:56+03:00", "finishedAt": "2026-09-12T21:04:54+03:00", "note": "4 таска, ярус T2, 4 волны по одному" },
+    { "id": "build",     "status": "done", "startedAt": "2026-09-12T21:04:54+03:00", "finishedAt": "2026-09-12T23:10:31+03:00", "note": "7 тасков; control mode заработал вживую только после живого шва" },
+    { "id": "review",    "status": "done", "startedAt": "2026-09-12T21:31:29+03:00", "finishedAt": "2026-09-12T23:10:31+03:00", "note": "3 оси на каждый таск, 9 кругов правок" },
+    { "id": "final",     "status": "active", "startedAt": "2026-09-12T23:10:31+03:00" }
   ],
-  "requirements": {
-    "total": 31, "done": 26, "inTicket": 0, "inSpec": 0,
-    "placeholder": 0, "deferred": 4, "dropped": 1
-  },
+  "requirements": { "total": 27, "done": 27, "inTicket": 0, "inSpec": 0, "placeholder": 0, "deferred": 0, "dropped": 0 },
   "tickets": [
-    {"id": "01", "title": "ADR на шесть принятых решений", "requirements": ["R01", "R02", "R03", "R09", "R04", "R16i", "R06", "R14i", "R07", "G01", "G02", "R13i", "R12i"], "blockedBy": [], "wave": 1, "zone": ["docs/adr/"], "status": "done", "startedAt": "2026-09-12T20:30:02+03:00", "retries": 0, "repairs": 2, "repairFindings": ["G01: компенсация скрытой рамки не зафиксирована", "профиль агента урезан против §10a", "первый показ сессии не решён", "цена отката на attach не названа", "50 мс приписаны mosh", "факт про iOS без источника", "жирное выделение вне формата ADR", "правка внесла противоречие 0016 и 0014 про capture-pane"], "handoffs": 0, "finishedAt": "2026-09-12T20:42:22+03:00", "files": ["docs/adr/0013…0018 — шесть файлов"], "commit": "b3b6acb"},
-    {"id": "02", "title": "Документ анализа и дорожная карта", "requirements": ["R05", "R08", "R10", "R11", "R12i", "R15i", "G04", "G05", "G06", "G07", "G08", "G09", "G10", "G11", "R06", "R04"], "blockedBy": [], "wave": 1, "zone": ["docs/terminal-and-agents.ru.md", "README.md", "README.ru.md"], "status": "done", "startedAt": "2026-09-12T20:30:02+03:00", "retries": 0, "repairs": 2, "repairFindings": ["G05: потерян прыжок к следующей команде", "R06.3/R06.5 не прослеживаются до этапа", "G10: потерян способ распознавания речи", "50 мс приписаны mosh", "факт про iOS без источника", "23 строки длиннее 95 символов", "дословное дублирование ADR", "пересказ вместо ссылок на docs/", "правка вырезала решения прогона про гостя и очистку истории"], "handoffs": 0, "finishedAt": "2026-09-12T20:42:38+03:00", "files": ["docs/terminal-and-agents.ru.md", "README.md", "README.ru.md"], "commit": "dfff5f6"},
-    {"id": "03", "title": "Исправить две формулировки замеров", "requirements": ["R12i"], "blockedBy": ["01", "02"], "wave": 2, "zone": ["docs/terminal-and-agents.ru.md", "docs/adr/0014-tmux-control-mode-instead-of-attach.md"], "status": "done", "startedAt": "2026-09-12T20:47:07+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "finishedAt": "2026-09-12T20:48:21+03:00", "files": ["docs/terminal-and-agents.ru.md", "docs/adr/0014-tmux-control-mode-instead-of-attach.md"], "commit": "ecd1fd5"}
+    {"id": "00", "title": "Починить красный тест из main и убрать worktree из прогона", "requirements": ["R18i"], "blockedBy": [], "wave": 1, "zone": ["packages/agent/test/bridge.unit.test.ts", "vitest.config.ts"], "status": "done", "startedAt": "2026-09-12T21:31:29+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "finishedAt": "2026-09-12T21:43:08+03:00", "files": ["vitest.config.ts", "packages/agent/test/bridge.unit.test.ts"], "commit": "fcad2c2", "tests": {"passed": 22, "failed": 0}},
+    {"id": "01", "title": "Модуль разбора протокола control mode", "requirements": ["R02", "R02.1", "R12", "R13"], "blockedBy": [], "wave": 1, "zone": ["packages/agent/src/control-protocol.ts", "packages/agent/test/control-protocol.test.ts"], "status": "done", "startedAt": "2026-09-12T21:04:54+03:00", "retries": 0, "repairs": 2, "repairFindings": ["незакрытый блок поглощает весь дальнейший вывод", "хвост незавершённой строки не ограничен", "%output без панели даёт пустое событие", "битый %begin маскируется под уведомление", "сверка номера команды не проверена тестом", "тест разрыва внутри символа не проверяет заявленное", "поведение для строки без % не закреплено", "брошенный блок не выпускает события и вешает ожидающего", "длинная строка внутри блока пропадает молча"], "handoffs": 0, "finishedAt": "2026-09-12T22:22:53+03:00", "files": ["packages/agent/src/control-protocol.ts", "packages/agent/test/control-protocol.test.ts"], "commit": "f550f4a", "tests": {"passed": 37, "failed": 0}},
+    {"id": "02", "title": "Жизненный цикл control-клиента", "requirements": ["R01", "R05", "R08", "R11", "R12", "R03", "R04"], "blockedBy": ["01"], "wave": 2, "zone": ["packages/agent/src/session-link.ts", "packages/agent/test/session-link.test.ts"], "status": "done", "startedAt": "2026-09-12T21:31:29+03:00", "retries": 0, "repairs": 2, "repairFindings": ["ответы сопоставляются по порядку, а не по номеру — ложный откат", "снимок глушит вывод, пришедший в том же куске", "у команды нет срока — снимок может зависнуть", "тест смерти до готовности зеленеет по таймеру", "ветка отказа attach не покрыта", "клампы и константы скопированы из bridge.ts", "после отката служебные команды уходят в сессию пользователя текстом"], "handoffs": 0, "finishedAt": "2026-09-12T22:22:53+03:00", "files": ["packages/agent/src/session-link.ts", "packages/agent/src/pty-common.ts", "packages/agent/test/session-link.test.ts"], "commit": "d3568ef", "tests": {"passed": 38, "failed": 0}},
+    {"id": "03", "title": "Встраивание в оба пути агента", "requirements": ["R01", "R03", "R04", "R05", "R06", "R07", "R08", "R09", "R10", "R11", "R14i", "R15i", "R16i", "R17i", "G01"], "blockedBy": ["02"], "wave": 3, "zone": ["packages/agent/src/", "packages/protocol/src/frames.ts", "packages/agent/test/", "packages/protocol/test/"], "status": "done", "startedAt": "2026-09-12T22:22:53+03:00", "retries": 0, "repairs": 2, "repairFindings": ["необработанное отклонение промиса роняет процесс агента", "живой вывод придерживается до 10 секунд", "LAN и relay валидируют просьбу по-разному", "нет теста на живой звонок в control mode", "тест про звонок из снимка зеленеет по другой причине", "предел придержания не покрыт", "тест про старшинство настройки проверяет только отсутствие флага", "хелпер ничего не захватывает", "сброс в обработчике отказа не проверяет, жив ли терминал", "отмена снимка по сроку молчит"], "handoffs": 0, "finishedAt": "2026-09-12T22:52:06+03:00", "files": ["packages/agent/src/bridge.ts", "packages/agent/src/relay-link.ts", "packages/agent/src/cli.ts", "packages/agent/src/config.ts", "packages/agent/src/doctor.ts", "packages/agent/src/sessions.ts", "packages/protocol/src/frames.ts"], "commit": "4e46d27", "tests": {"passed": 34, "failed": 0}},
+    {"id": "04", "title": "Веб: режим, пометка, переключатель", "requirements": ["R07", "R09", "R10", "R14i", "G01"], "blockedBy": ["03"], "wave": 4, "zone": ["packages/web/src/", "packages/web/test/", "docs/manual-test-checklist.md", "docs/manual-test-checklist.ru.md"], "status": "done", "startedAt": "2026-09-12T22:51:11+03:00", "retries": 0, "repairs": 2, "repairFindings": ["тест переключателя закрепляет невозможный сценарий и ложный факт про запрет attach", "чип обещал режим, который не включится", "признаки складываются в противоречивую подпись"], "handoffs": 0, "finishedAt": "2026-09-12T23:10:31+03:00", "files": ["packages/web/src/term-mode.ts", "packages/web/src/term.ts", "packages/web/src/ws-frames.ts", "packages/web/src/transport.ts", "packages/web/src/relay-transport.ts", "packages/web/src/diag.ts", "packages/web/src/i18n.ts", "docs/manual-test-checklist*.md"], "commit": "320aaca", "tests": {"passed": 299, "failed": 0}},
+    {"id": "05", "title": "Две починки подключения по отложенным находкам", "requirements": ["R01", "R05", "R08"], "blockedBy": ["02"], "wave": 3, "zone": ["packages/agent/src/session-link.ts", "packages/agent/test/session-link.test.ts"], "status": "done", "startedAt": "2026-09-12T22:29:13+03:00", "retries": 0, "repairs": 1, "repairFindings": ["бюджет готовности меряется настенными часами", "продление не оставляет следа в логе"], "handoffs": 0, "finishedAt": "2026-09-12T22:35:54+03:00", "files": ["packages/agent/src/session-link.ts", "packages/agent/test/session-link.test.ts"], "commit": "b0901ab", "tests": {"passed": 41, "failed": 0}},
+    {"id": "06", "title": "Снять DCS-обёртку и завести шов с настоящим tmux", "requirements": ["R01", "R02", "R09", "R10", "R11", "D07"], "blockedBy": ["01", "02", "03"], "wave": 5, "zone": ["packages/agent/src/control-protocol.ts", "packages/agent/test/control-protocol.test.ts", "packages/agent/test/control-mode.tmux.test.ts", "packages/web/src/touch-scroll.ts"], "status": "done", "startedAt": "2026-09-12T23:22:13+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "finishedAt": "2026-09-12T23:31:28+03:00", "files": ["packages/agent/src/control-protocol.ts", "packages/agent/test/control-protocol.test.ts", "packages/web/src/touch-scroll.ts"], "commit": "f58ec56", "tests": {"passed": 40, "failed": 0}, "note": "живой шов написан, но красный из-за дефекта в session-link — уходит с таском 07"},
+    {"id": "07", "title": "Сопоставление ответов по живому tmux", "requirements": ["R01", "R05", "R08", "D08"], "blockedBy": ["06"], "wave": 6, "zone": ["packages/agent/src/session-link.ts", "packages/agent/test/session-link.test.ts", "packages/agent/test/session-link.tmux.test.ts"], "status": "done", "startedAt": "2026-09-12T23:31:28+03:00", "retries": 0, "repairs": 0, "handoffs": 0, "finishedAt": "2026-09-12T23:40:07+03:00", "files": ["packages/agent/src/session-link.ts", "packages/agent/test/session-link.test.ts", "packages/agent/test/session-link.tmux.test.ts"], "commit": "0c073f5", "tests": {"passed": 42, "failed": 0}}
   ],
   "singlePass": null,
-  "tests": { "note": "поставка документов — кода не касались; рабочее дерево чисто, кроме .claude/settings.json пользователя" },
+  "tests": {"full": "828/829 в группе suite; единственное падение — vcs.git по таймауту, в одиночном прогоне 26/26 зелёные", "live": "session-link.tmux — control mode на настоящем tmux, снимок непустой", "build": "npm run build прошла, libsodium в LAN-бандл не попал", "types": "agent и web чисты"},
   "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
-  "additions": [
-    "A01 — индикатор задержки до Mac числом, ради R06 (отзывчивость)",
-    "A02 — размер локальной истории и кнопка очистки, ради R04 (история на устройстве)"
-  ],
+  "additions": [],
   "coverage": {
     "runs": 1, "found": 7, "fixed": 7, "deferred": 0,
-    "extra": "«и другими» агентами → профили-данные §10a; второй alt-screen от TUI внутри панели → §2 + замер Claude/Codex/vim; «вdt» расшифровано; детектор рамки, распознавание вопроса, набор байт для эхо — доописаны"
+    "extra": "потерянная связь меток этапа с манифестом прогона; R11 обещал больше, чем даёт этап; не заданы глубина снимка, детектор alt-screen, формат октального экранирования и написание refresh-client"
   },
   "concerns": [
-    "docs/terminal-and-agents.ru.md — после перестановки дорожной карты документ вырос с 414 до 430 строк: шесть строк на этап вернули в прозу то, что таблица держала двумя колонками",
-    "профили агентов (§10a спецификации) отдельного ADR не имеют — зафиксированы внутри 0017"
+    "control-protocol: после брака блока остаток его тела разбирается как поток — строка ответа, начинающаяся с %output, дойдёт до экрана чужим выводом",
+    "оба замечания про session-link закрыты таском 05"
   ],
-  "reviewers": { "manifestSpec": "a64bcbfa22b0dd7db", "craft": "a085da7bf2429c5c3" },
-  "blind": {
-    "verdict": "agreed",
-    "implemented": ["своё окно терминала — вердикт и ADR", "скролл в полноэкранных и офлайн", "отзывчивость — четыре точки", "скрытие полосы ввода", "открытый список фич закрыт", "mosh против tmux", "удобство работы с агентами"],
-    "partial": ["скролл в настоящих полноэкранных приложениях (vim, htop) невозможен — названо свойством, не недоделкой"],
-    "drift": ["history-limit в поставке читался как 4000 при реальных 50 000 — исправлено таском 03", "83 байта поданы как константа при зависимости от имени сессии — исправлено таском 03"],
-    "notRunnable": "проект не запускался: поставка — документы, кода прогон не касался"
-  }
+  "reviewers": { "manifestSpec": "a382962cad146ccfb", "craft": "a5dab3f7b9c92bb9a" },
+  "blind": null
 }
