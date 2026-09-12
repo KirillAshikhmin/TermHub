@@ -10,8 +10,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
   "startedAt": "2026-09-12T20:59:18+03:00",
-  "updatedAt": "2026-09-12T23:43:49+03:00",
-  "finishedAt": null,
+  "updatedAt": "2026-09-13T00:18:10+03:00",
+  "finishedAt": "2026-09-13T00:18:10+03:00",
   "stages": [
     { "id": "preflight", "status": "done", "startedAt": "2026-09-12T20:59:18+03:00", "finishedAt": "2026-09-12T20:59:24+03:00" },
     { "id": "manifest",  "status": "done", "startedAt": "2026-09-12T20:59:24+03:00", "finishedAt": "2026-09-12T21:02:56+03:00" },
@@ -20,7 +20,7 @@ window.STATE =
     { "id": "plan",      "status": "done", "startedAt": "2026-09-12T21:02:56+03:00", "finishedAt": "2026-09-12T21:04:54+03:00", "note": "4 таска, ярус T2, 4 волны по одному" },
     { "id": "build",     "status": "done", "startedAt": "2026-09-12T21:04:54+03:00", "finishedAt": "2026-09-12T23:10:31+03:00", "note": "7 тасков; control mode заработал вживую только после живого шва" },
     { "id": "review",    "status": "done", "startedAt": "2026-09-12T21:31:29+03:00", "finishedAt": "2026-09-12T23:10:31+03:00", "note": "3 оси на каждый таск, 9 кругов правок" },
-    { "id": "final",     "status": "active", "startedAt": "2026-09-12T23:10:31+03:00" }
+    { "id": "final",     "status": "done", "startedAt": "2026-09-12T23:10:31+03:00", "finishedAt": "2026-09-13T00:18:10+03:00", "note": "развёрнуто: локальный агент перезапущен, relay пересобран и поднят" }
   ],
   "requirements": { "total": 27, "done": 27, "inTicket": 0, "inSpec": 0, "placeholder": 0, "deferred": 0, "dropped": 0 },
   "tickets": [
@@ -46,5 +46,10 @@ window.STATE =
     "оба замечания про session-link закрыты таском 05"
   ],
   "reviewers": { "manifestSpec": "a382962cad146ccfb", "craft": "a5dab3f7b9c92bb9a" },
-  "blind": null
+  "blind": {
+    "verdict": "drift",
+    "drift": ["control mode не включался ни разу на живой машине: DCS-обёртка в начале потока -CC не снималась (T06)", "номера блоков не идут подряд, предсказание номера давало ложный откат (T07)"],
+    "implemented": ["разбор протокола", "жизненный цикл и откат", "ввод, размер, снимок", "LAN, relay и CLI одной дорогой", "пресет Codex", "переключатель и пометка в вебе"],
+    "note": "оба расхождения найдены живым швом против настоящего tmux, которого в наборе не было; исправлены и закоммичены"
+  }
 }
