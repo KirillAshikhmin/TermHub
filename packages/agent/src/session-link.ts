@@ -51,6 +51,14 @@ export interface Link {
 /** Ждём доказательства, что control mode работает на этой машине, не дольше двух секунд. */
 const READY_TIMEOUT_MS = 2000;
 
+/** Предел ожидания готовности с начала подключения. Пока протокол отвечает уведомлениями,
+ *  двухсекундный срок заводится заново: в сборке, которая не шлёт непрошеный блок, номер
+ *  команды взять неоткуда, и откат на живом control mode был бы ложным. Продлевать
+ *  бесконечно нельзя — поток уведомлений от клиента, который на команды уже не ответит,
+ *  оставил бы пользователя без терминала навсегда. Предел взят равным сроку ответа на
+ *  команду: дольше этого проект нигде не ждёт tmux. */
+const READY_MAX_WAIT_MS = 10_000;
+
 /** Глубина снимка по умолчанию: хватает, чтобы сразу было что листать (~18 КБ). */
 const DEFAULT_SNAPSHOT_LINES = 200;
 /** Глубже history-limit проекта просить нечего. */
@@ -116,6 +124,12 @@ class SessionLink implements Link {
   private initStarted = false;
   private resolveReady!: (mode: TerminalMode) => void;
   private readyTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Крайний срок готовности: продление уведомлениями двигает ближний срок, но не этот.
+   *  Часы монотонные: настенные двигает шаг NTP, а на ноутбуке и телефоне ещё и сон
+   *  машины — бюджет ожидания оказался бы то съеденным целиком, то растянутым. */
+  private readonly readyDeadline = performance.now() + READY_MAX_WAIT_MS;
+  /** Строка про продление уже в логе: писать её на каждое уведомление — залить лог. */
+  private readyExtendLogged = false;
   /** Протокол ответил хотя бы раз: только после этого имеет смысл слать команды. */
   private protocolSeen = false;
   private cols: number;
@@ -153,7 +167,30 @@ class SessionLink implements Link {
       throw err;
     }
     if (wanted === 'attach') this.decide('attach');
-    else this.readyTimer = setTimeout((): void => this.fallback('no control output in 2s'), READY_TIMEOUT_MS);
+    else this.armReady(READY_TIMEOUT_MS, 'no control output in 2s');
+  }
+
+  /** Заводит срок готовности заново: не дождались — откат с этой причиной. */
+  private armReady(delay: number, reason: string): void {
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = setTimeout((): void => this.fallback(reason), delay);
+  }
+
+  /** Протокол отвечает, а номера блока всё нет: команду отправить не с чем, но и откатывать
+   *  живой control mode не за что — срок готовности заводится заново, пока не упрётся в
+   *  общий предел (READY_MAX_WAIT_MS от открытия). Незаведённый срок значит, что режим уже
+   *  выбран или Link закрыт: там продлевать нечего. */
+  private extendReady(): void {
+    if (this.readyTimer === undefined || this.nextBlockId !== undefined) return;
+    const left = this.readyDeadline - performance.now();
+    if (left <= 0) return; // предел исчерпан: доживаем уже заведённый срок
+    if (!this.readyExtendLogged) {
+      // Одна строка на всё продление: снаружи ожидание номера блока иначе неотличимо
+      // от зависшего терминала — пользователь до предела смотрит в пустой экран.
+      this.readyExtendLogged = true;
+      this.log(`session ${this.session}: control protocol answers, waiting for the first block number`);
+    }
+    this.armReady(Math.min(READY_TIMEOUT_MS, left), `no block number in ${READY_MAX_WAIT_MS} ms of notifications`);
   }
 
   /** Спавнит клиента tmux; аргументы — только массивом, без shell. */
@@ -232,6 +269,10 @@ class SessionLink implements Link {
         this.protocolReplied();
         return;
       case 'notification':
+        // Уведомление — доказательство, что control mode на этой машине работает. Номера
+        // блока оно не даёт, поэтому одной готовностью не считается, но и срок ожидания
+        // при живом протоколе истекать не должен.
+        this.extendReady();
         if (event.name === 'session-changed') this.protocolReplied();
         // Переспрос идёт на каждое уведомление: ответ на прежний запрос мог уйти
         // до смены и вернуть панель, которой уже нет.
@@ -240,12 +281,21 @@ class SessionLink implements Link {
     }
   }
 
-  /** Ответ адресуется номером команды. Блок, которого никто не ждёт (приветственный или
-   *  чужой), очередь не сдвигает: иначе следующий ответ достался бы не той команде, и
-   *  разбор про активную панель увидел бы чужую строку — ложный откат на живом tmux. */
+  /** Ответ адресуется номером команды. Блок с номером меньше ожидаемого (приветственный или
+   *  чужой) очередь не сдвигает: иначе следующий ответ достался бы не той команде, и
+   *  разбор про активную панель увидел бы чужую строку — ложный откат на живом tmux.
+   *  Номер больше ожидаемого, наоборот, очередь чистит: см. ниже. */
   private matchBlock(id: number, lines: string[], failed: boolean): void {
     // Счётчик блоков у control-клиента сквозной: неадресованный блок тоже занимает номер.
     if (this.nextBlockId === undefined || id >= this.nextBlockId) this.nextBlockId = id + 1;
+    // Номер команды предсказан («последний виденный плюс один»), а отвечает tmux по
+    // возрастанию номеров: блок с номером больше ожидаемого — доказательство, что
+    // предсказание разошлось и своего ответа команда уже не дождётся. Отвергаем сразу:
+    // иначе ждущий снимок висел бы до COMMAND_TIMEOUT_MS, показывая пустой экран.
+    while (this.pending.length > 0 && this.pending[0].id < id) {
+      const missed = this.pending.shift();
+      if (missed) this.settle(missed, new Error(`command ${missed.id} overtaken by block ${id}`), []);
+    }
     const head = this.pending[0];
     if (head === undefined || head.id !== id) {
       // Отказ, которого никто не ждал, до выбора режима — доказательство, что control

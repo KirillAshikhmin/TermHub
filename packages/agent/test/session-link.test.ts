@@ -135,6 +135,59 @@ describe('open: выбор режима', () => {
     }
   });
 
+  it('уведомления продлевают срок готовности: сборка без непрошеного блока не уходит в откат', async () => {
+    vi.useFakeTimers();
+    try {
+      const control = makeFakePty();
+      const attach = makeFakePty();
+      stubSpawns(control, attach);
+      const lines: string[] = [];
+      const link = open('sess', options({ log: (m) => lines.push(m) }));
+      // Такая сборка tmux отвечает на -CC attach только уведомлениями: протокол живой,
+      // а номера, которым адресуется ответ, до первого блока взять неоткуда.
+      await vi.advanceTimersByTimeAsync(1500);
+      control.feed('%window-add @1\n');
+      control.feed('%window-renamed @1 work\n');
+      await vi.advanceTimersByTimeAsync(1500); // три секунды: прежний срок уже истёк бы
+      expect(link.mode).toBeUndefined(); // отката не было
+      expect(mockSpawn).toHaveBeenCalledTimes(1); // attach-клиент не спавнился
+      // Ожидание видно в логе, но ровно одной строкой: по строке на уведомление залило бы лог.
+      expect(lines.filter((m) => m.includes('waiting for the first block number'))).toHaveLength(1);
+      control.feed(GREETING); // блок наконец пришёл — дальше обычная готовность
+      control.feed(reply(1));
+      control.feed(reply(2, '%0 @0 0'));
+      expect(await link.ready).toBe('control');
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('продление не бесконечно: уведомления без единого блока упираются в общий предел', async () => {
+    vi.useFakeTimers();
+    try {
+      const control = makeFakePty();
+      const attach = makeFakePty();
+      stubSpawns(control, attach);
+      const link = open('sess', options());
+      const notify = async (seconds: number): Promise<void> => {
+        for (let i = 0; i < seconds; i++) {
+          control.feed('%window-add @1\n');
+          await vi.advanceTimersByTimeAsync(1000);
+        }
+      };
+      await notify(5);
+      expect(link.mode).toBeUndefined(); // пять секунд живого протокола — ещё ждём номер
+      await notify(7);
+      // Предел ожидания исчерпан: клиент, который шлёт уведомления и не даёт номера,
+      // от мёртвого неотличим, и терминал должен открыться прежним способом.
+      expect(await link.ready).toBe('attach');
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('%error в потоке до готовности → откат на tmux attach, не дожидаясь таймаута', async () => {
     // Таймеры поддельные и не сдвигаются: откат обязан случиться из-за %error,
     // иначе ready не разрешится и тест упадёт по своему таймауту.
@@ -279,15 +332,38 @@ describe('open: выбор режима', () => {
 });
 
 describe('сопоставление ответов', () => {
-  it('блок с номером, которого никто не ждёт, не сдвигает очередь и не роняет режим', async () => {
+  it('блок с номером меньше ожидаемого не сдвигает очередь и не роняет режим', async () => {
     const fake = makeFakePty();
     stubSpawns(fake);
     const link = open('sess', options());
     fake.feed(GREETING); // приветственный блок: после него уходят init-команды
-    fake.feed(reply(7, 'stray block')); // номер 7 не принадлежит ни одной нашей команде
+    // Номер 0 уже был у приветствия: этот блок не принадлежит ни одной нашей команде.
+    // Отдать ему ответ значило бы увести очередь на шаг, и разбор про активную панель
+    // увидел бы чужую строку — ложный откат на живом tmux.
+    fake.feed(reply(0, 'stray block'));
     fake.feed(reply(1)); // refresh-client
     fake.feed(reply(2, '%0 @0 0')); // display-message получает свой ответ, а не чужой
     expect(await link.ready).toBe('control');
+  });
+
+  it('блок с номером больше ожидаемого отвергает ждущую команду сразу, а не по сроку', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakePty();
+      stubSpawns(fake);
+      const link = open('sess', options());
+      await bringUp(fake, link, '%0');
+      const pending = link.snapshot(); // уходит командой с предсказанным номером 3
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fake.commands()).toContain('capture-pane -t %0 -p -e -S -200');
+      // Предсказание разошлось: tmux уже отвечает пятым блоком, значит ответа на третью
+      // команду не будет никогда. Время не сдвигается вовсе — срок команды тут не при чём.
+      fake.feed(reply(5, 'answer to somebody else'));
+      expect(await pending).toEqual(new Uint8Array(0));
+      expect(link.mode).toBe('control'); // терминал жив: это отказ команды, а не протокола
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('%session-changed до первого блока не гонит команды вслепую: они ждут номера', async () => {
