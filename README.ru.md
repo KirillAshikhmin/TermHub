@@ -246,6 +246,8 @@ npx tsc -p packages/web/tsconfig.json --noEmit   # web не типизирует
 - [docs/security.ru.md](docs/security.ru.md) — модель угроз и криптография
 - [docs/notifications.ru.md](docs/notifications.ru.md) — звук, push, HTTPS
 - [docs/manual-test-checklist.ru.md](docs/manual-test-checklist.ru.md) — чек-лист ручной проверки
+- [docs/terminal-and-agents.ru.md](docs/terminal-and-agents.ru.md) — свой терминал и работа
+  с агентами: разбор, вердикты, дорожная карта
 
 ---
 
