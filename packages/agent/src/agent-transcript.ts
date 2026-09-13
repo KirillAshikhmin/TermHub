@@ -29,6 +29,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { isExistingSessionName } from './sessions.js';
+import { runTmux, isNoServerError } from './tmux-run.js';
 
 const exec = promisify(execFile);
 
@@ -275,18 +276,12 @@ function panePidsFor(socketName?: string): () => Promise<Map<string, number>> {
 }
 
 async function defaultPanePids(socketName?: string): Promise<Map<string, number>> {
-  const socket = socketName ? ['-L', socketName] : [];
   let stdout: string;
   try {
-    ({ stdout } = await exec('tmux', [...socket, 'list-panes', '-a', '-F', PANE_PID_FORMAT], {
-      encoding: 'utf8',
-      timeout: EXEC_TIMEOUT_MS,
-      maxBuffer: EXEC_MAX_BUFFER,
-    }));
+    stdout = await runTmux(['list-panes', '-a', '-F', PANE_PID_FORMAT], { socketName, timeoutMs: EXEC_TIMEOUT_MS });
   } catch (err) {
     // Сервера tmux может не быть вовсе — тогда панелей нет; прочее — сбой обхода.
-    const stderr = String((err as { stderr?: unknown }).stderr ?? '');
-    if (/no server running|error connecting|no such file or directory/i.test(stderr)) return new Map();
+    if (isNoServerError(err)) return new Map();
     throw err;
   }
   const panes = new Map<string, number>();
