@@ -261,7 +261,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // которой оно не касается. Поэтому каждое подключение начинает с «агент ещё ничего
   // не называл», а зажечь пометку и назвать режим вправе только пришедший следом кадр.
   const forgetAgentState = (): void => {
-    altBadge.hidden = true;
+    setAltScreen(false);
     activeMode = undefined;
     syncMode();
   };
@@ -296,6 +296,13 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   body.className = 'th-term__body';
   const host = document.createElement('div');
   host.className = 'th-term__host';
+  /** Полноэкранное приложение забрало альтернативный экран: истории у него нет, и ползунок
+   *  библиотеки над ним обещает прокрутку, которой не существует. Прячем его вместе с
+   *  зажжённой пометкой — одним переключателем, чтобы они не разъехались. */
+  function setAltScreen(on: boolean): void {
+    altBadge.hidden = !on;
+    host.classList.toggle('is-alt', on);
+  }
   body.append(host);
   screen.append(body);
 
@@ -598,7 +605,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
         noteTerminalMode(state.mode);
         syncMode();
       }
-      if (state.altScreen !== undefined) altBadge.hidden = !state.altScreen;
+      if (state.altScreen !== undefined) setAltScreen(state.altScreen);
     },
     onStatus: (state) => {
       if (disposed) return;

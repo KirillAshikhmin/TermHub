@@ -12,6 +12,8 @@ vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')
 
 /** Пометка приложения в альтернативном экране. */
 const altBadge = (root: HTMLElement): HTMLElement => root.querySelector('.th-termbar__alt') as HTMLElement;
+/** Хост терминала: на нём висит признак «экран занят полноэкранным приложением». */
+const termHost = (root: HTMLElement): HTMLElement => root.querySelector('.th-term__host') as HTMLElement;
 /** Переключатель способа подключения (он же показывает работающий режим). */
 const modeBtn = (root: HTMLElement): HTMLButtonElement => root.querySelector('.th-termbar__mode') as HTMLButtonElement;
 
@@ -37,6 +39,35 @@ describe('пометка альтернативного экрана', () => {
     expect(altBadge(root).hidden).toBe(false);
 
     opened[0]!.opts.onTerminalState!({ altScreen: false });
+    expect(altBadge(root).hidden).toBe(true);
+    handle.teardown();
+  });
+
+  it('прячет ползунок прокрутки, пока экран занят таким приложением', () => {
+    // Листать в альтернативном экране нечего: истории у него нет. Ползунок библиотеки над
+    // ним обещал бы прокрутку, которой не существует, — прячем его тем же признаком, что
+    // зажигает пометку, чтобы эти два не разъехались.
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    expect(termHost(root).classList.contains('is-alt')).toBe(false);
+
+    opened[0]!.opts.onTerminalState!({ altScreen: true });
+    expect(termHost(root).classList.contains('is-alt')).toBe(true);
+
+    opened[0]!.opts.onTerminalState!({ altScreen: false });
+    expect(termHost(root).classList.contains('is-alt')).toBe(false);
+    handle.teardown();
+  });
+
+  it('новое подключение начинает без признака: его знает только агент', () => {
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onTerminalState!({ altScreen: true });
+    expect(termHost(root).classList.contains('is-alt')).toBe(true);
+
+    opened[0]!.opts.onStatus!('connected');
+
+    expect(termHost(root).classList.contains('is-alt')).toBe(false);
     expect(altBadge(root).hidden).toBe(true);
     handle.teardown();
   });
