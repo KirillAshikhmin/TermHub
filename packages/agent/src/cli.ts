@@ -31,11 +31,6 @@ async function runStart(): Promise<number> {
   // Способ подключения терминала один на оба пути: LAN и relay ведут в один attachTerminal.
   const terminalMode = readTerminalMode(config);
   const sessions = new SessionService({ roots: config.sessionRoots, socketName: TMUX_SOCKET });
-  // Альтернативный экран на сокете агента выключен: у того буфера нет истории по стандарту,
-  // и панель с Claude Code оставалась без прокрутки. Сервера может ещё не быть — тогда опция
-  // уедет с первой созданной сессией, а старт агента это не задержит и не уронит. Дальше опцию
-  // держит сам SessionService: сервер умер вместе с последней сессией — на новом она ставится заново.
-  await sessions.disableAlternateScreen();
   const files = new FileService({ roots: config.sessionRoots });
   const vcs = new VcsService({ roots: config.sessionRoots });
   const push = new PushService(config);

@@ -76,26 +76,22 @@ real mobile keyboard are required).
       client request for `control mode` is ignored: the chip shows `attach` and is
       marked as overridden — tapping it explains that the agent picks the mode (the
       agent setting outranks the request)
-- [ ] In a Claude/Codex session (control mode) scroll the output with a finger —
-      the history scrolls locally, without the network, and no tmux status line is
+- [ ] In a Codex session (control mode) scroll the output with a finger — the
+      history scrolls locally, without the network, and no tmux status line is
       visible
 - [ ] 📱 In that same agent session, drag a finger across the output — it is the
       terminal history that scrolls, while the app window with its panels stays put
       (the page itself does not move and pull-to-refresh does not fire); a slow
       short drag moves the history too instead of standing still
-- [ ] A Claude Code session scrolls too — but only after Claude itself is
-      restarted: the alternate screen is forbidden on the agent socket
-      (`alternate-screen off`, ADR 0019), while an already running process stays
-      in its previous mode and its output never reaches the history
-- [ ] Run `vim` (or `htop`) in the session — the "Full-screen app" badge does NOT
-      appear: the app stays in the normal buffer, and that is expected rather than
-      a breakage. The price shows up right there: after quitting `vim` the screen
-      is not restored and its redraw frames stay in the history
-- [ ] Check the badge itself where the alternate screen is still on — another tmux
-      socket, the setting turned off, or an app that bypasses it: the "Full-screen
-      app" badge lights up, tapping it explains that such an app keeps no
-      scrollback, and a touch drag now scrolls inside the app itself; quitting the
-      app hides the badge and the history scrolls again
+- [ ] A session with a running Claude Code has no history: the "Full-screen app"
+      badge is lit and there is nothing to scroll. Claude takes the alternate
+      screen on its own and the ban on the agent socket has been revoked
+      (ADR 0020) — a known limitation rather than a breakage
+- [ ] Run `vim` (or `htop`) in the session — a "Full-screen app" badge appears;
+      tapping it explains that such an app keeps no scrollback, and a touch drag
+      now scrolls inside the app itself
+- [ ] Quit `vim` — the badge disappears, the pane screen is restored and the
+      history scrolls locally again
 - [ ] Open "Diagnostics" — the "Terminal connection method (last known)" row names
       the mode of the last connection (the agent does not report it in diagnostics,
       so the row reflects the last state frame, possibly from another agent), and
