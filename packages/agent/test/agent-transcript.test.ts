@@ -19,7 +19,12 @@ const PREV = `${HOME}/.claude/projects/-Users-u-projects-Sprut-App/d2d64e42-5893
 // Europe/Moscow это 14:24:49Z и 17:24:49 на часах — один и тот же момент.
 const PROC_START_UTC = 'Thu Sep  3 14:24:49 2026';
 const localStart = (): Date => new Date(2026, 8, 3, 17, 24, 49);
-const row = (pid: number, startedAt: Date, ppid = 1): ProcessRow => ({ pid, ppid, startedAt });
+const row = (pid: number, startedAt: Date, ppid = 1, args?: string): ProcessRow => ({
+  pid,
+  ppid,
+  startedAt,
+  args,
+});
 
 const CODEX_DIR = `${HOME}/.codex/sessions`;
 const ROOT_FILE = `${CODEX_DIR}/2026/09/05/rollout-2026-09-05T22-24-43-01a07307-c04e-7a62-8322-3fa3ce8122cb.jsonl`;
@@ -94,7 +99,9 @@ function sources(over: Partial<TranscriptSources> = {}): Partial<TranscriptSourc
     readHead: async () => '',
     isFile: async () => true,
     processTable: async () => [],
-    panePids: async () => new Map<string, number>(),
+    // Панель по умолчанию существует: «панели нет» — это отдельный ответ (lookup-failed),
+    // и делать его фоном всех остальных проверок значило бы проверять не то.
+    panePids: async () => new Map([[PANE, 900]]),
     openFiles: async () => [],
     ...over,
   };
@@ -297,7 +304,7 @@ describe('resolve: панель Claude', () => {
     expect(res).toMatchObject({ ok: false, reason: 'unknown-format' });
   });
 
-  it('транскрипта нет там, куда его кладёт Claude, — незнакомый формат', async () => {
+  it('транскрипта на диске ещё нет — своя причина, а не незнакомый формат', async () => {
     const res = await resolve(
       PANE,
       sources({
@@ -306,7 +313,10 @@ describe('resolve: панель Claude', () => {
         isFile: async () => false,
       }),
     );
-    expect(res).toMatchObject({ ok: false, reason: 'unknown-format' });
+    // Формат тут знаком, путь собран по его правилу — на живых данных так выглядит
+    // запущенная и ни разу не спрошенная сессия. Экрану ленты нужно сказать «беседа
+    // пуста», а не «формат не разобран».
+    expect(res).toMatchObject({ ok: false, reason: 'no-transcript', detail: expect.stringContaining(CURRENT) });
   });
 
   it('битые записи реестра пропускаются, а не роняют обход', async () => {
@@ -514,7 +524,7 @@ describe('resolve: панель Codex', () => {
     // что запись выселена вместе с исчезнувшей панелью, а не тем, что она протухла.
     present = false;
     vi.setSystemTime(base + 1500);
-    expect(await resolve(PANE, src())).toMatchObject({ ok: false, reason: 'no-agent' });
+    expect(await resolve(PANE, src())).toMatchObject({ ok: false, reason: 'lookup-failed' });
 
     present = true;
     vi.setSystemTime(base + 3000);
@@ -574,6 +584,93 @@ describe('resolve: цена обхода', () => {
   });
 });
 
+describe('resolve: клиент подключён к фоновой сессии', () => {
+  // Живая форма 14.09.2026: у фоновой сессии (`kind: "bg"`) поля `tmux` в реестре нет
+  // вовсе, а в панели сидит её клиент — `claude attach 353d6219`. По адресу панели реестр
+  // про такую сессию не знает ничего, и до этой ветки панель отвечала «агента нет».
+  const BG_ID = '353d6219-23f0-4770-8d22-69ece8353d2e';
+  const BG_FILE = `${HOME}/.claude/projects/-Users-u-projects-Sprut-App/${BG_ID}.jsonl`;
+  const bg = (over: Record<string, unknown> = {}): string =>
+    record({ pid: 47778, sessionId: BG_ID, kind: 'bg', tmux: undefined, ...over });
+  /** Оболочка панели и её потомок-клиент. */
+  const withClient = (args: string, over: Partial<TranscriptSources> = {}): Partial<TranscriptSources> =>
+    sources({
+      ...registry({ '47778.json': bg() }),
+      panePids: async () => new Map([[PANE, 900]]),
+      processTable: async () => [
+        row(900, new Date(2026, 8, 3, 17, 0, 0)),
+        row(49941, new Date(2026, 8, 3, 17, 30, 0), 900, args),
+        row(47778, localStart()),
+      ],
+      ...over,
+    });
+
+  it('клиент в панели называет сессию началом её идентификатора — отдаём её беседу', async () => {
+    const res = await resolve(PANE, withClient('claude attach 353d6219'));
+    expect(res).toEqual({ ok: true, agent: 'claude', files: [BG_FILE], complete: true, live: true });
+  });
+
+  it('фоновый агент завершился, а клиент остался — файл тот же, но не живой', async () => {
+    const res = await resolve(
+      PANE,
+      withClient('claude attach 353d6219', {
+        processTable: async () => [
+          row(900, new Date(2026, 8, 3, 17, 0, 0)),
+          row(49941, new Date(2026, 8, 3, 17, 30, 0), 900, 'claude attach 353d6219'),
+        ],
+      }),
+    );
+    expect(res).toMatchObject({ ok: true, files: [BG_FILE], live: false });
+  });
+
+  it('своя запись панели старше клиента: беседу отдаёт агент этой панели, а не чужой', async () => {
+    const res = await resolve(
+      PANE,
+      withClient('claude attach 353d6219', {
+        ...registry({ '47778.json': bg(), '13432.json': record() }),
+        processTable: async () => [
+          row(900, new Date(2026, 8, 3, 17, 0, 0)),
+          row(49941, new Date(2026, 8, 3, 17, 30, 0), 900, 'claude attach 353d6219'),
+          row(13432, localStart()),
+          row(47778, localStart()),
+        ],
+      }),
+    );
+    expect(res).toMatchObject({ ok: true, files: [CURRENT] });
+  });
+
+  it('начало подходит двум сессиям — не угадываем', async () => {
+    const twin = bg({ pid: 47779, sessionId: '353d6219-0000-4000-8000-000000000000' });
+    const res = await resolve(
+      PANE,
+      withClient('claude attach 353d6219', {
+        ...registry({ '47778.json': bg(), '47779.json': twin }),
+      }),
+    );
+    expect(res).toMatchObject({ ok: false, reason: 'no-agent' });
+  });
+
+  it('идентификатор в аргументах не claude — не наш случай (хеш в git те же шестнадцать знаков)', async () => {
+    const res = await resolve(PANE, withClient('git log 353d6219'));
+    expect(res).toMatchObject({ ok: false, reason: 'no-agent' });
+  });
+
+  it('аргумент короче восьми знаков не берём', async () => {
+    const res = await resolve(PANE, withClient('claude attach 353d'));
+    expect(res).toMatchObject({ ok: false, reason: 'no-agent' });
+  });
+
+  it('источник не отдал аргументов — прежние способы работают как работали', async () => {
+    const res = await resolve(
+      PANE,
+      withClient('claude attach 353d6219', {
+        processTable: async () => [row(900, new Date(2026, 8, 3, 17, 0, 0)), row(49941, localStart(), 900)],
+      }),
+    );
+    expect(res).toMatchObject({ ok: false, reason: 'no-agent' });
+  });
+});
+
 describe('resolve: различимый отказ', () => {
   it('незнакомый адрес панели — отказ по формату, без обхода источников', async () => {
     let touched = 0;
@@ -599,6 +696,19 @@ describe('resolve: различимый отказ', () => {
   it('ни реестра, ни агента в панели — «агента нет»', async () => {
     const res = await resolve(PANE, sources());
     expect(res).toEqual({ ok: false, reason: 'no-agent', detail: expect.stringContaining(PANE) });
+  });
+
+  it('панели нет на сокете — «смотреть негде», а не «в панели нет агента»', async () => {
+    const res = await resolve(
+      PANE,
+      sources({ panePids: async () => new Map([['Other:@1.%1', 900]]) }),
+    );
+    expect(res).toMatchObject({ ok: false, reason: 'lookup-failed', detail: expect.stringContaining('1 панел') });
+  });
+
+  it('сокет не отдал ни одной панели — причина называет именно это', async () => {
+    const res = await resolve(PANE, sources({ panePids: async () => new Map<string, number>() }));
+    expect(res).toMatchObject({ ok: false, reason: 'lookup-failed', detail: expect.stringContaining('ни одной') });
   });
 
   it('каталог реестра недоступен — «определить не удалось», а не «агента нет»', async () => {

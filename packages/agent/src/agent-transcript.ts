@@ -3,9 +3,10 @@
 // читается — только первая строка rollout'а Codex, в которой лежит признак корневого
 // потока. Ни ленты, ни интерфейса здесь нет: это первый из трёх шагов.
 //
-// Способа два, общего у них — только форма ответа:
+// Способа три, общего у них — только форма ответа:
 //   Claude — реестр ~/.claude/sessions/<pid>.json, поле `tmux` = адрес панели;
-//   Codex  — файлы, которые процесс панели и его потомки держат открытыми.
+//   Codex  — файлы, которые процесс панели и его потомки держат открытыми;
+//   Claude, подключённый клиентом, — идентификатор сессии в аргументах этого клиента.
 // Ни заголовок панели, ни рабочий каталог, ни время файла в привязке не участвуют: на
 // живых данных они сессии не различают (заголовок пуст у двух панелей из семи, каталог
 // общий у восьми сессий, пишутся все одновременно). Единственный различающий признак —
@@ -17,7 +18,12 @@
 // записана только в ПРЕЖНЕМ файле (`continued-in`, указывает вперёд), в новом о родителе
 // нет ничего. Значит текущий файл и есть вся беседа, а пара «прежний плюс текущий» —
 // дубль истории, который читателю пришлось бы разбирать. Поэтому `files` — список из
-// одного файла текущей сессии, а разбора аргументов процесса в модуле нет вовсе.
+// одного файла текущей сессии.
+//
+// Аргументы процесса читаются ровно в одном месте (`claudeAttached`) и ровно для одного
+// случая: в панели сидит клиент `claude attach <id>`, а сам агент работает фоновым
+// процессом, у записи которого поля `tmux` нет вовсе. Связывает их только идентификатор
+// сессии в аргументах клиента; больше ни на что аргументы в модуле не влияют.
 //
 // Дюжина панелей опрашивается подряд, поэтому общие источники берутся снимком на секунду:
 // один обход реестра, один вызов ps и один list-panes на весь обход, а не на панель.
@@ -41,7 +47,13 @@ export type FailureReason =
   | 'no-agent'
   /** Агент есть, но его данные не в том виде, который мы понимаем. */
   | 'unknown-format'
-  /** Посмотреть не удалось: права, недоступный обход открытых файлов, сбой инструмента. */
+  /** Агент найден, а транскрипта на диске ещё нет: беседу не начинали либо она пишется не
+   *  под тем рабочим каталогом, который записан в реестре. Формат тут знаком — отличать
+   *  это от `unknown-format` нужно, чтобы экран ленты сказал «беседа пуста», а не «формат
+   *  не разобран»: на живых данных так выглядит запущенная и ни разу не спрошенная сессия. */
+  | 'no-transcript'
+  /** Посмотреть не удалось: права, недоступный обход открытых файлов, сбой инструмента —
+   *  или панели, про которую спрашивают, на сокете tmux уже нет. */
   | 'lookup-failed';
 
 export interface TranscriptChain {
@@ -77,6 +89,9 @@ export interface ProcessRow {
   pid: number;
   ppid: number;
   startedAt: Date;
+  /** Командная строка целиком — нужна единственному случаю, клиенту `claude attach`
+   *  в панели (`claudeAttached`). Источник вправе её не отдавать. */
+  args?: string;
 }
 
 /** Источники данных — единственный шов для тестов: реестр и файлы читаются через них,
@@ -109,6 +124,11 @@ const PANE_TAIL_RE = /^(.*):@\d+\.%\d+$/;
 /** Идентификатор сессии Claude: из него получается имя файла, поэтому проверяем строго —
  *  это и есть защита от пути наружу, собранного по чужой записи реестра. */
 const SESSION_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+/** Аргумент клиента, похожий на начало идентификатора сессии: `claude attach 353d6219`.
+ *  Восьми знаков достаточно, чтобы случайное совпадение с чужим аргументом стало
+ *  невероятным; аргумент короче мы просто не берём — угадывать по нему сессию опаснее,
+ *  чем ответить «агента нет». */
+const ATTACH_ID_RE = /^[0-9a-f][0-9a-f-]{7,63}$/i;
 /** Формат list-panes: адрес панели ровно в том виде, в каком его пишет в реестр Claude. */
 const PANE_PID_FORMAT = '#{session_name}:#{window_id}.#{pane_id}\t#{pane_pid}';
 
@@ -119,7 +139,9 @@ const CODEX_SESSIONS_DIR = '.codex/sessions';
 /** Сколько читаем от файла: запись реестра — сотни байт, первая строка rollout'а — десятки КиБ. */
 const HEAD_BYTES = 64 * 1024;
 const EXEC_TIMEOUT_MS = 3000;
-/** Обход открытых файлов мерялся в 0,4 с на панель — запас втрое. */
+/** Обход открытых файлов мерялся 14.09.2026 на дюжине живых панелей (машина под нагрузкой,
+ *  одиннадцать работающих агентов): холодный — от 0,05 до 1,5 с на панель, повторный — от
+ *  0,05 до 0,18 с. Срок взят примерно втрое от худшей измеренной панели. */
 const LSOF_TIMEOUT_MS = 5000;
 const EXEC_MAX_BUFFER = 4 * 1024 * 1024;
 /** Допуск при сверке времён старта: обе стороны округляют до секунды. */
@@ -128,7 +150,7 @@ const START_TOLERANCE_MS = 2000;
  *  а свежесть теряется не больше чем на секунду. */
 const SNAPSHOT_TTL_MS = 1000;
 /** Срок записи кэша обхода Codex. Числа из замера тут нет: замерена только цена обхода —
- *  около 0,4 с на панель, то есть примерно пять секунд на дюжину. Срок взят чуть больше
+ *  дюжина панелей вхолодную обходится за 4,3 с, повторно за 1,2 с (замер 14.09.2026). Срок взят чуть больше
  *  периода, с которым веб опрашивает сессии (три секунды): короче — и каждый опрос платил
  *  бы полный обход, ради которого кэш и заведён; длиннее — и запуск агента в оболочке
  *  замечался бы на столько же позже, ведь pid оболочки при этом не меняется. Станет опрос
@@ -152,6 +174,13 @@ interface PaneRecords {
   malformed: boolean;
 }
 
+/** Реестр Claude одним снимком: записи с адресом панели разложены по панелям, а `all` —
+ *  все разобранные записи, включая те, у кого адреса панели нет (фоновые сессии). */
+interface Registry {
+  byPane: Map<string, PaneRecords>;
+  all: ClaudeEntry[];
+}
+
 /** Что реестр знает про панель: живой агент, запись без процесса и битая запись. */
 interface ClaudeCandidates {
   alive?: ClaudeEntry;
@@ -167,7 +196,7 @@ interface Snapshot {
   pending: number;
   /** Чей это снимок: с другими источниками он недействителен, даже пока не истёк. */
   owner?: TranscriptSources;
-  registry?: Promise<Map<string, PaneRecords>>;
+  registry?: Promise<Registry>;
   processes?: Promise<Map<number, ProcessRow>>;
   panes?: Promise<Map<string, number>>;
 }
@@ -237,25 +266,28 @@ async function defaultIsFile(file: string): Promise<boolean> {
   }
 }
 
-/** Вся таблица процессов одним вызовом: pid, родитель и время старта. Любая ошибка ps —
- *  сбой обхода и уходит наверх; пустой таблицы от живой системы не бывает. */
+/** Вся таблица процессов одним вызовом: pid, родитель, время старта и командная строка.
+ *  Аргументы идут последним полем именно потому, что они одни могут содержать пробелы.
+ *  Любая ошибка ps — сбой обхода и уходит наверх; пустой таблицы от живой системы не бывает. */
 async function defaultProcessTable(): Promise<ProcessRow[]> {
-  const { stdout } = await exec('ps', ['-axo', 'pid=,ppid=,lstart='], {
+  const { stdout } = await exec('ps', ['-axo', 'pid=,ppid=,lstart=,args='], {
     encoding: 'utf8',
     timeout: EXEC_TIMEOUT_MS,
     maxBuffer: EXEC_MAX_BUFFER,
   });
   const rows: ProcessRow[] = [];
   for (const line of stdout.split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/.exec(line);
+    const m = /^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s?(.*)$/.exec(line);
     if (!m) continue;
     const parts = parseStamp(m[3]);
     if (!parts) continue;
     // ps печатает время в локальной зоне — собираем момент по локальному календарю.
+    const args = m[4].trim();
     rows.push({
       pid: Number(m[1]),
       ppid: Number(m[2]),
       startedAt: new Date(parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second),
+      args: args.length > 0 ? args : undefined,
     });
   }
   return rows;
@@ -408,7 +440,7 @@ function sameSources(a: TranscriptSources | undefined, b: TranscriptSources): bo
   );
 }
 
-function registryOf(snap: Snapshot, src: TranscriptSources): Promise<Map<string, PaneRecords>> {
+function registryOf(snap: Snapshot, src: TranscriptSources): Promise<Registry> {
   return (snap.registry ??= track(snap, readRegistry(src)));
 }
 
@@ -430,9 +462,11 @@ function panesOf(snap: Snapshot, src: TranscriptSources): Promise<Map<string, nu
   ));
 }
 
-/** Разбирает запись реестра: адрес панели и поля сессии. undefined — записи не про панель
- *  (приписать её некуда), 'malformed' — адрес есть, а полей нет или они не те. */
-function registryRecord(json: string): { pane: string; entry: ClaudeEntry | 'malformed' } | undefined {
+/** Разбирает запись реестра: поля сессии и, если он есть, адрес панели. undefined — запись
+ *  не разобралась и приписать её некуда, 'malformed' — адрес панели есть, а полей нет или
+ *  они не те. Записи без адреса панели тоже нужны: так выглядит фоновая сессия, к которой
+ *  подключаются клиентом (`kind: "bg"` — поля `tmux` у неё нет вовсе). */
+function registryRecord(json: string): { pane?: string; entry: ClaudeEntry | 'malformed' } | undefined {
   let raw: unknown;
   try {
     raw = JSON.parse(json);
@@ -442,12 +476,15 @@ function registryRecord(json: string): { pane: string; entry: ClaudeEntry | 'mal
   if (typeof raw !== 'object' || raw === null) return undefined;
   const rec = raw as Record<string, unknown>;
   const { tmux, pid, sessionId, cwd } = rec;
-  if (typeof tmux !== 'string' || tmux.length === 0) return undefined;
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return { pane: tmux, entry: 'malformed' };
-  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return { pane: tmux, entry: 'malformed' };
-  if (typeof cwd !== 'string' || !cwd.startsWith('/')) return { pane: tmux, entry: 'malformed' };
+  const pane = typeof tmux === 'string' && tmux.length > 0 ? tmux : undefined;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0)
+    return pane === undefined ? undefined : { pane, entry: 'malformed' };
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId))
+    return pane === undefined ? undefined : { pane, entry: 'malformed' };
+  if (typeof cwd !== 'string' || !cwd.startsWith('/'))
+    return pane === undefined ? undefined : { pane, entry: 'malformed' };
   return {
-    pane: tmux,
+    pane,
     entry: {
       pid,
       sessionId,
@@ -458,10 +495,12 @@ function registryRecord(json: string): { pane: string; entry: ClaudeEntry | 'mal
   };
 }
 
-/** Весь реестр Claude за один обход: панель → её записи. */
-async function readRegistry(src: TranscriptSources): Promise<Map<string, PaneRecords>> {
+/** Весь реестр Claude за один обход: панель → её записи и, отдельно, все разобранные
+ *  записи подряд — по ним ищется сессия, к которой подключён клиент в панели. */
+async function readRegistry(src: TranscriptSources): Promise<Registry> {
   const dir = path.join(src.home, CLAUDE_REGISTRY_DIR);
   const byPane = new Map<string, PaneRecords>();
+  const all: ClaudeEntry[] = [];
   for (const name of await src.readDir(dir)) {
     if (!name.endsWith('.json')) continue;
     let body: string;
@@ -474,12 +513,14 @@ async function readRegistry(src: TranscriptSources): Promise<Map<string, PaneRec
     }
     const parsed = registryRecord(body);
     if (!parsed) continue;
+    if (parsed.entry !== 'malformed') all.push(parsed.entry);
+    if (parsed.pane === undefined) continue;
     const slot = byPane.get(parsed.pane) ?? { entries: [], malformed: false };
     if (parsed.entry === 'malformed') slot.malformed = true;
     else slot.entries.push(parsed.entry);
     byPane.set(parsed.pane, slot);
   }
-  return byPane;
+  return { byPane, all };
 }
 
 /** Кандидаты из реестра Claude: живой агент панели и, отдельно, запись, пережившая свой
@@ -491,7 +532,7 @@ async function claudeCandidates(
   snap: Snapshot,
   src: TranscriptSources,
 ): Promise<ClaudeCandidates | undefined> {
-  const slot = (await registryOf(snap, src)).get(pane);
+  const slot = (await registryOf(snap, src)).byPane.get(pane);
   if (!slot) return undefined;
   const processes = await processesOf(snap, src);
   let alive: ClaudeEntry | undefined;
@@ -517,10 +558,10 @@ async function claudeCandidates(
 }
 
 /** Годится ли запись, пережившая своего агента. Мёртвый процесс сверить не с чем, поэтому
- *  сверяем панель: адрес вида «SprutApp:@0.%0» переиспользуется новым сервером tmux, а на
- *  живых данных владельца все девять записей реестра указывают на уже умершие процессы.
- *  Панель, которая моложе записи, к этой беседе отношения не имеет, а панели, которой уже
- *  нет, отвечать нечем. Запись без времени старта не проходит: сверить нечем. */
+ *  сверяем панель: запись живёт дольше своего процесса, а адрес вида «SprutApp:@0.%0»
+ *  достаётся новому серверу tmux с первой же его сессии. Панель, которая моложе записи,
+ *  к этой беседе отношения не имеет, а панели, которой уже нет, отвечать нечем. Запись без
+ *  времени старта не проходит: сверить нечем. */
 async function staleFits(
   pane: string,
   entry: ClaudeEntry,
@@ -536,6 +577,57 @@ async function staleFits(
   return row.startedAt.getTime() <= agentStart + START_TOLERANCE_MS;
 }
 
+/** Способ третий: в панели работает не сам агент, а его клиент — `claude attach <id>`.
+ *  Сама сессия при этом фоновая, поля `tmux` у её записи нет вовсе, и по адресу панели
+ *  реестр про неё не знает ничего. Связывает их только идентификатор сессии в аргументах
+ *  клиента, поэтому здесь — единственное место, где модуль смотрит на аргументы процесса.
+ *
+ *  Правило нарочно строгое, и обе его половины нужны: команда процесса должна называться
+ *  `claude` (иначе началом идентификатора сессии оказался бы, например, хеш в `git log`),
+ *  а сам аргумент — быть началом РОВНО ОДНОЙ сессии реестра (иначе панель отдала бы чужую
+ *  беседу). Не сошлось — молчим и отвечаем прежним способом. */
+async function claudeAttached(
+  pane: string,
+  snap: Snapshot,
+  src: TranscriptSources,
+): Promise<TranscriptResult | undefined> {
+  const pid = (await panesOf(snap, src)).get(pane);
+  if (pid === undefined) return undefined;
+  const { all } = await registryOf(snap, src);
+  if (all.length === 0) return undefined;
+  const processes = await processesOf(snap, src);
+  for (const kid of descendants(pid, processes)) {
+    const args = processes.get(kid)?.args;
+    if (!args) continue;
+    const words = args.split(/\s+/);
+    if (path.basename(words[0]) !== 'claude') continue;
+    for (const word of words.slice(1)) {
+      if (!ATTACH_ID_RE.test(word)) continue;
+      const entry = soleSession(all, word.toLowerCase());
+      if (!entry) continue;
+      // Клиент жив всегда — он и есть процесс панели; «живость» здесь про саму сессию:
+      // фоновый агент мог завершиться, а клиент остаться на экране с её последним видом.
+      const own = processes.get(entry.pid);
+      const live = own !== undefined && entry.procStart !== undefined && sameStart(entry.procStart, own.startedAt);
+      return claudeFile(entry, live, src);
+    }
+  }
+  return undefined;
+}
+
+/** Запись сессии, чей идентификатор начинается с этого аргумента, — и только если такая
+ *  сессия одна. Одну сессию реестр может описывать несколькими записями (перезапуск под
+ *  новым pid), поэтому считаем различные идентификаторы, а из записей берём позднейшую. */
+function soleSession(all: ClaudeEntry[], prefix: string): ClaudeEntry | undefined {
+  let best: ClaudeEntry | undefined;
+  for (const entry of all) {
+    if (!entry.sessionId.toLowerCase().startsWith(prefix)) continue;
+    if (best && best.sessionId !== entry.sessionId) return undefined;
+    if (!best || entry.startedAt > best.startedAt) best = entry;
+  }
+  return best;
+}
+
 /** Файл беседы Claude: каталог — из рабочего каталога сессии, имя — из её идентификатора.
  *  Обе составляющие пришли из чужого файла, поэтому обе обезврежены до сборки пути:
  *  каталог кодируется посимвольно, идентификатор проверен SESSION_ID_RE. Полнота у Claude
@@ -546,8 +638,17 @@ async function claudeFile(entry: ClaudeEntry, live: boolean, src: TranscriptSour
   // Сам собранный путь проверяется тем же правилом, что и путь из открытых файлов Codex:
   // сегодня обе составляющие уже обезврежены по отдельности, поэтому ложным условие стать
   // не может, но защищать два пути по-разному значит держать одну из дверей приоткрытой.
-  if (!withinDir(file, projects) || !(await src.isFile(file)))
+  if (!withinDir(file, projects))
     return fail('unknown-format', `Транскрипт сессии ${entry.sessionId} не лежит там, где его держит Claude: ${file}`);
+  // Файла нет — это не «формат незнаком»: путь собран по знакомому правилу, а беседы
+  // просто ещё нет. Так выглядит запущенная и ни разу не спрошенная сессия (проверено на
+  // живых данных: запись есть, транскрипта нет нигде). Второе объяснение — сессия пишет
+  // под другим рабочим каталогом, чем записано в реестре; снаружи они неразличимы.
+  if (!(await src.isFile(file)))
+    return fail(
+      'no-transcript',
+      `Беседы сессии ${entry.sessionId} на диске ещё нет: ${file} (её не начинали или рабочий каталог сменился)`,
+    );
   return found('claude', file, true, live);
 }
 
@@ -643,7 +744,7 @@ async function codexThread(
   return found('codex', best.file, !best.forked, true);
 }
 
-/** Обход открытых файлов стоит около 0,4 с на панель, а панелей дюжина: держим результат
+/** Обход открытых файлов стоит от 0,05 до 1,5 с на панель, а панелей дюжина: держим результат
  *  на панель с ключом из pid и времени его старта — сменился процесс, запись недействительна.
  *  Сбой обхода сюда не попадает: он летит исключением и кэш не трогает. */
 async function tryCodex(pane: string, snap: Snapshot, src: TranscriptSources): Promise<TranscriptResult | undefined> {
@@ -685,6 +786,14 @@ export async function resolve(pane: string, sources?: Partial<TranscriptSources>
     blind ??= describe(err);
   }
   if (codex) return codex;
+  // Клиент `claude attach` идёт после обоих живых способов: он говорит про сессию, которая
+  // работает не здесь, и своего агента панели перебивать не должен.
+  try {
+    const attached = await claudeAttached(pane, snap, src);
+    if (attached) return attached;
+  } catch (err) {
+    blind ??= describe(err);
+  }
   // Запись, пережившая своего агента, идёт последней: живой обход Codex она обгонять не
   // должна, иначе панель отдаст беседу давно закрытой сессии как свою.
   if (claude?.stale)
@@ -696,6 +805,20 @@ export async function resolve(pane: string, sources?: Partial<TranscriptSources>
   if (claude?.malformed)
     return fail('unknown-format', `Запись реестра Claude про панель ${pane} не разобрана: полей нет или они не те`);
   if (blind) return fail('lookup-failed', `Определить агента панели ${pane} не удалось: ${blind}`);
+  // «Агента нет» говорим только про существующую панель. Панели нет — смотреть было негде,
+  // и молча приравнивать это к пустой панели значит врать тому, кто спросил.
+  try {
+    const panes = await panesOf(snap, src);
+    if (!panes.has(pane))
+      return fail(
+        'lookup-failed',
+        panes.size === 0
+          ? `Панели ${pane} нет: сокет tmux не отдал ни одной панели`
+          : `Панели ${pane} нет среди ${panes.size} панелей сокета tmux`,
+      );
+  } catch (err) {
+    return fail('lookup-failed', `Определить агента панели ${pane} не удалось: ${describe(err)}`);
+  }
   return fail('no-agent', `В панели ${pane} нет агента, пишущего транскрипт`);
 }
 
