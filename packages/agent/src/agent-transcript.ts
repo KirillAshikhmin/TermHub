@@ -134,10 +134,12 @@ const PANE_PID_FORMAT = '#{session_name}:#{window_id}.#{pane_id}\t#{pane_pid}';
 
 const CLAUDE_REGISTRY_DIR = '.claude/sessions';
 const CLAUDE_PROJECTS_DIR = '.claude/projects';
-const CODEX_SESSIONS_DIR = '.codex/sessions';
+/** Каталог rollout-файлов Codex под домом: год/месяц/день. Знает его только этот модуль —
+ *  и цепочка файлов ленты, которой он отдан отсюда же. */
+export const CODEX_SESSIONS_DIR = '.codex/sessions';
 
 /** Сколько читаем от файла: запись реестра — сотни байт, первая строка rollout'а — десятки КиБ. */
-const HEAD_BYTES = 64 * 1024;
+export const HEAD_BYTES = 64 * 1024;
 const EXEC_TIMEOUT_MS = 3000;
 /** Обход открытых файлов мерялся 14.09.2026 на дюжине живых панелей (машина под нагрузкой,
  *  одиннадцать работающих агентов): холодный — от 0,05 до 1,5 с на панель, повторный — от
@@ -652,16 +654,18 @@ async function claudeFile(entry: ClaudeEntry, live: boolean, src: TranscriptSour
   return found('claude', file, true, live);
 }
 
-interface CodexMeta {
+export interface CodexMeta {
   root: boolean;
   started: number;
-  /** Поток отпочкован от другого: начало беседы осталось в том файле. */
-  forked: boolean;
+  /** Поток самого файла (`payload.id`): им же файл назван на диске. */
+  thread: string;
+  /** Поток, от которого этот отпочкован; пусто — начало беседы здесь же. */
+  forkedFrom: string;
 }
 
 /** Первая строка rollout'а Codex: `session_meta`. Вложенный поток узнаётся по родителю и
  *  по `source.subagent`; у корневого `source` — строка «cli», родителя нет. */
-function codexMeta(head: string): CodexMeta | undefined {
+export function codexMeta(head: string): CodexMeta | undefined {
   const line = head.split('\n')[0] ?? '';
   let raw: unknown;
   try {
@@ -679,8 +683,9 @@ function codexMeta(head: string): CodexMeta | undefined {
     (typeof payload.parent_thread_id === 'string' && payload.parent_thread_id.length > 0) ||
     (typeof source === 'object' && source !== null && 'subagent' in (source as Record<string, unknown>));
   const stamp = Date.parse(String(payload.timestamp ?? rec.timestamp ?? ''));
-  const forked = typeof payload.forked_from_id === 'string' && payload.forked_from_id.length > 0;
-  return { root: !nested, started: Number.isFinite(stamp) ? stamp : 0, forked };
+  const forkedFrom = typeof payload.forked_from_id === 'string' ? payload.forked_from_id : '';
+  const thread = typeof payload.id === 'string' ? payload.id : '';
+  return { root: !nested, started: Number.isFinite(stamp) ? stamp : 0, thread, forkedFrom };
 }
 
 /** Процесс панели и все его потомки: у Codex rollout держит открытым не тот процесс, что
@@ -715,7 +720,7 @@ async function codexThread(
   const open = await src.openFiles(descendants(pid, processes));
   const files = open.filter((f) => withinDir(f, root) && f.endsWith('.jsonl')).sort();
   if (files.length === 0) return undefined;
-  let best: { file: string; started: number; forked: boolean } | undefined;
+  let best: { file: string; started: number; forkedFrom: string } | undefined;
   let metaSeen = false;
   for (const file of files) {
     let head: string;
@@ -730,7 +735,7 @@ async function codexThread(
     if (!meta) continue;
     metaSeen = true;
     if (!meta.root) continue;
-    if (!best || meta.started > best.started) best = { file, started: meta.started, forked: meta.forked };
+    if (!best || meta.started > best.started) best = { file, started: meta.started, forkedFrom: meta.forkedFrom };
   }
   if (!best)
     return fail(
@@ -741,7 +746,7 @@ async function codexThread(
     );
   // Корневой поток пишет живой процесс панели; отпочкованный от другого потока помечаем
   // неполным — начало беседы осталось в файле, из которого его отпочковали.
-  return found('codex', best.file, !best.forked, true);
+  return found('codex', best.file, !best.forkedFrom, true);
 }
 
 /** Обход открытых файлов стоит от 0,05 до 1,5 с на панель, а панелей дюжина: держим результат
