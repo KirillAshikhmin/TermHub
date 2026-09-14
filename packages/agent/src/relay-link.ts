@@ -83,6 +83,8 @@ import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
 import { runGradleAction } from './gradle-action.js';
 import { buildSessionName } from './gradle.js';
+import { sessionFeed } from './session-feed.js';
+import { feedPage, feedSession, type FeedReader } from './feed-request.js';
 import { VcsService } from './vcs.js';
 
 /** TTL кода пейринга — 5 минут (совпадает с relay). */
@@ -198,6 +200,9 @@ export class RelayLink {
   private readonly attach: typeof attachTerminal;
   /** Настройка агента: способ подключения терминала (`config.terminalMode`). */
   private readonly configMode?: TerminalMode;
+  /** Лента сессии: имя сессии → страница беседы её агента. Тот же вызов делает LAN,
+   *  поэтому ответ обоих транспортов — один и тот же объект. */
+  private readonly feed: FeedReader;
   private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
@@ -252,6 +257,8 @@ export class RelayLink {
     configMode?: TerminalMode;
     /** Общий budget живых pty: один на LAN и relay. */
     ptyPool?: PtyPool;
+    /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
+    feed?: FeedReader;
   }) {
     this.url = opts.url;
     this.identity = opts.identity;
@@ -268,6 +275,9 @@ export class RelayLink {
     this.attach = opts.attach ?? attachTerminal;
     this.configMode = opts.configMode;
     this.ptyPool = opts.ptyPool ?? defaultPtyPool;
+    // Сокет передаём явно: по умолчанию лента (как resolve и SessionService) его не
+    // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
+    this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -293,6 +303,17 @@ export class RelayLink {
   /** Сбрасывает кэш допущенных (после отзыва в этом же процессе — чтобы без задержки). */
   private invalidateAuthorized(): void {
     this.authorizedAt = 0;
+  }
+
+  /** Чья это сессия. Хозяину (scope нет) доступна любая; гостю — только расшаренная.
+   *  `withBuild` — считать ли своей и сборочную сессию расшаренной: терминал вкладки
+   *  Gradle открывается тем же openTerm (doOpen), а вот беседы агента в сборочной
+   *  сессии нет, и лента её не отдаёт. Правило одно на doList/doOpen/doFeed: врозь они
+   *  разошлись бы молча. */
+  private ownsSession(s: ClientSession, session: string, withBuild: boolean): boolean {
+    const scope = s.scope;
+    if (!scope) return true;
+    return session === scope.session || (withBuild && session === buildSessionName(scope.session));
   }
 
   /** Требует, чтобы запрошенный путь лежал внутри каталога расшаренной сессии.
@@ -761,6 +782,12 @@ export class RelayLink {
           // дополнительно требуют write (в doRepo/doFileOp).
           if (!scope.files) return;
           break;
+        case FrameType.Feed:
+          // Лента гостю — наравне с хозяином: write она не требует (ничего не меняет),
+          // files тоже (произвольный путь через неё не прочитать — адрес только имя
+          // сессии). Ограничение «только своя сессия» — в doFeed: имя лежит в payload,
+          // а он здесь ещё не разобран.
+          break;
         default:
           break;
       }
@@ -861,6 +888,9 @@ export class RelayLink {
       case FrameType.Gradle:
         void this.doGradle(s, frame);
         return;
+      case FrameType.Feed:
+        void this.doFeed(s, frame);
+        return;
       case FrameType.Share:
         void this.doShare(s, frame);
         return;
@@ -885,8 +915,8 @@ export class RelayLink {
     } catch {
       sessions = [];
     }
-    // Гость видит только свою сессию.
-    if (s.scope) sessions = sessions.filter((sess) => sess.name === s.scope!.session);
+    // Гость видит только свою сессию (сборочные в листинге не показываются вовсе).
+    sessions = sessions.filter((sess) => this.ownsSession(s, sess.name, false));
     this.sendFrameBytes(s, jsonFrame(FrameType.ListResult, 0, { sessions, scope: s.scope ?? null }));
   }
 
@@ -1028,6 +1058,25 @@ export class RelayLink {
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.GradleResult, 0, { id, error: (err as Error).message }));
     }
+  }
+
+  /** Лента сессии через relay: тот же ответ, что отдаёт `GET /api/feed`, — запрос
+   *  разбирает общий feed-request, поэтому JSON обоих транспортов совпадает побайтово
+   *  и на отказе, и на сорванном чтении. Гостю доступна только его сессия (тем же
+   *  предикатом, что решает doOpen) — БЕЗ сборочной: беседы агента в ней нет. Чужую
+   *  сессию мост не читает вовсе, отказ приходит тем же `forbidden`, что у doOpen. */
+  private async doFeed(s: ClientSession, frame: Frame): Promise<void> {
+    let req: Record<string, unknown>;
+    try {
+      req = frameJson<Record<string, unknown>>(frame);
+    } catch {
+      req = {};
+    }
+    if (!this.ownsSession(s, feedSession(req), false)) {
+      this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'forbidden', message: 'session not shared' }));
+      return;
+    }
+    this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req)));
   }
 
   /** Листинг директории файлового браузера через relay. Ошибка (вне корня) —
@@ -1211,7 +1260,7 @@ export class RelayLink {
     const requestedMode = typeof req.mode === 'string' ? req.mode : undefined;
     // Гость может открыть только свою сессию — и сборочную сессию ЕЁ сборки
     // (вкладка Gradle показывает вывод через тот же openTerm), но не чужую.
-    if (s.scope && session !== s.scope.session && session !== buildSessionName(s.scope.session)) {
+    if (!this.ownsSession(s, session, true)) {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'forbidden', message: 'session not shared' }));
       return;
     }

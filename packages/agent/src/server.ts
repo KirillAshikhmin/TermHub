@@ -22,6 +22,8 @@ import { runRepoAction } from './vcs.js';
 import type { VcsService } from './vcs.js';
 import { runGradleAction } from './gradle-action.js';
 import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
+import { sessionFeed } from './session-feed.js';
+import { feedPage, type FeedReader } from './feed-request.js';
 import { AGENT_CAPS, intersect, parseCaps } from '@termhub/protocol';
 
 /** Сервис веб-push (реализация — Task 9). */
@@ -157,6 +159,9 @@ export class AgentServer {
   /** Сокет tmux рабочих сессий: нужен экшенам Gradle (сборочная сессия — там же). */
   private readonly socketName?: string;
   private readonly rateLimit = new LoginRateLimit();
+  /** Лента сессии: имя сессии → страница беседы её агента. Тот же вызов делает relay,
+   *  поэтому ответ обоих транспортов — один и тот же объект. */
+  private readonly feed: FeedReader;
   /** Пересечение возможностей с последним клиентом, объявившимся по LAN (ADR 0018),
    *  и время обмена. Relay ведёт такой же счёт у себя (RelayLink.status), диагностика
    *  показывает более поздний: клиент бывает и по LAN, и через relay, а знать нужно
@@ -181,6 +186,8 @@ export class AgentServer {
     socketName?: string;
     /** Каталог web-статики; по умолчанию packages/agent/static (для тестов — переопределяемый). */
     staticDir?: string;
+    /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
+    feed?: FeedReader;
   }) {
     this.config = opts.config;
     this.sessions = opts.sessions;
@@ -192,6 +199,9 @@ export class AgentServer {
     this.caffeinate = opts.caffeinate;
     this.socketName = opts.socketName;
     this.staticDir = opts.staticDir ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'static');
+    // Сокет передаём явно: по умолчанию лента (как resolve и SessionService) его не
+    // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
+    this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
   }
 
   /** Регистрирует обработчик терминальных WS (Task 6). */
@@ -299,6 +309,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/dirs') return this.sendJson(res, 200, await this.sessions.dirs());
     if (method === 'GET' && pathname === '/api/diag') return this.diag(res);
     if (method === 'POST' && pathname === '/api/capabilities') return this.capabilities(req, res);
+    if (method === 'GET' && pathname === '/api/feed') return this.feedApi(res, url);
     if (method === 'GET' && pathname === '/api/files/list') return this.filesList(res, url);
     if (method === 'GET' && pathname === '/api/files/read') return this.fileRead(res, url);
     if (method === 'GET' && pathname === '/api/files/stat') return this.fileStatHttp(res, url);
@@ -417,6 +428,25 @@ export class AgentServer {
     this.lanCaps = intersect(AGENT_CAPS, parseCaps(body.caps));
     this.lanCapsAt = Date.now();
     this.sendJson(res, 200, { caps: AGENT_CAPS });
+  }
+
+  /** Лента сессии по LAN. Тело — ответ ленты как есть: тот же объект уходит кадром
+   *  FeedResult через relay, поэтому JSON обоих путей совпадает побайтово. Отказ —
+   *  не код HTTP, а `ok:false` с причиной: причины ленты клиент разбирает одинаково
+   *  на обоих транспортах, а маршрут отработал в любом случае. Неожиданный сбой чтения
+   *  (и пустые параметры URL §9) разбирает общий feed-request — тем же телом, что у
+   *  relay, а не 500. Лента только читает — адресация по имени сессии, ни записи, ни
+   *  произвольного пути через неё нет. */
+  private async feedApi(res: ServerResponse, url: URL): Promise<void> {
+    const q = url.searchParams;
+    const result = await feedPage(this.feed, {
+      session: q.get('session'),
+      limit: q.get('limit'),
+      before: q.get('before'),
+      after: q.get('after'),
+      around: q.get('around'),
+    });
+    return this.sendJson(res, 200, result);
   }
 
   /** Диагностика: версия, аптайм, сессии, статус связи с relay, корни. */

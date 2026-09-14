@@ -40,6 +40,7 @@ import { SessionService } from '../src/sessions.js';
 import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
 import { saveAuthorized, loadAuthorized } from '../src/config.js';
+import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON } from './feed-fixture.js';
 import type { AuthorizedDevice } from '../src/config.js';
 
 /** Доступен ли tmux (иначе happy-LIST пропускается). */
@@ -1211,5 +1212,153 @@ describe('RelayLink — объявление возможностей', () => {
 
     const frame = await c.next();
     expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+  }, 25000);
+});
+
+describe('RelayLink — лента сессии через relay', () => {
+  const OWN_SESSION = 'feed-own';
+  const OTHER_SESSION = 'feed-other';
+  const DEVICE = 'feed-device';
+
+  let feedIdentity: Identity;
+  let feedId: string;
+  let feedLink: RelayLink;
+  let asked: { session: string; opts: Record<string, unknown> }[] = [];
+  /** Подставная лента бросает вместо ответа: сорванное чтение обязано доехать телом. */
+  let crash = false;
+
+  beforeAll(() => {
+    feedIdentity = generateIdentity();
+    feedId = fingerprint(feedIdentity.edPub);
+    feedLink = new RelayLink({
+      url: `ws://127.0.0.1:${relayHandle.port}/relay`,
+      identity: feedIdentity,
+      authorized: () => loadAuthorized(),
+      sessions: { list: async () => [] } as unknown as SessionService,
+      socketName,
+      feed: async (session, opts) => {
+        if (crash) throw new Error('transcript vanished');
+        asked.push({ session, opts: opts as Record<string, unknown> });
+        return FEED_PAGE;
+      },
+    });
+    feedLink.start();
+  });
+
+  afterAll(async () => {
+    await feedLink.stop();
+  });
+
+  beforeEach(() => {
+    asked = [];
+    crash = false;
+  });
+
+  interface FeedClient {
+    send(bytes: Uint8Array): void;
+    /** Следующий кадр агента; null — агент промолчал дольше срока. */
+    next(): Promise<ReturnType<typeof decodeFrame> | null>;
+  }
+
+  async function feedClient(scope?: AuthorizedDevice['scope']): Promise<FeedClient> {
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name: DEVICE, edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now(), scope },
+    ]);
+    const { ws, col } = await connectClient(relayHandle.port, feedId);
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), DEVICE), { binary: true });
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, feedIdentity.edPub);
+    const dec = makeDecryptor(rx, unb64(ok.header));
+    const enc = makeEncryptor(tx);
+    ws.send(finFrame(clientId, enc, ok), { binary: true });
+    return {
+      send: (bytes: Uint8Array) => ws.send(enc.push(bytes), { binary: true }),
+      next: async () => {
+        const msg = await Promise.race([col.next(), delay(2000).then(() => null)]);
+        return msg ? decodeFrame(dec.pull(new Uint8Array(msg.binary as Buffer))) : null;
+      },
+    };
+  }
+
+  it('владелец: на кадр Feed приходит FeedResult с тем же JSON, что и у GET /api/feed', async () => {
+    const c = await feedClient();
+    // Вместе с запросом едет лишнее: путь и ввод. Адресация ленты — только имя сессии,
+    // поэтому до неё не доходит ни то, ни другое (ни писать, ни читать чужой файл).
+    c.send(
+      jsonFrame(FrameType.Feed, 0, {
+        session: OWN_SESSION,
+        limit: 50,
+        before: '42:120',
+        path: '/etc/passwd',
+        data: 'rm -rf /',
+      }),
+    );
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(frame!.payload)).toBe(FEED_PAGE_JSON);
+    expect(asked).toEqual([
+      { session: OWN_SESSION, opts: { limit: 50, before: '42:120', after: undefined, around: undefined } },
+    ]);
+  }, 25000);
+
+  it('гость получает ленту СВОЕЙ сессии без права write и без права files', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(frame!.payload)).toBe(FEED_PAGE_JSON);
+    expect(asked.map((a) => a.session)).toEqual([OWN_SESSION]);
+  }, 25000);
+
+  it('пустые значения в запросе равносильны отсутствующим, как и в URL §9', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, limit: '', before: '', after: '', around: '' }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(asked).toEqual([
+      { session: OWN_SESSION, opts: { limit: undefined, before: undefined, after: undefined, around: undefined } },
+    ]);
+  }, 25000);
+
+  it('неожиданный сбой чтения отвечает тем же телом, что и по LAN, а мост остаётся жив', async () => {
+    const c = await feedClient();
+    crash = true;
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+
+    const crashed = await c.next();
+    expect(crashed?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(crashed!.payload)).toBe(FEED_CRASH_JSON);
+
+    // Соединение живо: следующий запрос обслуживается как ни в чём не бывало.
+    crash = false;
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+    expect(td.decode((await c.next())!.payload)).toBe(FEED_PAGE_JSON);
+  }, 25000);
+
+  it('гость не получает ленту сборочной сессии своей сессии: беседы агента в ней нет', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: true, files: true });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: buildSessionName(OWN_SESSION) }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.Error);
+    expect(frameJson<{ code: string }>(frame!).code).toBe('forbidden');
+    expect(asked).toEqual([]);
+  }, 25000);
+
+  it('гость с полными правами не получает ленту чужой сессии: forbidden, и файл не читается', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: true, files: true });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OTHER_SESSION }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.Error);
+    expect(frameJson<{ code: string }>(frame!).code).toBe('forbidden');
+    expect(asked).toEqual([]);
   }, 25000);
 });

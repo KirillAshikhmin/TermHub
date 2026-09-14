@@ -11,6 +11,9 @@ import { FileService } from '../src/files.js';
 import { hashPassword } from '../src/config.js';
 import type { TermhubConfig, DeviceScope } from '../src/config.js';
 import type { SessionService } from '../src/sessions.js';
+import type { FeedResult } from '../src/session-feed.js';
+import type { FeedOptions } from '../src/transcript-feed.js';
+import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON } from './feed-fixture.js';
 import type { SessionInfo } from '@termhub/protocol';
 
 const SECRET = 'test-cookie-secret';
@@ -58,6 +61,7 @@ async function start(opts: {
   socketName?: string;
   staticDir?: string;
   relayStatus?: () => { connected: boolean; agentId: string; clients: number; caps: string[]; capsAt: number } | null;
+  feed?: (session: string, opts: FeedOptions) => Promise<FeedResult>;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -69,6 +73,7 @@ async function start(opts: {
     socketName: opts.socketName,
     staticDir: opts.staticDir,
     relayStatus: opts.relayStatus,
+    feed: opts.feed,
   });
   const port = await server.listen();
   return { server, base: `http://127.0.0.1:${port}` };
@@ -1058,5 +1063,81 @@ describe('POST /api/capabilities — объявление возможносте
       body: JSON.stringify({ caps: ['feed'] }),
     });
     expect(res.status).toBe(401);
+  });
+});
+
+describe('GET /api/feed — лента сессии по LAN', () => {
+  let s: Started | undefined;
+  /** Что маршрут передал ленте: имя сессии и опции страницы. */
+  let asked: { session: string; opts: FeedOptions }[] = [];
+
+  beforeEach(() => {
+    asked = [];
+  });
+
+  afterEach(async () => {
+    await s?.server.close();
+    s = undefined;
+  });
+
+  async function startFeed(result: FeedResult = FEED_PAGE): Promise<void> {
+    s = await start({
+      feed: async (session, opts) => {
+        asked.push({ session, opts });
+        return result;
+      },
+    });
+  }
+
+  it('отдаёт страницу ленты как есть — тем же JSON, что и кадр FeedResult', async () => {
+    await startFeed();
+    const res = await fetch(`${s!.base}/api/feed?session=work`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(FEED_PAGE_JSON);
+    expect(asked.map((a) => a.session)).toEqual(['work']);
+  });
+
+  it('курсоры и лимит доезжают из query-строки, а отсутствующие не подставляются', async () => {
+    await startFeed();
+    await fetch(`${s!.base}/api/feed?session=work&limit=50&before=42:120`, { headers: { cookie: authCookie() } });
+    await fetch(`${s!.base}/api/feed?session=work&after=42:9&around=42:7`, { headers: { cookie: authCookie() } });
+    expect(asked[0].opts).toEqual({ limit: 50, before: '42:120', after: undefined, around: undefined });
+    expect(asked[1].opts).toEqual({ limit: undefined, before: undefined, after: '42:9', around: '42:7' });
+  });
+
+  it('отказ ленты доезжает причиной как есть, а не кодом HTTP', async () => {
+    await startFeed({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' });
+    const res = await fetch(`${s!.base}/api/feed?session=work`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('{"ok":false,"reason":"no-agent","detail":"pane runs zsh"}');
+  });
+
+  it('пустые параметры URL §9 равносильны отсутствующим: спрашивается хвост, а не курсор «»', async () => {
+    await startFeed();
+    const res = await fetch(`${s!.base}/api/feed?session=work&limit=&before=&after=&around=`, {
+      headers: { cookie: authCookie() },
+    });
+    expect(await res.text()).toBe(FEED_PAGE_JSON);
+    expect(asked).toEqual([
+      { session: 'work', opts: { limit: undefined, before: undefined, after: undefined, around: undefined } },
+    ]);
+  });
+
+  it('неожиданный сбой чтения отвечает тем же телом, что и через relay, а не 500', async () => {
+    s = await start({
+      feed: async () => {
+        throw new Error('transcript vanished');
+      },
+    });
+    const res = await fetch(`${s.base}/api/feed?session=work`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(FEED_CRASH_JSON);
+  });
+
+  it('без cookie — 401, как у остальных /api/*, и ленту никто не читает', async () => {
+    await startFeed();
+    const res = await fetch(`${s!.base}/api/feed?session=work`);
+    expect(res.status).toBe(401);
+    expect(asked).toEqual([]);
   });
 });
