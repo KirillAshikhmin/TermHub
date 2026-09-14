@@ -66,6 +66,18 @@ export function hasCap(name: string): boolean {
   return negotiated.includes(name);
 }
 
+/** Понимают ли возможность обе стороны — с ожиданием обмена, если он ещё в пути.
+ *  Единственный ответ на этот вопрос в вебе: и вкладка, и роутер спрашивают здесь,
+ *  иначе каждый заводил бы свою ветку отказа (а третий вызывающий — третью).
+ *  Обмен не состоялся — возможности нет. */
+export function whenCap(name: string, transport: CapsSource): Promise<boolean> {
+  if (hasCap(name)) return Promise.resolve(true);
+  return negotiateCaps(transport).then(
+    (caps) => caps.includes(name),
+    () => false,
+  );
+}
+
 /** Пересечение текущего обмена (копия — список клиента менять некому). */
 export function negotiatedCaps(): string[] {
   return [...negotiated];

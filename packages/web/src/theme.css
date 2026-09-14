@@ -89,6 +89,13 @@
   box-sizing: border-box;
 }
 
+/* Скрытое не показывается — одним правилом на всё приложение: собственный display
+   элемента (у кнопки, полосы, списка) иначе перебивает атрибут hidden, и элемент
+   висит на экране вопреки коду. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -2221,9 +2228,6 @@ main.th-gradle {
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
 }
-.th-compose[hidden] {
-  display: none;
-}
 .th-compose__input {
   flex: 1;
   min-width: 0;
@@ -2938,4 +2942,243 @@ main.th-gradle {
   gap: 6px;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ── Вкладка «Лента»: беседа сессии ─────────────────────────────────── */
+/* Шапка со значком агента и тумблером мышления, ниже — прокручиваемый список
+   записей. Ширина не меньше 320 px: длинные строки и «неразрывные» пути ломаются
+   переносом, а не уезжают вбок. */
+main.th-feed {
+  position: relative; /* якорь для плавающей ⋮ (wireToolbar) */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.th-feed__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.th-feed__agent {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--claude);
+}
+.th-feed__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.th-feed__live::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+.th-feed__toggle-wrap {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+/* Поиск живёт над списком: поле, строка о ходе поиска и находки столбиком. */
+.th-feed__search {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.th-feed__query {
+  font-size: 0.9rem;
+}
+.th-feed__searchstatus {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.th-feed__searchmore {
+  align-self: flex-start;
+  min-height: 0;
+}
+/* Находки не съедают ленту: свой столбик с прокруткой, не выше трети экрана. */
+.th-feed__hits:empty {
+  display: none;
+}
+.th-feed__hits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.th-feed__hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.th-feed__hit:hover {
+  background: var(--bg-hover);
+}
+.th-feed__hittime,
+.th-feed__hitkind {
+  flex: none;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+/* Строка вокруг совпадения — одна строка на находку: остаток прячется, а не
+   растягивает полосу поиска вбок. */
+.th-feed__hittext {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.th-feed__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch; /* инерция прокрутки на телефоне */
+  overscroll-behavior: contain;
+  padding: 10px 12px 16px;
+}
+.th-feed__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.th-feed__edge,
+.th-feed__skipped,
+.th-feed__notice {
+  padding: 8px 2px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  text-align: center;
+}
+.th-feed__notice {
+  color: var(--text);
+}
+/* Общее для всех записей: длинная строка переносится, а не растягивает экран. */
+.th-feed__entry {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.th-feed__entry--human,
+.th-feed__entry--agent,
+.th-feed__entry--thinking {
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+.th-feed__entry--human {
+  background: var(--accent-tint);
+  border-color: transparent;
+}
+.th-feed__entry--thinking {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-dim);
+}
+.th-feed__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+.th-feed__who {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.th-feed__text {
+  white-space: pre-wrap; /* перевод строки от агента — часть сообщения */
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.th-feed__cut {
+  margin-top: 4px;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+/* Вызов инструмента — одна строка мелким шрифтом, без фона; подряд идущие стоят
+   столбиком без зазора. */
+.th-feed__entry--tool {
+  display: flex;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 0.76rem;
+  color: var(--text-faint);
+}
+.th-feed__entry--tool.is-cont {
+  margin-top: -6px;
+}
+.th-feed__toolname {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.th-feed__tooltext {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Веха — тонкая линия с подписью посередине. */
+.th-feed__entry--note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+.th-feed__notelabel {
+  margin-top: -12px;
+  padding: 0 8px;
+  background: var(--bg);
+}
+.th-feed__notetext {
+  text-align: center;
+}
+/* Запись, к которой перенесли ленту по находке. */
+.th-feed__entry.is-hit {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

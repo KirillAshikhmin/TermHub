@@ -11,7 +11,8 @@ import { currentTheme, toggleTheme } from './theme';
 import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
-import { sgradleHash, termHash } from './routes';
+import { whenCap } from './capabilities';
+import { sfeedHash, sgradleHash, termHash } from './routes';
 
 const ICONS: Record<string, string> = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
@@ -402,11 +403,12 @@ export function knownGradle(transport: Transport, session: string): GradleProjec
 }
 
 /** Android-Holo таб-бар рабочего пространства сессии: Сессия / Проводник / Репозиторий
- *  (+ Gradle у Gradle-проекта) и «⋮» справа (сворачивает тулбар). Активный таб подчёркнут
- *  снизу цветной полосой во всю ширину. Скролла нет — табы делят ширину поровну.
- *  Проводник/Репозиторий ведут на session-scoped роуты (по пути сессии). */
+ *  (+ Gradle у Gradle-проекта, + Лента у агента с возможностью `feed`) и «⋮» справа
+ *  (сворачивает тулбар). Активный таб подчёркнут снизу цветной полосой во всю ширину.
+ *  Скролла нет — табы делят ширину поровну. Проводник/Репозиторий ведут на
+ *  session-scoped роуты (по пути сессии). */
 export function renderHoloBar(opts: {
-  active: 'term' | 'files' | 'repo' | 'gradle';
+  active: 'term' | 'files' | 'repo' | 'gradle' | 'feed';
   session: string;
   transport?: Transport;
   onHide: () => void;
@@ -415,7 +417,7 @@ export function renderHoloBar(opts: {
   bar.className = 'th-holobar';
   bar.setAttribute('role', 'tablist');
   const enc = encodeURIComponent(opts.session);
-  const mkTab = (key: 'term' | 'files' | 'repo' | 'gradle', label: string, hash: string): HTMLElement => {
+  const mkTab = (key: 'term' | 'files' | 'repo' | 'gradle' | 'feed', label: string, hash: string): HTMLElement => {
     const a = document.createElement('a');
     a.className = `th-holotab${opts.active === key ? ' is-active' : ''}`;
     a.href = hash;
@@ -439,13 +441,27 @@ export function renderHoloBar(opts: {
   hide.addEventListener('mousedown', (e) => e.preventDefault());
   hide.addEventListener('click', opts.onHide);
   bar.append(hide);
-  // Четвёртый таб — только у Gradle-проекта, и бар его не ждёт: три таба уже на
-  // экране, Gradle встаёт перед «⋮», когда детект вернул проект (история 4).
   const transport = opts.transport;
+  // Последний таб — «Лента»; она есть, только если возможность `feed` объявили ОБЕ
+  // стороны (ADR 0018). Пересечение считается на подключении, но на первом показе
+  // после перезагрузки обмен может быть ещё в пути — тогда таб встаёт по его ответу.
+  // Файловой области лента не касается: гостю без файлов она видна (§8).
+  let tail: HTMLElement = hide; // якорь для табов, приезжающих позже
+  const addFeed = (): void => {
+    tail = mkTab('feed', t('holo.feed'), sfeedHash(opts.session));
+    bar.insertBefore(tail, hide);
+  };
+  if (transport) {
+    void whenCap('feed', transport).then((ok) => {
+      if (ok) addFeed();
+    });
+  }
+  // Таб Gradle — только у Gradle-проекта, и бар его не ждёт: остальные табы уже на
+  // экране, Gradle встаёт перед «Лентой», когда детект вернул проект (история 4).
   if (transport && (!scope || scope.files)) {
     void detectGradle(transport, opts.session).then(
       (project) => {
-        if (project) bar.insertBefore(mkTab('gradle', t('holo.gradle'), sgradleHash(opts.session)), hide);
+        if (project) bar.insertBefore(mkTab('gradle', t('holo.gradle'), sgradleHash(opts.session)), tail);
       },
       () => {
         // Не спросили — таба нет; следующий рендер бара спросит снова (кэш не занят).

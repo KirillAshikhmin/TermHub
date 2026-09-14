@@ -66,6 +66,14 @@ function parseRoute(): RemoteRoute {
       return { name: 'dashboard' };
     }
   }
+  const sfeed = /^#\/sfeed\/([^/]*)/.exec(hash);
+  if (sfeed) {
+    try {
+      return { name: 'sfeed', session: decodeURIComponent(sfeed[1]!) };
+    } catch {
+      return { name: 'dashboard' };
+    }
+  }
   const term = /^#\/term\/(.+)$/.exec(hash);
   if (term) {
     try {
