@@ -83,7 +83,7 @@ import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
 import { runGradleAction } from './gradle-action.js';
 import { buildSessionName } from './gradle.js';
-import { sessionFeed } from './session-feed.js';
+import { sessionFeed, type FeedResult } from './session-feed.js';
 import { feedPage, feedSession, type FeedReader } from './feed-request.js';
 import { VcsService } from './vcs.js';
 
@@ -1075,7 +1075,7 @@ export class RelayLink {
    *  разбирает общий feed-request, поэтому JSON обоих транспортов совпадает побайтово
    *  и на отказе, и на сорванном чтении. Гостю доступна только его сессия (тем же
    *  предикатом, что решает doOpen) — БЕЗ сборочной: беседы агента в ней нет. Чужую
-   *  сессию мост не читает вовсе, отказ приходит тем же `forbidden`, что у doOpen. */
+   *  сессию мост не читает вовсе: причина `forbidden` приезжает телом ответа ленты. */
   private async doFeed(s: ClientSession, frame: Frame): Promise<void> {
     let req: Record<string, unknown>;
     try {
@@ -1084,7 +1084,12 @@ export class RelayLink {
       req = {};
     }
     if (!this.ownsSession(s, feedSession(req), false)) {
-      this.sendFrameBytes(s, jsonFrame(FrameType.Error, frame.channel, { code: 'forbidden', message: 'session not shared' }));
+      // Отказ ленты едет кадром ЛЕНТЫ, а не общим Error: тем же Error гость получает
+      // отказ на девять других запросов контрольного канала (caffeinate он повторяет
+      // раз в три секунды), и клиент, сопоставляющий ответ ленты по типу кадра, принял
+      // бы чужой отказ за свой. Тело — та же форма, что у прочих отказов ленты.
+      const refused: FeedResult = { ok: false, reason: 'forbidden', detail: 'session not shared' };
+      this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, refused));
       return;
     }
     this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req)));

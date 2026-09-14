@@ -6,10 +6,21 @@
 import type { FileContent, FileEntry, SessionInfo, TerminalMode, TerminalState } from '@termhub/protocol/frames';
 
 import { api } from './api';
-import type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileStat, ShareInfo } from './api';
+import type {
+  CaffeinateState,
+  CreateSessionInput,
+  DeviceInfo,
+  DeviceScope,
+  DirGroup,
+  FeedOptions,
+  FeedResult,
+  FileStat,
+  ShareInfo,
+} from './api';
 import { dataFrame, decodeFrame, FrameType, parseError, parseTerminalState, resizeFrame } from './ws-frames';
 
 export type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileStat, ShareInfo };
+export type { FeedEntry, FeedFailure, FeedFailureReason, FeedOptions, FeedPage, FeedResult } from './api';
 export type { FileContent, FileEntry, TerminalMode, TerminalState };
 
 /** Состояние соединения одного терминала — управляет индикатором/баннером. */
@@ -79,6 +90,12 @@ export interface Transport {
    *  Агент, который этого не умеет, отвечает 404 (LAN) или молчит (relay) — обе дороги
    *  дают пустой список, а не ошибку прикладного уровня. */
   capabilities(caps: string[]): Promise<string[]>;
+  /** Страница ленты беседы сессии (оба режима: LAN — `GET /api/feed`, relay — кадр
+   *  Feed). Отказ агента — значение `{ok:false, reason}`, а не исключение: причины
+   *  экран разбирает одинаково на обоих транспортах. Исключение остаётся сбою связи.
+   *  Вкладка ленты существует только при `hasCap('feed')`, поэтому старого агента,
+   *  не знающего маршрута и кадра, этот вызов не касается. */
+  feed(session: string, opts?: FeedOptions): Promise<FeedResult>;
   /** VAPID public key агента для web-push (оба режима: LAN — REST, relay — E2E). */
   vapidKey(): Promise<string>;
   /** Отправить push-подписку агенту (оба режима). */
@@ -312,6 +329,10 @@ export class LanTransport implements Transport {
 
   capabilities(caps: string[]): Promise<string[]> {
     return api.capabilities(caps);
+  }
+
+  feed(session: string, opts: FeedOptions = {}): Promise<FeedResult> {
+    return api.feed(session, opts);
   }
 
   vapidKey(): Promise<string> {

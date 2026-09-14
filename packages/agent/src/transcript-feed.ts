@@ -70,11 +70,14 @@ export interface FeedPage {
 
 export interface FeedFailure {
   ok: false;
-  /** Причины определителя как есть плюс `cursor-stale`; новых слов для старых причин нет,
-   *  и список не копируется — новая причина наверху доезжает сюда сама. Сам `readFeed`
-   *  отвечает только `no-transcript`, `lookup-failed` и `cursor-stale`: `no-agent` и
-   *  `unknown-format` приходят от определителя выше по цепочке. */
-  reason: FailureReason | 'cursor-stale';
+  /** Причины определителя как есть плюс `cursor-stale` и `forbidden`; новых слов для
+   *  старых причин нет, и список не копируется — новая причина наверху доезжает сюда
+   *  сама. Сам `readFeed` отвечает только `no-transcript`, `lookup-failed` и
+   *  `cursor-stale`: `no-agent` и `unknown-format` приходят от определителя выше по
+   *  цепочке, а `forbidden` — от моста relay (`doFeed`), когда гость спросил чужую
+   *  сессию. Лента её не порождает, но отвечает ею тем же телом: клиент разбирает
+   *  причины одним списком, и слово обязано стоять там же, где остальные. */
+  reason: FailureReason | 'cursor-stale' | 'forbidden';
   detail: string;
 }
 

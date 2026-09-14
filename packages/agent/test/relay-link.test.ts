@@ -1403,18 +1403,30 @@ describe('RelayLink — лента сессии через relay', () => {
     c.send(jsonFrame(FrameType.Feed, 0, { session: buildSessionName(OWN_SESSION) }));
 
     const frame = await c.next();
-    expect(frame?.type).toBe(FrameType.Error);
-    expect(frameJson<{ code: string }>(frame!).code).toBe('forbidden');
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(frameJson<Record<string, unknown>>(frame!)).toEqual({
+      ok: false,
+      reason: 'forbidden',
+      detail: 'session not shared',
+    });
     expect(asked).toEqual([]);
   }, 25000);
 
-  it('гость с полными правами не получает ленту чужой сессии: forbidden, и файл не читается', async () => {
+  // Отказ ленты едет кадром ЛЕНТЫ, а не общим Error: тем же кадром гостю отвечают на
+  // девять других запросов контрольного канала (caffeinate он повторяет раз в три
+  // секунды), и клиент, принимающий Error за ответ ленты, показывал бы чужой отказ
+  // вместо беседы.
+  it('гость с полными правами не получает ленту чужой сессии: отказ кадром ленты, файл не читается', async () => {
     const c = await feedClient({ session: OWN_SESSION, write: true, files: true });
     c.send(jsonFrame(FrameType.Feed, 0, { session: OTHER_SESSION }));
 
     const frame = await c.next();
-    expect(frame?.type).toBe(FrameType.Error);
-    expect(frameJson<{ code: string }>(frame!).code).toBe('forbidden');
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(frameJson<Record<string, unknown>>(frame!)).toEqual({
+      ok: false,
+      reason: 'forbidden',
+      detail: 'session not shared',
+    });
     expect(asked).toEqual([]);
   }, 25000);
 });
