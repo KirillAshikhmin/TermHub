@@ -29,6 +29,9 @@ import {
   jsonFrame,
   frameJson,
   toB64,
+  AGENT_CAPS,
+  intersect,
+  parseCaps,
   FrameType,
   type Identity,
   type Frame,
@@ -216,6 +219,11 @@ export class RelayLink {
   private backoff = BACKOFF_START_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly clients = new Map<number, ClientSession>();
+  /** Пересечение возможностей с последним объявившимся клиентом (ADR 0018) и время
+   *  обмена: их забирает диагностика агента через status(). Телефон ходит через relay,
+   *  поэтому без этого счёта /api/diag показывал бы пустое пересечение всегда. */
+  private negotiatedCaps: string[] = [];
+  private negotiatedCapsAt = 0;
   private pairing?: PairingState;
   private readyWaiters: ReadyWaiter[] = [];
 
@@ -485,8 +493,22 @@ export class RelayLink {
   }
 
   /** Диагностический статус связи с relay (для /api/diag). */
-  status(): { configured: true; connected: boolean; agentId: string; clients: number } {
-    return { configured: true, connected: this.registered, agentId: this.agentId, clients: this.clients.size };
+  status(): {
+    configured: true;
+    connected: boolean;
+    agentId: string;
+    clients: number;
+    caps: string[];
+    capsAt: number;
+  } {
+    return {
+      configured: true,
+      connected: this.registered,
+      agentId: this.agentId,
+      clients: this.clients.size,
+      caps: this.negotiatedCaps,
+      capsAt: this.negotiatedCapsAt,
+    };
   }
 
   // ── Пейринг (роль агента) ────────────────────────────────────────────────────
@@ -794,6 +816,21 @@ export class RelayLink {
           jsonFrame(FrameType.AddressesResult, 0, { urls: s.scope ? [] : (this.localUrls?.() ?? []) }),
         );
         return;
+      case FrameType.Capabilities: {
+        // Объявление возможностей (ADR 0018): клиент называет свои имена, отвечаем
+        // своими, и дальше обе стороны работают по пересечению. Гостю отвечаем
+        // наравне: это данные о протоколе, а не доступ к сессиям.
+        let announced: unknown;
+        try {
+          announced = frameJson<{ caps?: unknown }>(frame).caps;
+        } catch {
+          announced = undefined; // битый payload — клиент не назвал ничего
+        }
+        this.negotiatedCaps = intersect(AGENT_CAPS, parseCaps(announced));
+        this.negotiatedCapsAt = Date.now();
+        this.sendFrameBytes(s, jsonFrame(FrameType.CapabilitiesResult, 0, { caps: AGENT_CAPS }));
+        return;
+      }
       case FrameType.PushKey:
         this.sendFrameBytes(s, jsonFrame(FrameType.PushKeyResult, 0, { key: this.push?.vapidPublicKey() ?? '' }));
         return;

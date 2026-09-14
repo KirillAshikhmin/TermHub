@@ -57,6 +57,7 @@ async function start(opts: {
   files?: FileService;
   socketName?: string;
   staticDir?: string;
+  relayStatus?: () => { connected: boolean; agentId: string; clients: number; caps: string[]; capsAt: number } | null;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -67,6 +68,7 @@ async function start(opts: {
     files: opts.files,
     socketName: opts.socketName,
     staticDir: opts.staticDir,
+    relayStatus: opts.relayStatus,
   });
   const port = await server.listen();
   return { server, base: `http://127.0.0.1:${port}` };
@@ -973,5 +975,88 @@ describe.skipIf(!tmuxAvailable)('POST /api/gradle — запуск в подпа
     expect(missing.status).toBe(400);
     expect(missing.body.error).toBe('Run directory not found');
     expect(missing.body.error).not.toBe(outside.body.error);
+  });
+});
+
+describe('POST /api/capabilities — объявление возможностей', () => {
+  let s: Started | undefined;
+
+  afterEach(async () => {
+    await s?.server.close();
+    s = undefined;
+  });
+
+  async function announce(body: unknown): Promise<{ status: number; caps: unknown }> {
+    const res = await fetch(`${s!.base}/api/capabilities`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: authCookie() },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, caps: ((await res.json()) as { caps?: unknown }).caps };
+  }
+
+  async function diagCaps(): Promise<{ agent: string[]; negotiated: string[] }> {
+    const res = await fetch(`${s!.base}/api/diag`, { headers: { cookie: authCookie() } });
+    return ((await res.json()) as { caps: { agent: string[]; negotiated: string[] } }).caps;
+  }
+
+  it('на список клиента отвечает списком агента', async () => {
+    s = await start({});
+    const res = await announce({ caps: ['feed', 'teleport'] });
+    expect(res.status).toBe(200);
+    expect(res.caps).toContain('feed');
+  });
+
+  it('пересечение с последним клиентом видно в /api/diag', async () => {
+    s = await start({});
+    await announce({ caps: ['feed', 'teleport'] });
+    expect(await diagCaps()).toEqual({ agent: ['feed'], negotiated: ['feed'] });
+  });
+
+  it('общих имён нет → пустое пересечение, а не ошибка', async () => {
+    s = await start({});
+    const res = await announce({ caps: ['teleport'] });
+    expect(res.status).toBe(200);
+    expect((await diagCaps()).negotiated).toEqual([]);
+  });
+
+  it('до обмена пересечение в /api/diag пусто', async () => {
+    s = await start({});
+    expect((await diagCaps()).negotiated).toEqual([]);
+  });
+
+  it('тело без caps → свой список и пустое пересечение (клиент не обязан ничего уметь)', async () => {
+    s = await start({});
+    const res = await announce({});
+    expect(res.status).toBe(200);
+    expect(res.caps).toContain('feed');
+    expect((await diagCaps()).negotiated).toEqual([]);
+  });
+
+  it('пересечение с relay-клиентом видно в /api/diag (телефон ходит не по LAN)', async () => {
+    s = await start({
+      config: fixtureConfig({ relayUrl: 'wss://relay.example.org/relay' }),
+      relayStatus: () => ({ connected: true, agentId: 'agent-1', clients: 1, caps: ['feed'], capsAt: 1000 }),
+    });
+    expect((await diagCaps()).negotiated).toEqual(['feed']);
+  });
+
+  it('показан последний объявившийся клиент: свежий LAN-обмен перекрывает прежний relay', async () => {
+    s = await start({
+      config: fixtureConfig({ relayUrl: 'wss://relay.example.org/relay' }),
+      relayStatus: () => ({ connected: true, agentId: 'agent-1', clients: 1, caps: ['feed'], capsAt: 1000 }),
+    });
+    await announce({ caps: ['teleport'] });
+    expect((await diagCaps()).negotiated).toEqual([]);
+  });
+
+  it('без cookie — 401, как у остальных /api/*', async () => {
+    s = await start({});
+    const res = await fetch(`${s.base}/api/capabilities`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ caps: ['feed'] }),
+    });
+    expect(res.status).toBe(401);
   });
 });

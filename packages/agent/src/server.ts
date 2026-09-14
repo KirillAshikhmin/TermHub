@@ -22,6 +22,7 @@ import { runRepoAction } from './vcs.js';
 import type { VcsService } from './vcs.js';
 import { runGradleAction } from './gradle-action.js';
 import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
+import { AGENT_CAPS, intersect, parseCaps } from '@termhub/protocol';
 
 /** Сервис веб-push (реализация — Task 9). */
 export interface PushService {
@@ -144,12 +145,24 @@ export class AgentServer {
   private readonly files?: FileService;
   private readonly vcs?: VcsService;
   private readonly onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
-  private readonly relayStatus?: () => { connected: boolean; agentId: string; clients: number } | null;
+  private readonly relayStatus?: () => {
+    connected: boolean;
+    agentId: string;
+    clients: number;
+    caps: string[];
+    capsAt: number;
+  } | null;
   private readonly push?: PushService;
   private readonly caffeinate?: CaffeinateController;
   /** Сокет tmux рабочих сессий: нужен экшенам Gradle (сборочная сессия — там же). */
   private readonly socketName?: string;
   private readonly rateLimit = new LoginRateLimit();
+  /** Пересечение возможностей с последним клиентом, объявившимся по LAN (ADR 0018),
+   *  и время обмена. Relay ведёт такой же счёт у себя (RelayLink.status), диагностика
+   *  показывает более поздний: клиент бывает и по LAN, и через relay, а знать нужно
+   *  последнего — молчаливая надстройка и сломанная выглядят одинаково. */
+  private lanCaps: string[] = [];
+  private lanCapsAt = 0;
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly staticDir: string;
   private server?: Server;
@@ -161,7 +174,7 @@ export class AgentServer {
     files?: FileService;
     vcs?: VcsService;
     onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
-    relayStatus?: () => { connected: boolean; agentId: string; clients: number } | null;
+    relayStatus?: () => { connected: boolean; agentId: string; clients: number; caps: string[]; capsAt: number } | null;
     push?: PushService;
     caffeinate?: CaffeinateController;
     /** Сокет tmux рабочих сессий (в проде — config.TMUX_SOCKET). */
@@ -285,6 +298,7 @@ export class AgentServer {
     }
     if (method === 'GET' && pathname === '/api/dirs') return this.sendJson(res, 200, await this.sessions.dirs());
     if (method === 'GET' && pathname === '/api/diag') return this.diag(res);
+    if (method === 'POST' && pathname === '/api/capabilities') return this.capabilities(req, res);
     if (method === 'GET' && pathname === '/api/files/list') return this.filesList(res, url);
     if (method === 'GET' && pathname === '/api/files/read') return this.fileRead(res, url);
     if (method === 'GET' && pathname === '/api/files/stat') return this.fileStatHttp(res, url);
@@ -394,6 +408,17 @@ export class AgentServer {
     }
   }
 
+  /** Объявление возможностей (ADR 0018): клиент присылает свой список, агент отвечает
+   *  своим, дальше обе стороны работают по пересечению. Агент, который этого маршрута
+   *  не знает, отвечает 404 — для клиента это то же самое, что «возможностей нет».
+   *  Список — данные: новое имя добавляется в AGENT_CAPS, разбор не меняется. */
+  private async capabilities(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.readJson(req, res);
+    this.lanCaps = intersect(AGENT_CAPS, parseCaps(body.caps));
+    this.lanCapsAt = Date.now();
+    this.sendJson(res, 200, { caps: AGENT_CAPS });
+  }
+
   /** Диагностика: версия, аптайм, сессии, статус связи с relay, корни. */
   private async diag(res: ServerResponse): Promise<void> {
     const sessions = await this.sessions.list().catch(() => []);
@@ -406,6 +431,7 @@ export class AgentServer {
       tls: !!this.config.tls,
       roots: this.config.sessionRoots,
       sessions: sessions.length,
+      caps: { agent: AGENT_CAPS, negotiated: rs && rs.capsAt > this.lanCapsAt ? rs.caps : this.lanCaps },
       relay: this.config.relayUrl
         ? {
             configured: true,

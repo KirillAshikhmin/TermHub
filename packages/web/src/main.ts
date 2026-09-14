@@ -7,6 +7,7 @@
 import './theme.css';
 
 import { api } from './api';
+import { negotiateCaps } from './capabilities';
 import { mountDashboard, mountLogin } from './dashboard';
 import { resetDocumentTitle } from './document-title';
 import { mountDiag } from './diag';
@@ -82,6 +83,11 @@ function render(): void {
   const root = appRoot();
   const route = parseRoute();
   const transport = remote ? remote.activeTransport() : lanTransport;
+  // Объявление возможностей (ADR 0018) в LAN: обмен один на транспорт, но не на
+  // экране входа — незалогиненному агент отвечает 401, а это про вход, не про
+  // умения агента. Любой другой экран означает живую cookie (или только что
+  // выполненный вход), и там обмен уместен. В relay его ведёт remote.ts по online.
+  if (!remote && transport && route.name !== 'login') void negotiateCaps(transport);
   const wsRoute = routeWorkspace(route);
 
   // Session-scoped роут при живом транспорте → рабочее пространство: вкладки живут,

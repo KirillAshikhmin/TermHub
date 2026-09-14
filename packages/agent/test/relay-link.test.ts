@@ -1127,3 +1127,89 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     expect(openedSessions).toEqual([buildSessionName(GUEST_SESSION)]);
   }, 25000);
 });
+
+describe('RelayLink — объявление возможностей', () => {
+  interface CapsClient {
+    ws: WebSocket;
+    /** Следующий кадр агента; null — агент промолчал дольше срока. */
+    next(): Promise<ReturnType<typeof decodeFrame> | null>;
+    send(bytes: Uint8Array): void;
+  }
+
+  /** Допущенный клиент, доведённый до streaming (hello → hello-ok → hello-fin).
+   *  `scope` — гость: ограничение одной сессией, как после шаринга. */
+  async function capsClient(name: string, scope?: AuthorizedDevice['scope']): Promise<CapsClient> {
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name, edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now(), scope },
+    ]);
+    const { ws, col } = await connectClient(relayHandle.port, agentId);
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), name), { binary: true });
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
+    const clientDec = makeDecryptor(rx, unb64(ok.header));
+    const clientEnc = makeEncryptor(tx);
+    ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
+    return {
+      ws,
+      next: async () => {
+        const msg = await Promise.race([col.next(), delay(2000).then(() => null)]);
+        return msg ? decodeFrame(clientDec.pull(new Uint8Array(msg.binary as Buffer))) : null;
+      },
+      send: (bytes: Uint8Array) => ws.send(clientEnc.push(bytes), { binary: true }),
+    };
+  }
+
+  it('на Capabilities отвечает своим списком возможностей', async () => {
+    const c = await capsClient('caps-laptop');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed', 'teleport'] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+    expect(frameJson<{ caps: string[] }>(frame!).caps).toContain('feed');
+  }, 25000);
+
+  it('клиент без общих имён получает тот же список — отказа нет', async () => {
+    const c = await capsClient('caps-old-laptop');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: [] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+    expect(frameJson<{ caps: string[] }>(frame!).caps).toContain('feed');
+  }, 25000);
+
+  it('гость со scope получает список наравне с хозяином: это данные протокола, не доступ', async () => {
+    const c = await capsClient('caps-guest', { session: SANDBOX_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+    expect(frameJson<{ caps: string[] }>(frame!).caps).toContain('feed');
+  }, 25000);
+
+  it('пересечение с последним объявившимся клиентом видно в status() — его показывает /api/diag', async () => {
+    const c = await capsClient('caps-diag-laptop');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed', 'teleport'] }));
+    expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
+    expect(link.status().caps).toEqual(['feed']);
+
+    // Следующим объявился клиент постарше — показываем уже его пересечение.
+    const old = await capsClient('caps-old-phone');
+    old.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['teleport'] }));
+    expect((await old.next())?.type).toBe(FrameType.CapabilitiesResult);
+    expect(link.status().caps).toEqual([]);
+  }, 25000);
+
+  it('незнакомый кадр игнорируется: соединение живо и следующий кадр обслуживается', async () => {
+    const c = await capsClient('caps-future-laptop');
+    // Кадр из будущего клиента, которого этот агент не знает: ни ответа, ни разрыва.
+    c.send(encodeFrame({ type: 200 as FrameType, channel: 0, payload: te.encode('{}') }));
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+  }, 25000);
+});

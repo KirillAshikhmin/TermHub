@@ -12,6 +12,7 @@ import {
   jsonFrame,
   makeDecryptor,
   makeEncryptor,
+  parseCaps,
   sessionKeys,
   sign,
   verify,
@@ -44,6 +45,9 @@ const CONTROL_CHANNEL = 0;
 const FIRST_TERM_CHANNEL = 1;
 /** Тайм-аут ответа на LIST (покрывает и начальный хендшейк). */
 const LIST_TIMEOUT_MS = 10_000;
+// Молчание агента на объявление возможностей: старый агент незнакомый кадр просто
+// игнорирует, поэтому ждать ответа как обычного запроса нельзя — 2 с и «не умеет».
+const CAPS_TIMEOUT_MS = 2000;
 /** Тайм-аут ответа на экшены Gradle: `tasks` ждёт настоящий `gradle tasks --all`,
  *  у которого на стороне агента свой потолок 180 с — общий 10-секундный обрывал бы
  *  первое открытие вкладки на холодном демоне. */
@@ -105,6 +109,15 @@ interface PendingCaffeinate {
 /** Ожидающий PUSH_KEY_RESULT (FIFO). */
 interface PendingPushKey {
   resolve: (key: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** Ожидающий CAPABILITIES_RESULT. Он всегда один: кадр без id, поэтому очередь
+ *  из нескольких обменов разъезжалась бы при таймауте — опоздавший ответ достался
+ *  бы соседу. Молчание — не ошибка: истёкший таймер резолвит пустым списком. */
+interface PendingCaps {
+  resolve: (caps: string[]) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -215,6 +228,11 @@ export class RelayTransport implements Transport {
   private pendingCaffeinate: PendingCaffeinate[] = [];
   private pendingPushKey: PendingPushKey[] = [];
   private pendingAddresses: PendingAddresses[] = [];
+  /** Обмен возможностями этого подключения — идущий или уже завершённый (ADR 0018,
+   *  §10: обмен один на подключение). Повторный вызов переиспользует его, поэтому
+   *  чужого ожидающего у опоздавшего ответа просто нет. */
+  private capsExchange?: Promise<string[]>;
+  private capsPending?: PendingCaps;
   // Сопоставление ответов по id, а НЕ по порядку (FIFO): агент обрабатывает кадры
   // асинхронно, время ответа зависит от размера каталога/файла, а таймаут вырезал
   // ожидающего из середины очереди — дальше все ответы съезжали на один. Для чанков
@@ -540,6 +558,20 @@ export class RelayTransport implements Transport {
         pending.resolve(key);
         return;
       }
+      case FrameType.CapabilitiesResult: {
+        const pending = this.capsPending;
+        if (!pending) return; // опоздавший или лишний ответ — обмен уже закрыт
+        this.capsPending = undefined;
+        clearTimeout(pending.timer);
+        let caps: string[] = [];
+        try {
+          caps = parseCaps(frameJson<{ caps?: unknown }>(frame).caps);
+        } catch {
+          caps = [];
+        }
+        pending.resolve(caps);
+        return;
+      }
       case FrameType.AddressesResult: {
         const pending = this.pendingAddresses.shift();
         if (!pending) return;
@@ -781,6 +813,14 @@ export class RelayTransport implements Transport {
     this.pendingCaffeinate = [];
     this.pendingPushKey = [];
     this.pendingAddresses = [];
+    // Обмен возможностями привязан к подключению: следующее объявляется заново —
+    // агент мог обновиться, пока нас не было.
+    if (this.capsPending) {
+      clearTimeout(this.capsPending.timer);
+      this.capsPending.reject(new Error('relay disconnected'));
+      this.capsPending = undefined;
+    }
+    this.capsExchange = undefined;
 
     this.pendingShare = [];
     this.pendingDevices = [];
@@ -1162,6 +1202,23 @@ export class RelayTransport implements Transport {
       this.pendingAddresses.push({ resolve, reject, timer });
       this.sendFrame(encodeFrame({ type: FrameType.Addresses, channel: CONTROL_CHANNEL, payload: new Uint8Array(0) }));
     });
+  }
+
+  /** Объявление возможностей (ADR 0018): называем свои имена и ждём ответа агента.
+   *  Агент, который кадра не знает, молчит — через CAPS_TIMEOUT_MS отвечаем пустым
+   *  списком сами: молчание это «не умеет», а не сбой. */
+  capabilities(caps: string[]): Promise<string[]> {
+    if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    if (this.capsExchange) return this.capsExchange;
+    this.capsExchange = new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.capsPending = undefined;
+        resolve([]);
+      }, CAPS_TIMEOUT_MS);
+      this.capsPending = { resolve, reject, timer };
+      this.sendFrame(jsonFrame(FrameType.Capabilities, CONTROL_CHANNEL, { caps }));
+    });
+    return this.capsExchange;
   }
 
   subscribePush(subscription: unknown): Promise<void> {

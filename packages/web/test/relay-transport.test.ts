@@ -538,3 +538,89 @@ describe('RelayTransport — create() дожидается подтвержде�
     await expect(p).rejects.toThrow(/disconnected/);
   });
 });
+
+describe('RelayTransport — объявление возможностей', () => {
+  it('шлёт свои имена кадром Capabilities и резолвится списком агента', async () => {
+    const { transport, ws, agentEnc, agentDec, firstEncrypted } = streaming();
+    const p = transport.capabilities(['feed']);
+
+    const sent = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(sent.type).toBe(FrameType.Capabilities);
+    expect(frameJson<{ caps: string[] }>(sent).caps).toEqual(['feed']);
+
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed', 'teleport'] })));
+    await expect(p).resolves.toEqual(['feed', 'teleport']);
+  });
+
+  it('агент молчит 2 с → пустой список, а не ошибка и не вечное ожидание', async () => {
+    vi.useFakeTimers();
+    const { transport } = streaming();
+    const p = transport.capabilities(['feed']);
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(p).resolves.toEqual([]);
+  });
+
+  it('обмен один на подключение: второй вызов не шлёт кадра и ждёт того же ответа', async () => {
+    const { transport, ws, agentEnc } = streaming();
+    const before = ws.sent.length;
+    const p1 = transport.capabilities(['feed']);
+    const p2 = transport.capabilities(['feed']);
+    expect(ws.sent.length).toBe(before + 1);
+
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(p1).resolves.toEqual(['feed']);
+    await expect(p2).resolves.toEqual(['feed']);
+  });
+
+  it('опоздавший после таймаута ответ не достаётся следующему обмену', async () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(p).resolves.toEqual([]);
+
+    // Обмен этого подключения уже состоялся молчанием: второго кадра нет...
+    const sentAfter = ws.sent.length;
+    const second = transport.capabilities(['feed']);
+    expect(ws.sent.length).toBe(sentAfter);
+    // ...и опоздавший ответ прежнего обмена не превращается в чужой результат.
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(second).resolves.toEqual([]);
+  });
+
+  it('после реконнекта объявляемся заново: обмен один на ПОДКЛЮЧЕНИЕ', async () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentIdentity, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(p).resolves.toEqual(['feed']);
+
+    ws.close();
+    vi.advanceTimersByTime(1000); // backoff реконнекта
+    const ws2 = sockets[1]!;
+    const again = restream(ws2, agentIdentity);
+    const before = ws2.sent.length;
+    const p2 = transport.capabilities(['feed']);
+
+    expect(ws2.sent.length).toBe(before + 1);
+    expect(decodeFrame(again.agentDec.pull(ws2.sent[before] as Uint8Array)).type).toBe(FrameType.Capabilities);
+    ws2.deliverBinary(again.agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: [] })));
+    await expect(p2).resolves.toEqual([]);
+  });
+
+  it('незнакомый кадр агента не трогает ожидающий обмен: ответ доходит следом', async () => {
+    const { transport, ws, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    // Кадр из будущего агента, которого этот клиент не знает: молча игнорируем.
+    ws.deliverBinary(agentEnc.push(jsonFrame(200 as FrameType, 0, { hello: 'from the future' })));
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(p).resolves.toEqual(['feed']);
+  });
+
+  it('ответ без списка (битый payload) → пустой список', async () => {
+    const { transport, ws, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { oops: 1 })));
+    await expect(p).resolves.toEqual([]);
+  });
+});

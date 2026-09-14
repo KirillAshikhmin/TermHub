@@ -75,6 +75,10 @@ export interface Transport {
   caffeinate(): Promise<CaffeinateState>;
   /** Переключить caffeinate; возвращает новое состояние. */
   setCaffeinate(active: boolean): Promise<CaffeinateState>;
+  /** Объявление возможностей (ADR 0018): называем свои имена, получаем список агента.
+   *  Агент, который этого не умеет, отвечает 404 (LAN) или молчит (relay) — обе дороги
+   *  дают пустой список, а не ошибку прикладного уровня. */
+  capabilities(caps: string[]): Promise<string[]>;
   /** VAPID public key агента для web-push (оба режима: LAN — REST, relay — E2E). */
   vapidKey(): Promise<string>;
   /** Отправить push-подписку агенту (оба режима). */
@@ -304,6 +308,10 @@ export class LanTransport implements Transport {
 
   setCaffeinate(active: boolean): Promise<CaffeinateState> {
     return api.setCaffeinate(active);
+  }
+
+  capabilities(caps: string[]): Promise<string[]> {
+    return api.capabilities(caps);
   }
 
   vapidKey(): Promise<string> {

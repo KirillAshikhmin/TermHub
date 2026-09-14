@@ -1,6 +1,7 @@
 // Обёртка над REST агента: cookie-сессия (same-origin), единый разбор ошибок,
 // 401 на защищённых маршрутах → редирект на экран входа.
 
+import { parseCaps } from '@termhub/protocol/capabilities';
 import type { FileContent, FileEntry, SessionInfo } from '@termhub/protocol';
 
 export interface DirGroup {
@@ -143,6 +144,11 @@ export const api = {
   dirs: () => request<DirGroup[]>('GET', '/api/dirs'),
   diag: () => request<DiagInfo>('GET', '/api/diag'),
   mode: () => request<ModeInfo>('GET', '/api/mode'),
+  /** Объявление возможностей (ADR 0018): свой список в обмен на список агента.
+   *  Старый агент маршрута не знает и отвечает 404 — вызывающая сторона читает
+   *  отказ как «возможностей нет». */
+  capabilities: async (caps: string[]) =>
+    parseCaps((await request<{ caps?: unknown }>('POST', '/api/capabilities', { body: { caps } })).caps),
   vapidKey: async () => (await request<{ key: string }>('GET', '/api/push/vapid-key', { redirectOnAuth: false })).key,
   subscribePush: (subscription: unknown) => request<void>('POST', '/api/push/subscribe', { body: { subscription } }),
   caffeinate: () => request<CaffeinateState>('GET', '/api/caffeinate'),

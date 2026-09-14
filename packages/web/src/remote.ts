@@ -6,6 +6,7 @@
 import { initCrypto } from '@termhub/protocol';
 import type { Identity } from '@termhub/protocol';
 
+import { forgetCaps, negotiateCaps } from './capabilities';
 import { mountDashboard } from './dashboard';
 import { mountFiles } from './files';
 import { mountGradle } from './gradle';
@@ -79,6 +80,7 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
   let firstOnlineDone = false;
 
   const dropTransport = (): void => {
+    forgetCaps(); // пересечение принадлежало прежнему агенту
     transport?.close();
     transport = null;
     activeAgentId = null;
@@ -117,6 +119,11 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
     // переехать в другую сеть. Молча игнорируем отказ (старый агент кадра не знает,
     // гостю отдаётся пустой список) — это удобство, а не условие работы.
     if (status === 'online') void refreshLocalUrls();
+    // Объявление возможностей (ADR 0018): один обмен на подключение. Поток потерян —
+    // пересечение с этим агентом больше не действует; на каждый online объявляемся
+    // заново (агент мог обновиться), старый промолчит и пересечение останется пустым.
+    if (status !== 'online') forgetCaps();
+    else if (transport) void negotiateCaps(transport);
   };
 
   /** Спрашивает у агента его локальные адреса и запоминает их у известного агента. */
