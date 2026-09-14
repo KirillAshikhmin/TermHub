@@ -50,7 +50,8 @@ describe('списки сторон', () => {
     expect(CLIENT_CAPS).toContain('feed');
   });
 
-  it('пересечение сторон этого этапа — feed', () => {
-    expect(intersect(AGENT_CAPS, CLIENT_CAPS)).toEqual(['feed']);
+  it('feed понимают обе стороны, значит он есть в их пересечении', () => {
+    // Членство, а не точный состав: новое имя в списках — не повод править тест.
+    expect(intersect(AGENT_CAPS, CLIENT_CAPS)).toContain('feed');
   });
 });

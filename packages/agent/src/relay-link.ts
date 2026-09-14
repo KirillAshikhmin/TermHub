@@ -160,6 +160,10 @@ interface ClientSession {
   decryptor?: Decryptor;
   /** Таймер pre-hello: гасится при переходе в streaming и в disposeClient. */
   helloTimer?: ReturnType<typeof setTimeout>;
+  /** Пересечение возможностей с этим клиентом (ADR 0018) и время обмена: пока он на
+   *  связи, его показывает диагностика агента; ушёл — ушло и пересечение. */
+  caps: string[];
+  capsAt: number;
   /** channel → живой терминал (мультиплекс нескольких pty в одном connId). */
   terminals: Map<number, TerminalHandle>;
 }
@@ -224,11 +228,6 @@ export class RelayLink {
   private backoff = BACKOFF_START_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private readonly clients = new Map<number, ClientSession>();
-  /** Пересечение возможностей с последним объявившимся клиентом (ADR 0018) и время
-   *  обмена: их забирает диагностика агента через status(). Телефон ходит через relay,
-   *  поэтому без этого счёта /api/diag показывал бы пустое пересечение всегда. */
-  private negotiatedCaps: string[] = [];
-  private negotiatedCapsAt = 0;
   private pairing?: PairingState;
   private readyWaiters: ReadyWaiter[] = [];
 
@@ -522,13 +521,25 @@ export class RelayLink {
     caps: string[];
     capsAt: number;
   } {
+    // Пересечение — свойство живого клиента, а не моста (ADR 0018): показываем самый
+    // свежий обмен среди подключённых. Клиент ушёл или связь с relay оборвалась — его
+    // сессии уже нет, и /api/diag не покажет пересечение с тем, кого нет: иначе оно
+    // по времени обмена перебивало бы свежий обмен по LAN.
+    let caps: string[] = [];
+    let capsAt = 0;
+    for (const s of this.clients.values()) {
+      if (s.capsAt >= capsAt) {
+        caps = s.caps;
+        capsAt = s.capsAt;
+      }
+    }
     return {
       configured: true,
       connected: this.registered,
       agentId: this.agentId,
       clients: this.clients.size,
-      caps: this.negotiatedCaps,
-      capsAt: this.negotiatedCapsAt,
+      caps,
+      capsAt,
     };
   }
 
@@ -591,7 +602,7 @@ export class RelayLink {
     // её pty оставались висеть без владельца (утечка процессов), а поток шифрования
     // рассинхронизировался. Старую сессию корректно закрываем.
     if (this.clients.has(connId)) this.disposeClient(connId);
-    const session: ClientSession = { connId, state: 'hello', terminals: new Map() };
+    const session: ClientSession = { connId, state: 'hello', caps: [], capsAt: 0, terminals: new Map() };
     // Cap на pending (не подтвердивших streaming) клиентов. relay видит их как обычных
     // клиентов и держит слот до дисконнекта; отозванное/враждебное устройство знает
     // публичный agentId и могло бы полу-открытыми сессиями исчерпать per-agent cap relay.
@@ -853,8 +864,8 @@ export class RelayLink {
         } catch {
           announced = undefined; // битый payload — клиент не назвал ничего
         }
-        this.negotiatedCaps = intersect(AGENT_CAPS, parseCaps(announced));
-        this.negotiatedCapsAt = Date.now();
+        s.caps = intersect(AGENT_CAPS, parseCaps(announced));
+        s.capsAt = Date.now();
         this.sendFrameBytes(s, jsonFrame(FrameType.CapabilitiesResult, 0, { caps: AGENT_CAPS }));
         return;
       }

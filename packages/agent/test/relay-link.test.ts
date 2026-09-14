@@ -1138,19 +1138,25 @@ describe('RelayLink — объявление возможностей', () => {
   }
 
   /** Допущенный клиент, доведённый до streaming (hello → hello-ok → hello-fin).
-   *  `scope` — гость: ограничение одной сессией, как после шаринга. */
-  async function capsClient(name: string, scope?: AuthorizedDevice['scope']): Promise<CapsClient> {
+   *  `scope` — гость: ограничение одной сессией, как после шаринга. `at` — другой
+   *  мост (свой relay и своя личность): его связь тест рвёт, не трогая общий. */
+  async function capsClient(
+    name: string,
+    scope?: AuthorizedDevice['scope'],
+    at?: { port: number; agentId: string; edPub: Uint8Array },
+  ): Promise<CapsClient> {
+    const target = at ?? { port: relayHandle.port, agentId, edPub: agentIdentity.edPub };
     const clientId = generateIdentity();
     saveAuthorized([
       { name, edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now(), scope },
     ]);
-    const { ws, col } = await connectClient(relayHandle.port, agentId);
+    const { ws, col } = await connectClient(target.port, target.agentId);
     ws.send(helloFrame(clientId, crypto.randomBytes(32), name), { binary: true });
     const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
       header: string;
       nonce: string;
     };
-    const { rx, tx } = sessionKeys('client', clientId, agentIdentity.edPub);
+    const { rx, tx } = sessionKeys('client', clientId, target.edPub);
     const clientDec = makeDecryptor(rx, unb64(ok.header));
     const clientEnc = makeEncryptor(tx);
     ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
@@ -1195,13 +1201,63 @@ describe('RelayLink — объявление возможностей', () => {
     const c = await capsClient('caps-diag-laptop');
     c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed', 'teleport'] }));
     expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
-    expect(link.status().caps).toEqual(['feed']);
+    expect(link.status().caps).toContain('feed');
 
     // Следующим объявился клиент постарше — показываем уже его пересечение.
     const old = await capsClient('caps-old-phone');
     old.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['teleport'] }));
     expect((await old.next())?.type).toBe(FrameType.CapabilitiesResult);
     expect(link.status().caps).toEqual([]);
+  }, 25000);
+
+  it('клиент ушёл — пересечение гаснет: диагностика не показывает того, кого уже нет', async () => {
+    const c = await capsClient('caps-leaving-phone');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+    expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
+    expect(link.status().caps).toContain('feed');
+
+    c.ws.close();
+    // relay сообщает агенту client-close — ждём, пока мост останется без клиентов.
+    for (let i = 0; i < 150 && link.status().clients > 0; i += 1) await delay(20);
+    expect(link.status().clients).toBe(0);
+    expect(link.status().caps).toEqual([]);
+    // Время обмена гаснет вместе с пересечением: иначе призрак по нему перебил бы
+    // свежий обмен по LAN (/api/diag выбирает более поздний из двух).
+    expect(link.status().capsAt).toBe(0);
+  }, 25000);
+
+  it('связь с relay оборвалась — пересечение гаснет вместе с клиентами', async () => {
+    // Свой relay и свой мост: обрыв общего сломал бы соседние тесты файла.
+    const ownRelay = await startRelay({ port: 0, silent: true });
+    let relayClosed = false;
+    const ownIdentity = generateIdentity();
+    const ownLink = new RelayLink({
+      url: `ws://127.0.0.1:${ownRelay.port}/relay`,
+      identity: ownIdentity,
+      authorized: () => loadAuthorized(),
+      sessions,
+    });
+    ownLink.start();
+    try {
+      const c = await capsClient('caps-dropped-phone', undefined, {
+        port: ownRelay.port,
+        agentId: fingerprint(ownIdentity.edPub),
+        edPub: ownIdentity.edPub,
+      });
+      c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+      expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
+      expect(ownLink.status().caps).toContain('feed');
+
+      await ownRelay.close();
+      relayClosed = true;
+      for (let i = 0; i < 150 && ownLink.status().connected; i += 1) await delay(20);
+      expect(ownLink.status().connected).toBe(false);
+      expect(ownLink.status().caps).toEqual([]);
+      expect(ownLink.status().capsAt).toBe(0);
+    } finally {
+      await ownLink.stop();
+      if (!relayClosed) await ownRelay.close();
+    }
   }, 25000);
 
   it('незнакомый кадр игнорируется: соединение живо и следующий кадр обслуживается', async () => {

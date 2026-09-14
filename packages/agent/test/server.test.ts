@@ -1015,7 +1015,10 @@ describe('POST /api/capabilities — объявление возможносте
   it('пересечение с последним клиентом видно в /api/diag', async () => {
     s = await start({});
     await announce({ caps: ['feed', 'teleport'] });
-    expect(await diagCaps()).toEqual({ agent: ['feed'], negotiated: ['feed'] });
+    // Членство, а не точный состав AGENT_CAPS: список — данные, он будет расти.
+    const caps = await diagCaps();
+    expect(caps.agent).toContain('feed');
+    expect(caps.negotiated).toContain('feed');
   });
 
   it('общих имён нет → пустое пересечение, а не ошибка', async () => {
