@@ -99,13 +99,21 @@ describe('поиск по загруженному', () => {
     expect(hits[0]?.snippet).toBe('вторая со словом ЛЕНТА внутри');
   });
 
-  it('не предлагает точкой прыжка запись без курсора', () => {
+  it('находит запись без курсора текстом, но не даёт ей точку прыжка', () => {
+    // Веха склейки не привязана к строке ни одного из сшитых файлов — курсора у
+    // неё нет. Раньше это исключало её из находок целиком: человек искал вехой и
+    // получал «ничего не нашлось», хотя текст в беседе есть (тикет 04, находка 4).
+    // Теперь запись найдена, а перейти к ней по-прежнему нельзя — курсора нет.
     const items = [
       { id: 'n', at: 1, kind: 'note', note: 'chain', text: 'склейка беседы' } as FeedEntry,
       entry({ id: 'ok', text: 'склейка беседы видна и здесь' }),
     ];
 
-    expect(searchFeed(items, 'склейка').map((h) => h.entry.id)).toEqual(['ok']);
+    const found = searchFeed(items, 'склейка');
+
+    expect(found.map((h) => h.entry.id)).toEqual(['n', 'ok']);
+    expect(found[0]?.cursor).toBeUndefined();
+    expect(found[1]?.cursor).toBe('cok');
   });
 
   it('длинную строку показывает окном вокруг совпадения, обрезанные края — многоточием', () => {
@@ -169,6 +177,25 @@ describe('переход к найденному месту', () => {
     feed.teardown();
   });
 
+  it('отметка гаснет сама — не сразу и не навсегда', async () => {
+    const far: FeedEntry = { id: 'far', at: 1, kind: 'agent', text: 'нашлось далеко', cursor: '9:99' };
+    const { transport } = feedTransport(() => page({ entries: [far], bof: true }));
+    const feed = mountFeed(host, 'work', transport);
+    await flush();
+
+    await feed.jumpTo('9:99');
+    expect(host.querySelector('.th-feed__entry.is-hit')).not.toBeNull();
+
+    // Чуть раньше срока — отметка ещё держится, это не мгновенная вспышка.
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(host.querySelector('.th-feed__entry.is-hit')).not.toBeNull();
+
+    // Спустя весь срок — гаснет сама, без второго перехода и без участия человека.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(host.querySelector('.th-feed__entry.is-hit')).toBeNull();
+    feed.teardown();
+  });
+
   it('после прыжка список находок говорит про новое окно, а не про снесённое', async () => {
     const first: FeedEntry = { id: 'f1', at: 1, kind: 'human', text: 'иголка в хвосте', cursor: 'c1' };
     const second: FeedEntry = { id: 'f2', at: 2, kind: 'agent', text: 'иголка ещё раз', cursor: 'c2' };
@@ -189,6 +216,53 @@ describe('переход к найденному месту', () => {
     // Прежнее окно снесено прыжком: находок в новом ровно одна, и счёт про неё.
     expect(hits()).toHaveLength(1);
     expect(status()).toBe(t('feed.search.found', { n: 1 }));
+    feed.teardown();
+  });
+});
+
+describe('честность находок (тикет 04, находки 4 и 5)', () => {
+  it('находку без точки прыжка показывает неактивной, а не молчит и не ведёт в никуда', async () => {
+    const chain: FeedEntry = { id: 'chain', at: 1, kind: 'note', note: 'chain', text: 'склейка беседы' };
+    const { transport, calls } = feedTransport(() => page({ entries: [chain], bof: true }));
+    const feed = mountFeed(host, 'work', transport);
+    await flush();
+
+    await typeQuery('склейка');
+
+    expect(hits()).toHaveLength(1);
+    const row = hits()[0] as HTMLButtonElement;
+    expect(row.disabled).toBe(true);
+
+    row.dispatchEvent(new Event('click'));
+    await flush();
+
+    // Клик по неактивной кнопке не должен был вызвать переход к агенту.
+    expect(calls).toHaveLength(1);
+    feed.teardown();
+  });
+
+  it('снятие тумблера «Мышление» гасит находку в мышлении, а возврат — включает обратно', async () => {
+    const think: FeedEntry = { id: 't1', at: 1, kind: 'thinking', text: 'скрытая мысль про иголку', cursor: 'c1' };
+    const { transport } = feedTransport(() => page({ entries: [think], bof: true }));
+    const feed = mountFeed(host, 'work', transport);
+    await flush();
+
+    await typeQuery('иголку');
+    expect(hits()).toHaveLength(1);
+    let row = hits()[0] as HTMLButtonElement;
+    // Мышление по умолчанию скрыто — находка есть, но вести ей уже некуда.
+    expect(row.disabled).toBe(true);
+
+    const toggle = host.querySelector('.th-feed__toggle') as HTMLInputElement;
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change'));
+    row = hits()[0] as HTMLButtonElement;
+    expect(row.disabled).toBe(false);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change'));
+    row = hits()[0] as HTMLButtonElement;
+    expect(row.disabled).toBe(true);
     feed.teardown();
   });
 });

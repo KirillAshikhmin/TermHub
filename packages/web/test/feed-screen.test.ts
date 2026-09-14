@@ -87,6 +87,18 @@ describe('лента при открытии', () => {
     feed.teardown();
   });
 
+  it('не повторяет имя инструмента, если агент уже начал им текст', async () => {
+    const dup: FeedEntry = { id: 'e5', at: 1_700_000_004_000, kind: 'tool', text: 'Bash cd apps && git add .', tool: 'Bash' };
+    const { transport } = feedTransport(() => page({ entries: [dup] }));
+    const feed = mountFeed(host, 'work', transport);
+    await flush();
+
+    const toolText = host.querySelector('.th-feed__tooltext')?.textContent ?? '';
+    expect(toolText).toBe('cd apps && git add .');
+    expect(host.querySelector('.th-feed__toolname')?.textContent).toBe('Bash');
+    feed.teardown();
+  });
+
   it('прячет мышление, пока не включён тумблер, и помнит выбор между открытиями', async () => {
     const { transport } = feedTransport(() => page({ entries: [THINK, AGENT] }));
     const first = mountFeed(host, 'work', transport);

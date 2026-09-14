@@ -63,8 +63,9 @@ export interface FeedHandle {
 /** Находка поиска: запись, к которой переносят ленту, и строка вокруг совпадения. */
 export interface FeedHit {
   entry: FeedEntry;
-  /** Точка прыжка: у находки курсор есть всегда — без него её не предлагают. */
-  cursor: string;
+  /** Точка прыжка. Отсутствует у вехи склейки — она не привязана к строке ни
+   *  одного из сшитых файлов транскрипта; текст при этом всё равно найден. */
+  cursor?: string;
   /** Строка текста с совпадением; длинная — окном вокруг него, края с многоточием. */
   snippet: string;
 }
@@ -89,13 +90,11 @@ export function searchFeed(entries: FeedEntry[], query: string): FeedHit[] {
   if (needle === '') return [];
   const hits: FeedHit[] = [];
   for (const entry of entries) {
-    // Точка прыжка — курсор записи; без него находку некуда открыть, поэтому
-    // веха склейки в список находок не попадает.
-    const cursor = entry.cursor;
-    if (!cursor) continue;
     const at = entry.text.toLowerCase().indexOf(needle);
     if (at < 0) continue;
-    hits.push({ entry, cursor, snippet: snippetAt(entry.text, at, needle.length) });
+    // Курсор передаём как есть: у вехи склейки его нет (не привязана к строке ни
+    // одного из сшитых файлов), но текст найден — и хит показывает его.
+    hits.push({ entry, cursor: entry.cursor, snippet: snippetAt(entry.text, at, needle.length) });
   }
   return hits;
 }
@@ -283,7 +282,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       }
       const what = document.createElement('span');
       what.className = 'th-feed__tooltext';
-      what.textContent = entry.text;
+      // Агент кладёт имя инструмента и в `tool`, и первым словом `text» — вторую
+      // копию не показываем, иначе выходит «Bash Bash cd …».
+      const dup = entry.tool && (entry.text === entry.tool || entry.text.startsWith(`${entry.tool} `));
+      what.textContent = dup ? entry.text.slice(entry.tool!.length).trimStart() : entry.text;
       box.append(what);
       return box;
     }
@@ -337,6 +339,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     showThinking = toggle.checked;
     writeThinking(showThinking);
     applyThinking();
+    // Находки на мышление зависят от того же тумблера: включили — открылись
+    // обратно, выключили — перестали притворяться доступными (см. jumpable).
+    paintHits(lastHits);
   });
 
   // Окно заменили целиком (прыжок к находке, хвост заново): снимок поиска сделан
@@ -608,13 +613,25 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     moreEl.hidden = !deeper;
   };
 
+  // Находки, показанные последними, — чтобы при переключении тумблера
+  // перерисовать их доступность заново, не гоняя поиск (тот же снимок, другой вид).
+  let lastHits: FeedHit[] = [];
+
+  /** Находку можно открыть, только если у неё есть точка прыжка и её запись не
+   *  спрятана тумблером мышления — иначе клик либо не имеет цели вовсе (веха
+   *  склейки без курсора), либо вёл бы к записи, которой сейчас не видно в ленте. */
+  const jumpable = (hit: FeedHit): boolean => Boolean(hit.cursor) && (hit.entry.kind !== 'thinking' || showThinking);
+
   const paintHits = (found: FeedHit[]): void => {
+    lastHits = found;
     const frag = document.createDocumentFragment();
     for (const hit of found) {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'th-feed__hit';
-      row.dataset.cursor = hit.cursor;
+      const canJump = jumpable(hit);
+      row.disabled = !canJump;
+      if (hit.cursor) row.dataset.cursor = hit.cursor;
       if (hit.entry.at) {
         const when = document.createElement('time');
         when.className = 'th-feed__hittime';
@@ -628,7 +645,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       text.className = 'th-feed__hittext';
       text.textContent = hit.snippet;
       row.append(kind, text);
-      row.addEventListener('click', () => void jumpTo(hit.cursor));
+      if (canJump) {
+        const cursor = hit.cursor!;
+        row.addEventListener('click', () => void jumpTo(cursor));
+      }
       frag.append(row);
     }
     hitsEl.replaceChildren(frag);

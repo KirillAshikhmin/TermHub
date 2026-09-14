@@ -3052,6 +3052,13 @@ main.th-feed {
 .th-feed__hit:hover {
   background: var(--bg-hover);
 }
+/* Находка без точки прыжка (веха склейки) или временно скрытая тумблером
+   мышления — не притворяется живой: вид как у обычной, но не откликается. */
+.th-feed__hit:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
 .th-feed__hittime,
 .th-feed__hitkind {
   flex: none;
@@ -3156,7 +3163,9 @@ main.th-feed {
 }
 .th-feed__tooltext {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /* Веха — тонкая линия с подписью посередине. */
 .th-feed__entry--note {
@@ -3177,8 +3186,20 @@ main.th-feed {
 .th-feed__notetext {
   text-align: center;
 }
-/* Запись, к которой перенесли ленту по находке. */
+/* Запись, к которой перенесли ленту по находке. Одной рамки мало: на записи
+   человека она сливается с уже акцентным фоном пузыря, а глазами замечено, что
+   тонкая линия среди десятка записей теряется — поэтому фон меняется тоже, и
+   заметно сильнее любого фона записи (accent-tint у человека — 14%). */
 .th-feed__entry.is-hit {
+  background: rgba(56, 211, 168, 0.35);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .th-feed__entry.is-hit {
+    background: rgba(22, 183, 144, 0.3);
+  }
+}
+:root[data-theme='light'] .th-feed__entry.is-hit {
+  background: rgba(22, 183, 144, 0.3);
 }
