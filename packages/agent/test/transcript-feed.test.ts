@@ -306,9 +306,9 @@ describe('parseLine: Codex', () => {
         arguments: JSON.stringify({ command: ['bash', '-lc', 'echo ' + 'a'.repeat(500)] }),
       },
     });
-    // Подпись, а не содержимое: склейка режется тем же пределом в 200 знаков.
+    // Подпись, а не содержимое: склейка режется тем же пределом в 400 знаков.
     const arg = (parseLine(long, 'codex') as { text: string }).text.slice('shell '.length);
-    expect(arg.length).toBe(201);
+    expect(arg.length).toBe(401);
     expect(arg.startsWith('bash -lc echo aaa')).toBe(true);
   });
 
@@ -573,5 +573,199 @@ describe('readFeed: пределы', () => {
     const prev = page(await readFeed(f, 'claude', { limit: 1, before: p.head }));
     const firstShown = Number(p.entries[0].text.slice(1, p.entries[0].text.indexOf(' ')));
     expect(prev.entries[0].text.startsWith(`e${firstShown - 1} `)).toBe(true);
+  });
+});
+
+// Замер на живых данных владельца 14.09.2026 (78 файлов `~/.claude/projects/**/*.jsonl` без
+// `subagents/`, 328 файлов `~/.codex/sessions/**/rollout-*.jsonl`): записей `human` было
+// 2699 у Claude и 12 324 у Codex, из них вставками среды — 2043 (75,7 %) и 11 334 (92,0 %).
+describe('лента: разговор, а не служебный шум', () => {
+  const notification =
+    '<task-notification>\n<task-id>wudql60fp</task-id>\n<output-file>/tmp/x</output-file>\n</task-notification>';
+  const slash = '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>max</command-args>';
+
+  it('запись целиком из вставки среды человеком не называется', async () => {
+    const f = put('claude-env.jsonl', [
+      cHuman('u1', notification, '2026-09-14T13:00:00.000Z'),
+      cHuman('u2', slash, '2026-09-14T13:00:01.000Z'),
+      cHuman('u3', '<local-command-stdout>Set effort level to max</local-command-stdout>', '2026-09-14T13:00:02.000Z'),
+      cHuman('u4', '<bash-input> cd finance && npm run login</bash-input>', '2026-09-14T13:00:03.000Z'),
+      cHuman('u5', 'разберись с тестом', '2026-09-14T13:00:04.000Z'),
+    ]);
+    const p = page(await readFeed(f, 'claude'));
+    expect(p.entries.map((e) => [e.kind, e.text])).toEqual([['human', 'разберись с тестом']]);
+  });
+});
+
+describe('лента: вставка и слова человека', () => {
+  it('слова человека рядом со вставкой остаются, вставка уходит', async () => {
+    const f = put('claude-mixed.jsonl', [
+      cHuman('u1', '<system-reminder>файл изменился</system-reminder>\nпроверь ещё раз', '2026-09-14T13:01:00.000Z'),
+      {
+        timestamp: '2026-09-14T13:01:01.000Z',
+        ordinal: 1,
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'msg_m',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: '<environment_context>\n  <cwd>/w</cwd>\n</environment_context>\nсобери и покажи' },
+          ],
+        },
+      },
+    ]);
+    const claude = page(await readFeed(f, 'claude'));
+    expect(claude.entries.map((e) => [e.kind, e.text])).toEqual([['human', 'проверь ещё раз']]);
+    const codex = page(await readFeed(f, 'codex'));
+    expect(codex.entries.map((e) => [e.kind, e.text])).toEqual([['human', 'собери и покажи']]);
+  });
+
+  it('свалка инструкций в роли человека в ленту не едет', async () => {
+    const dump = '# AGENTS.md instructions for /w\n\n<INSTRUCTIONS>\n' + 'правило\n'.repeat(400) + '</INSTRUCTIONS>';
+    // Маркер тела обязателен: свалку опознаёт он, а не зачин — на живых данных он есть у всех
+    // 9455 историй подагента.
+    const history =
+      'The following is the Codex agent history whose request action you are assessing.\n>>> APPROVAL REQUEST END';
+    const f = put('codex-dumps.jsonl', [
+      xMeta('2026-09-14T13:02:00.000Z'),
+      xMessage('msg_1', 'user', dump, '2026-09-14T13:02:01.000Z', 1),
+      xMessage('msg_2', 'user', history, '2026-09-14T13:02:02.000Z', 2),
+      xMessage('msg_3', 'user', '<task-notification>\n<task-id>bymffrih2</task-id>\n</task-notification>', '2026-09-14T13:02:03.000Z', 3),
+      xMessage('msg_4', 'user', 'продолжай', '2026-09-14T13:02:04.000Z', 4),
+    ]);
+    const p = page(await readFeed(f, 'codex'));
+    expect(p.entries.map((e) => [e.kind, e.text])).toEqual([['human', 'продолжай']]);
+  });
+});
+
+describe('лента: мышление Codex', () => {
+  it('пустая запись мышления в ленту не едет вовсе', async () => {
+    const f = put('codex-thinking.jsonl', [
+      xMeta('2026-09-14T13:03:00.000Z'),
+      {
+        timestamp: '2026-09-14T13:03:01.000Z',
+        ordinal: 1,
+        type: 'response_item',
+        payload: { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAAAABqk…' },
+      },
+      {
+        timestamp: '2026-09-14T13:03:02.000Z',
+        ordinal: 2,
+        type: 'response_item',
+        payload: { type: 'reasoning', id: 'rs_2', summary: [{ type: 'summary_text', text: '' }], content: [] },
+      },
+      {
+        timestamp: '2026-09-14T13:03:03.000Z',
+        ordinal: 3,
+        type: 'response_item',
+        payload: { type: 'reasoning', id: 'rs_3', summary: [{ type: 'summary_text', text: 'сначала тесты' }] },
+      },
+    ]);
+    const p = page(await readFeed(f, 'codex'));
+    expect(p.entries.map((e) => [e.kind, e.text, e.id])).toEqual([['thinking', 'сначала тесты', 'rs_3']]);
+  });
+});
+
+// Форма снята с живых данных: у Codex вызов инструмента приезжает скриптом песочницы, и
+// настоящая команда лежит внутри `tools.exec_command({cmd:"…"})` — 23 468 вызовов `exec` из
+// 32 929, ещё 4 345 несут патч. Подпись, собранная первой строкой скрипта, показывала
+// `const results = await Promise.all([` — обёртку, а не дело.
+const xExec = (id: string, script: string, at: string, ordinal: number): unknown => ({
+  timestamp: at,
+  ordinal,
+  type: 'response_item',
+  payload: { type: 'custom_tool_call', id, name: 'exec', input: script },
+});
+
+describe('лента: подпись вызова у Codex', () => {
+  const one = 'const r = await tools.exec_command({cmd:"git commit -m black",workdir:"/w",yield_time_ms:10000});';
+  const pair =
+    'const results = await Promise.all([\n' +
+    '  tools.exec_command({"cmd":"rg -n \\"FeedEntry\\" packages","workdir":"/w"}),\n' +
+    '  tools.exec_command({"cmd":"npm test","workdir":"/w"}),\n]);';
+  const patch =
+    'const patch = "*** Begin Patch\\n*** Update File: /w/src/a.ts\\n@@\\n-старое\\n+новое\\n*** End Patch";\n' +
+    'const r = await tools.apply_patch({patch});';
+
+  it('показывает саму команду, а не обёртку песочницы', async () => {
+    const f = put('codex-exec.jsonl', [
+      xMeta('2026-09-14T13:04:00.000Z'),
+      xExec('c1', one, '2026-09-14T13:04:01.000Z', 1),
+      xExec('c2', pair, '2026-09-14T13:04:02.000Z', 2),
+      xExec('c3', patch, '2026-09-14T13:04:03.000Z', 3),
+    ]);
+    const p = page(await readFeed(f, 'codex'));
+    expect(p.entries.map((e) => e.text)).toEqual([
+      'exec git commit -m black',
+      'exec rg -n "FeedEntry" packages ; npm test',
+      'exec apply_patch /w/src/a.ts',
+    ]);
+    expect(p.entries.every((e) => e.tool === 'exec')).toBe(true);
+  });
+
+  it('предел подписи оставляет целой команду обычной длины', async () => {
+    // Замер 14.09.2026: после разбора обёртки медиана команды Codex — 140 знаков, p75 — 295,
+    // p90 — 569; предел 200 резал 36,3 % подписей Codex и 58,5 % подписей Claude, предел 400
+    // режет 14,9 % и 36,4 %, и это уже хвост составных команд, где дело названо в начале.
+    const mid = 'rg -n "' + 'x'.repeat(280) + '" packages';
+    const long = 'sed -n ' + "'1,240p' ".repeat(60) + 'a.md';
+    const f = put('codex-exec-limit.jsonl', [
+      xMeta('2026-09-14T13:05:00.000Z'),
+      xExec('c1', `const r = await tools.exec_command({cmd:${JSON.stringify(mid)}});`, '2026-09-14T13:05:01.000Z', 1),
+      xExec('c2', `const r = await tools.exec_command({cmd:${JSON.stringify(long)}});`, '2026-09-14T13:05:02.000Z', 2),
+      // 15,5 % вызовов `exec` не несут ни команды, ни патча (ввод в сессию, поиск в сети):
+      // там первая строка скрипта и есть всё, что о вызове известно.
+      xExec('c3', 'const r = await tools.write_stdin({session_id:1,chars:"y"});', '2026-09-14T13:05:03.000Z', 3),
+    ]);
+    const p = page(await readFeed(f, 'codex'));
+    expect(p.entries[0].text).toBe(`exec ${mid}`);
+    expect(p.entries[1].text).toBe(`exec ${long.slice(0, 400)}…`);
+    expect(p.entries[2].text).toBe('exec const r = await tools.write_stdin({session_id:1,chars:"y"});');
+  });
+});
+
+describe('лента: свалка опознаётся по телу, а не по зачину', () => {
+  // Замер 14.09.2026: маркер тела есть у всех свалок до одной — `>>> APPROVAL REQUEST` у 9455
+  // историй подагента из 9455, `<INSTRUCTIONS>` у 305 дампов AGENTS.md из 305. Порога по
+  // объёму для этого не хватает: свалки начинаются с 281 Б, и при пороге 4 КиБ в ленту уехали
+  // бы 3444 из них.
+  const dump = '# AGENTS.md instructions for /w\n\n<INSTRUCTIONS>\n' + 'правило\n'.repeat(400) + '</INSTRUCTIONS>';
+  const history = 'The following is the Codex agent history whose request action you are assessing.\n>>> APPROVAL REQUEST END';
+
+  it('реплика человека, начатая тем же заголовком, из ленты не пропадает', async () => {
+    const question = '# AGENTS.md instructions — почему не применяются? объясни';
+    const about = 'The following is the Codex agent history — это ты мне подкладываешь? убери';
+    const f = put('claude-dump-head.jsonl', [
+      cHuman('u1', dump, '2026-09-14T13:06:00.000Z'),
+      cHuman('u2', question, '2026-09-14T13:06:01.000Z'),
+      cHuman('u3', about, '2026-09-14T13:06:02.000Z'),
+    ]);
+    const claude = page(await readFeed(f, 'claude'));
+    expect(claude.entries.map((e) => [e.kind, e.text])).toEqual([
+      ['human', question],
+      ['human', about],
+    ]);
+    const g = put('codex-dump-head.jsonl', [
+      xMeta('2026-09-14T13:06:03.000Z'),
+      xMessage('m1', 'user', history, '2026-09-14T13:06:04.000Z', 1),
+      xMessage('m2', 'user', question, '2026-09-14T13:06:05.000Z', 2),
+    ]);
+    const codex = page(await readFeed(g, 'codex'));
+    expect(codex.entries.map((e) => [e.kind, e.text])).toEqual([['human', question]]);
+  });
+
+  it('веха прерывания не повторяет в тексте служебный маркер', async () => {
+    const f = put('claude-note-text.jsonl', [
+      {
+        type: 'user',
+        interruptedMessageId: 'msg_011',
+        message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] },
+        uuid: 'i1',
+        timestamp: '2026-09-14T13:07:00.000Z',
+      },
+    ]);
+    const p = page(await readFeed(f, 'claude'));
+    expect(p.entries).toEqual([{ id: 'i1', at: Date.parse('2026-09-14T13:07:00.000Z'), kind: 'note', note: 'interrupted', text: '' }]);
   });
 });

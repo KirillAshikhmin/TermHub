@@ -12,6 +12,11 @@
 // «что берём» явный: у Claude полтора десятка служебных типов записей и их число растёт
 // с каждой версией, а виды ленты фиксированы.
 //
+// Роль в файле — не доказательство авторства: оба агента кладут вставки среды обычным
+// сообщением с ролью человека (замер 14.09.2026: 2043 записи из 2699 у Claude — 75,7 %, и
+// 11 334 из 12 324 у Codex — 92,0 %). Поэтому вид записи решают признаки вставки, а не поле
+// роли: назвать `human` то, чего человек не писал, — соврать про говорящего.
+//
 // Ни tmux, ни сети, ни живого агента здесь нет: на вход путь и курсор, на выход страница.
 
 import { open, type FileHandle } from 'node:fs/promises';
@@ -33,7 +38,8 @@ export interface FeedEntry {
   tool?: string;
   /** Что за веха — только у `kind: 'note'`. Код, а не фраза: слова подбирает экран. */
   note?: 'compacted' | 'interrupted' | 'error' | 'chain';
-  /** Ветка подагента — только у Claude (`isSidechain`). */
+  /** Ветка подагента — только у Claude (`isSidechain`); на живых данных не заполняется, см.
+   *  замер в `fromClaude`. */
   branch?: string;
   /** Текст обрезан по пределу записи. */
   truncated?: true;
@@ -85,8 +91,14 @@ const TEXT_LIMIT = 64 * 1024;
 /** Ответ не больше 1 МиБ: набрав его, чтение останавливается и отдаёт, что успело. Предел
  *  один на весь ответ ленты, поэтому его знает и тот, кто склеивает страницы файлов. */
 export const RESPONSE_LIMIT = 1024 * 1024;
-/** Аргумент в строке «что сделал» — подпись, а не содержимое. */
-const ARG_LIMIT = 200;
+/** Аргумент в строке «что сделал» — подпись, а не содержимое. Предел 400 знаков выбран
+ *  замером 14.09.2026 на 38 004 вызовах Codex и 27 728 вызовах Claude: после разбора обёртки
+ *  песочницы медиана команды Codex — 140 знаков, p75 — 295, p90 — 569; у Claude медиана 254.
+ *  Прежние 200 резали 36,3 % подписей Codex и 58,5 % подписей Claude — «короткий аргумент»
+ *  почти всегда был обрезан; при 400 режется 14,9 % и 36,4 %, и это уже хвост составных команд
+ *  и заданий подагенту, где дело названо в начале. Вдвое больший предел снял бы ещё 5 п.п. и
+ *  перестал бы быть строкой. */
+const ARG_LIMIT = 400;
 /** Окно чтения: растёт удвоением, пока не наберёт записей. */
 const WINDOW_MIN = 256 * 1024;
 const WINDOW_MAX = 4 * 1024 * 1024;
@@ -434,12 +446,72 @@ function classify(line: string, agent: AgentKind, offset: number): Parsed {
   };
 }
 
+// --- вставки среды ---------------------------------------------------------------------
+
+/** Обёртки, которыми среда кладёт своё сообщение в файл под ролью человека. Список признаков,
+ *  а не одно выражение на все случаи: каждая форма названа отдельно и посчитана на живых
+ *  данных владельца 14.09.2026 — 78 бесед `~/.claude/projects` (без каталогов `subagents`)
+ *  и 328 файлов `~/.codex/sessions`. Срабатываний: `task-notification`
+ *  3105, `environment_context` 480, `command-name` и `command-message` по 170, `command-args`
+ *  160, `local-command-stdout` 82, `recommended_plugins` 78, `turn_aborted` 35, `bash-input`,
+ *  `bash-stdout` и `bash-stderr` по 11, `user_shell_command` 2. `system-reminder` и
+ *  `local-command-stderr` в тех записях, которые лента берёт, не встретились ни разу:
+ *  `system-reminder` живёт в служебных записях (3565) и в выводе инструмента (95), а их лента
+ *  не читает вовсе. Обе формы названы здесь как члены той же семьи. */
+const ENV_TAGS = [
+  'task-notification',
+  'system-reminder',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command-stdout',
+  'local-command-stderr',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+  'environment_context',
+  'recommended_plugins',
+  'turn_aborted',
+  'user_shell_command',
+];
+const ENV_TAG_RE = new RegExp(`<(${ENV_TAGS.join('|')})>[\\s\\S]*?</\\1>`, 'g');
+/** Пометка о прерывании, которую дописывает сам CLI: 18 записей. Тем же прерыванием с полем
+ *  `interruptedMessageId` лента уже занялась выше — это его бесполезный близнец без поля. */
+const ENV_MARK_RE = /\[Request interrupted by user[^\]]*\]/g;
+/** Свалки, которые приезжают в роли человека целиком и тегов вокруг себя не имеют: история
+ *  подагента, подкладываемая Codex под оценку (9455 записей), и дамп AGENTS.md (305 записей,
+ *  медиана 14,8 КиБ). Признаков два — зачин И маркер её тела, потому что зачина мало: «# AGENTS.md
+ *  instructions — почему не применяются?» человек пишет сам, и по одному зачину его вопрос исчез
+ *  бы из ленты молча. Маркер тела замером 14.09.2026 есть у всех свалок до одной: `>>> APPROVAL
+ *  REQUEST` у 9455 историй из 9455, `<INSTRUCTIONS>` у 305 дампов из 305. Порог по объёму на эту
+ *  роль не годится: свалки начинаются с 281 Б, и при пороге 4 КиБ в ленту уехали бы 3444 из них. */
+const ENV_DUMPS: Array<[RegExp, RegExp]> = [
+  [/^The following is the Codex agent history\b/, />>> APPROVAL REQUEST/],
+  [/^#\s*AGENTS\.md instructions\b/, /<INSTRUCTIONS>/],
+];
+
+/** Слова человека в записи, которую среда подписала его ролью: вставки снимаются, остаётся
+ *  написанное им самим. Пусто — записи в ленте нет вовсе: назвать `human` то, чего человек не
+ *  писал, значит соврать про говорящего. Вставка вперемешку со словами оставляет слова —
+ *  на живых данных владельца таких записей сегодня ни одной, но правило держит границу там,
+ *  где она проходит, а не там, где кончился сегодняшний замер. По той же причине свалка
+ *  выбрасывает запись целиком только тогда, когда запись из неё и состоит: разделить свалку и
+ *  слова нечем — закрывающего тега у неё нет, — поэтому она опознаётся не зачином, а телом. */
+function humanWords(text: string): string {
+  const rest = text.replace(ENV_TAG_RE, '').replace(ENV_MARK_RE, '').trim();
+  return ENV_DUMPS.some(([head, body]) => head.test(rest) && body.test(rest)) ? '' : rest;
+}
+
 function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
   const type = rec.type;
   if (type !== 'user' && type !== 'assistant') return [];
   const base: Base = { id: str(rec.uuid) || String(offset), at: stamp(rec.timestamp) };
   // Имя ветки — только `agentName`: `agentId` из соседнего поля читается человеком как
-  // мусор, а поле ветки показывают ему. Имени нет — запись едет без ветки.
+  // мусор, а поле ветки показывают ему. Имени нет — запись едет без ветки. Замер 14.09.2026:
+  // сегодня ветка не заполняется никогда — в 78 корневых беседах владельца нет ни одной записи
+  // с `isSidechain` (0 из 83 175), а `agentName` не встретился ни разу нигде. Беседы подагентов
+  // лежат отдельными файлами `subagents/agent-*.jsonl` (1754 файла, 122 683 записи бокового
+  // потока), которых лента не читает: `resolve` отдаёт ей файл беседы панели.
   if (rec.isSidechain === true && str(rec.agentName)) base.branch = str(rec.agentName);
   const message = rec.message as Record<string, unknown> | undefined;
   if (type === 'user') {
@@ -448,7 +520,8 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     const text = claudeText(message?.content);
     if (rec.isCompactSummary === true) return [note(base, 'compacted', text)];
     if (str(rec.interruptedMessageId)) return [note(base, 'interrupted', text)];
-    return text ? [make(base, 0, 'human', text)] : [];
+    const words = humanWords(text);
+    return words ? [make(base, 0, 'human', words)] : [];
   }
   if (rec.isApiErrorMessage === true) return [note(base, 'error', claudeText(message?.content))];
   const content = message?.content;
@@ -483,15 +556,22 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     // `developer` — это инструкции окружения, а не реплика человека.
     const kind = payload.role === 'user' ? 'human' : payload.role === 'assistant' ? 'agent' : null;
     if (!kind) return [];
-    const text = codexText(payload.content);
+    const text = kind === 'human' ? humanWords(codexText(payload.content)) : codexText(payload.content);
     return text ? [make(base, 0, kind, text)] : [];
   }
-  if (payload.type === 'reasoning') return [make(base, 0, 'thinking', codexSummary(payload))];
+  if (payload.type === 'reasoning') {
+    // Пустое мышление в ленту не едет вовсе: на живых данных владельца 14.09.2026 непустого
+    // пересказа нет ни у одной из 53 265 записей `reasoning` в 328 файлах, а сами они — треть
+    // страницы Codex (32,8 % из 162 200 записей ленты). Пустая строка «агент думал» — не
+    // событие беседы, а её разбавление.
+    const summary = codexSummary(payload);
+    return summary ? [make(base, 0, 'thinking', summary)] : [];
+  }
   if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
     const name = str(payload.name);
     if (!name) return [];
     const args = payload.type === 'function_call' ? payload.arguments : payload.input;
-    return [tool(base, 0, name, argOf(args))];
+    return [tool(base, 0, name, codexArg(args))];
   }
   return [];
 }
@@ -528,8 +608,13 @@ export function weigh(entry: FeedEntry): number {
   return Buffer.byteLength(entry.text) + Buffer.byteLength(entry.id) + Buffer.byteLength(entry.tool ?? '') + 80;
 }
 
+/** Веха беседы. Подробность из источника проходит тот же фильтр, что и реплика человека:
+ *  строка, объявленная шумом в записи человека, не становится содержимым оттого, что приехала
+ *  вехой, и поле `note` не повторяется словами. Прерыванию после этого остаётся пустой текст —
+ *  замер 14.09.2026: у всех 20 вех прерывания владельца текст состоял только из маркера
+ *  `[Request interrupted by user]`, своей подробности не было ни у одной. */
 function note(base: Base, what: NonNullable<FeedEntry['note']>, text: string): FeedEntry {
-  const entry = make(base, 0, 'note', text);
+  const entry = make(base, 0, 'note', humanWords(text));
   entry.note = what;
   return entry;
 }
@@ -568,6 +653,39 @@ function argOf(input: unknown): string {
     if (value.trim()) return cut(value);
   }
   return '';
+}
+
+/** Команда внутри скрипта песочницы: `tools.exec_command({cmd:"…"})`; ключ бывает и в
+ *  кавычках (`{"cmd":"…"}`), а вызовов в одном скрипте бывает несколько — их до восьми. */
+const SCRIPT_CMD_RE = /["'`]?\bcmd["'`]?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g;
+/** Заголовок патча в том же скрипте: сам патч — содержимое, делом его делает путь файла. */
+const SCRIPT_PATCH_RE = /\*\*\* (?:Add|Update|Delete) File: *([^\n\\]+)/g;
+
+/** Подпись вызова у Codex. Аргумент приезжает либо объектом JSON (его разбирает `argOf`), либо
+ *  скриптом песочницы: `const r = await tools.exec_command({cmd:"git commit …"})`. Первая
+ *  строка такого скрипта — обёртка, а не дело, поэтому команда достаётся признаками по замеру
+ *  14.09.2026 на 32 929 вызовах `exec` владельца: `cmd` находится у 23 468 (71,3 %), заголовок
+ *  патча — ещё у 4 345 (13,2 %). Остальные 5 116 (15,5 %) — ввод в идущую сессию
+ *  (`write_stdin`), поиск в сети и массив команд без ключа `cmd`: там первая строка скрипта и
+ *  есть всё, что о вызове известно. */
+function codexArg(input: unknown): string {
+  if (typeof input !== 'string' || input.trim().startsWith('{')) return argOf(input);
+  const commands: string[] = [];
+  let found: RegExpExecArray | null;
+  SCRIPT_CMD_RE.lastIndex = 0;
+  while ((found = SCRIPT_CMD_RE.exec(input)) !== null) commands.push(unquote(found[1]));
+  if (commands.length) return cut(commands.join(' ; '));
+  const files: string[] = [];
+  SCRIPT_PATCH_RE.lastIndex = 0;
+  while ((found = SCRIPT_PATCH_RE.exec(input)) !== null) files.push(found[1].trim());
+  if (files.length) return cut(`apply_patch ${files.join(' ')}`);
+  return argOf(input);
+}
+
+/** Строковая постоянная скрипта в обычный текст: перевод строки и табуляция — пробелом (подпись
+ *  однострочна), прочая экранировка снимается как есть. */
+function unquote(literal: string): string {
+  return literal.slice(1, -1).replace(/\\(.)/g, (_whole, ch: string) => ('nrt'.includes(ch) ? ' ' : ch));
 }
 
 function cut(value: string): string {
@@ -613,9 +731,10 @@ function codexText(content: unknown): string {
   return parts.join('\n').trim();
 }
 
-/** Мышление Codex: пересказ в `summary`. На живых данных он почти всегда пуст —
- *  содержательная часть лежит зашифрованной в `encrypted_content`, и запись уезжает в
- *  ленту с пустым текстом: «агент думал» — это тоже событие беседы. */
+/** Мышление Codex: пересказ в `summary`. На живых данных владельца он пуст всегда — непустого
+ *  не встретилось ни разу (0 из 53 265 записей `reasoning` в 328 файлах, замер 14.09.2026):
+ *  содержательная часть лежит зашифрованной в `encrypted_content`. Разбор оставлен на случай,
+ *  когда пересказ включат, а пустую запись отбрасывает вызывающий. */
 function codexSummary(payload: Record<string, unknown>): string {
   const summary = payload.summary;
   if (!Array.isArray(summary)) return codexText(payload.content);
