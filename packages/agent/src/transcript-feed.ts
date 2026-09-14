@@ -38,6 +38,13 @@ export interface FeedEntry {
   tool?: string;
   /** Что за веха — только у `kind: 'note'`. Код, а не фраза: слова подбирает экран. */
   note?: 'compacted' | 'interrupted' | 'error' | 'chain';
+  /** Место записи в файле — курсор той же формы `<inode>:<offset>`, что принимают `before`,
+   *  `after` и `around`. Им экран прыгает к найденной записи (история 9.1): поиск держит в
+   *  руках запись, а не курсор, и без этого поля адресовать её место нечем. У всех записей
+   *  одной строки курсор общий — строка и есть единица чтения, окрестность у них одна.
+   *  Ставит его страница: признак файла знает только она, поэтому `parseLine`, разбирающий
+   *  строку в отрыве от файла, курсора не ставит. */
+  cursor?: string;
   /** Ветка подагента — только у Claude (`isSidechain`); на живых данных не заполняется, см.
    *  замер в `fromClaude`. */
   branch?: string;
@@ -380,6 +387,11 @@ function assemble(
     if (row.entries.length === 0) continue;
     if (head < 0) head = row.start;
     tail = row.end;
+    // Курсор записи ставится здесь и только здесь: до страницы ни признака файла, ни
+    // смещения строки у разбора нет. Строка — единица чтения, поэтому у всех её записей
+    // он один: `around` по нему вернёт их все, включая ту, от которой прыгнули.
+    const cursor = `${ino}:${row.start}`;
+    for (const entry of row.entries) entry.cursor = cursor;
     entries.push(...row.entries);
   }
   fillTimes(entries);
@@ -603,9 +615,16 @@ function clip(text: string): { text: string; truncated: boolean } {
 
 /** Вес записи в ответе: текст плюс ключи и служебные поля вокруг него. Оценка, а не
  *  точный размер JSON — она сторожит потолок ответа, и считать её точно значило бы
- *  сериализовать каждую запись дважды. */
+ *  сериализовать каждую запись дважды. Постоянная считана по полям: `id`, `at`, `kind`,
+ *  `text` с кавычками и запятыми — около 80 байт, курсор со своим ключом — ещё около 40.
+ *  Считается до того, как страница проставит курсор, поэтому он и входит постоянной.
+ *  Постоянную держит тест «на множестве коротких записей счёт страницы решает накладной
+ *  вес записи»: на странице из тысячи коротких записей она и решает, сколько их войдёт в
+ *  потолок ответа, — подмена 120 на 80 даёт 966 записей вместо 932. Новое поле формы
+ *  кладётся в неё же, иначе страница дешевеет молча — и здесь, и в бюджете склейки
+ *  цепочки, который меряет этой же функцией `session-feed`. */
 export function weigh(entry: FeedEntry): number {
-  return Buffer.byteLength(entry.text) + Buffer.byteLength(entry.id) + Buffer.byteLength(entry.tool ?? '') + 80;
+  return Buffer.byteLength(entry.text) + Buffer.byteLength(entry.id) + Buffer.byteLength(entry.tool ?? '') + 120;
 }
 
 /** Веха беседы. Подробность из источника проходит тот же фильтр, что и реплика человека:
@@ -627,8 +646,43 @@ function tool(base: Base, index: number, name: string, arg: string): FeedEntry {
 
 /** Первый аргумент, который человек узнаёт: путь файла, команда, образец поиска, адрес,
  *  задание подагенту. Ничего из перечисленного нет — остаётся одно имя инструмента.
- *  `cmd` — та же «команда»: так её называет `exec_command` Codex на живых данных. */
-const ARG_KEYS = ['file_path', 'path', 'notebook_path', 'command', 'cmd', 'pattern', 'url', 'description'];
+ *  `cmd` — та же «команда»: так её называет `exec_command` Codex на живых данных.
+ *
+ *  Порядок — это правило разрешения спора, а не список: подпись берёт первый ключ, который
+ *  в записи нашёлся. Поэтому ключи разговора (`summary`, `target`, `task_name`) стоят раньше
+ *  `message`: у `send_message`, `followup_task` и `spawn_agent` тело письма на живых данных
+ *  зашифровано (`gAAAAAB…`), и подписью может быть только адресат. По той же причине новые
+ *  ключи дописаны в конец: до них очередь доходит ровно тогда, когда прежние не нашлись,
+ *  и ни одна уже работающая подпись от их появления не меняется.
+ *
+ *  Замер 14.09.2026 на 65 773 вызовах владельца: без аргумента ехали 6 533 подписи (9,93 %),
+ *  хотя аргумент лежал в записи — `send_message` 1 407 (`target`), `SendMessage` 569
+ *  (`summary`), `followup_task` 344 (`target`), `AskUserQuestion` 243 (`questions[].question`),
+ *  `ToolSearch` 179 и `WebSearch` 139 (`query`), `Skill` 144 (`skill`), `spawn_agent` 124
+ *  (`task_name`), `mcp__claude-in-chrome__computer` 22 (`action`), `PushNotification` 17
+ *  (`message`), `interrupt_agent` 16 (`target`), `request_user_input_async` 11
+ *  (`questions[].title`), `CronCreate` 1 (`prompt`). */
+const ARG_KEYS = [
+  'file_path',
+  'path',
+  'notebook_path',
+  'command',
+  'cmd',
+  'pattern',
+  'url',
+  'description',
+  'query',
+  'skill',
+  'summary',
+  'target',
+  'task_name',
+  'questions',
+  'question',
+  'title',
+  'prompt',
+  'message',
+  'action',
+];
 
 function argOf(input: unknown): string {
   if (typeof input === 'string') {
@@ -646,11 +700,32 @@ function argOf(input: unknown): string {
   if (input === null || typeof input !== 'object') return '';
   const obj = input as Record<string, unknown>;
   for (const key of ARG_KEYS) {
-    // Массивом приходит команда оболочки Codex (`command: ["bash","-lc","…"]`): для
-    // подписи это та же одна строка, склеенная пробелами.
-    const raw = obj[key];
-    const value = Array.isArray(raw) ? raw.filter((x) => typeof x === 'string').join(' ') : str(raw);
+    const value = argValue(obj[key]);
     if (value.trim()) return cut(value);
+  }
+  // Одно имя инструмента — это решение, а не недосмотр разбора. Замер 14.09.2026 после
+  // правки: без аргумента остаются 3 314 вызовов из 65 776 (5,04 % против прежних 9,93 %),
+  // и 3 019 из них — `wait_agent` (1 532), `wait` (957), `list_agents` (275) и `sleep` (255):
+  // подписать нечем, в записи у них только число миллисекунд, чужой номер ячейки или пустой
+  // объект. Остальные молчат намеренно: `TaskUpdate`/`TaskStop`/`TaskOutput` несут
+  // непрозрачный идентификатор задачи, `browser_batch` — список вложенных вызовов, `Workflow`
+  // и `evaluate_script` — тело кода на сотни строк. Идентификатор и простыня кода — не
+  // подпись; поставить их сюда значило бы поменять молчание на шум.
+  return '';
+}
+
+/** Значение ключа подписи в строку. Массивом приходит и команда оболочки Codex
+ *  (`command: ["bash","-lc","…"]` — для подписи это та же одна строка, склеенная пробелами),
+ *  и список вопросов (`questions: [{question}]` у `AskUserQuestion`, `[{title}]` у
+ *  `request_user_input_async`): там слова лежат на элемент глубже, и достаёт их тот же
+ *  перебор ключей. Берётся первый вопрос, а не все: подпись — строка, а не список. */
+function argValue(raw: unknown): string {
+  if (!Array.isArray(raw)) return str(raw);
+  const words = raw.filter((x) => typeof x === 'string') as string[];
+  if (words.length) return words.join(' ');
+  for (const item of raw) {
+    const inner = argOf(item);
+    if (inner) return inner;
   }
   return '';
 }

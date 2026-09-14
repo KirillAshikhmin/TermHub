@@ -32,6 +32,15 @@ const page = (r: unknown): FeedPage => {
   return r as FeedPage;
 };
 
+/** Ожидаемый курсор записи: `<inode>:<смещение строки>`, где строку ищет по её приметe сам
+ *  тест — по байтам файла на диске, а не тем же обходом окна, каким его считает лента. */
+const cursorOf = (file: string, needle: string): string => {
+  const body = fs.readFileSync(file);
+  const found = body.indexOf(Buffer.from(needle));
+  expect(found).toBeGreaterThanOrEqual(0);
+  return `${fs.statSync(file).ino}:${body.lastIndexOf(10, found) + 1}`;
+};
+
 // --- формы Claude ---
 const cHuman = (uuid: string, text: string, at: string): unknown => ({
   parentUuid: null,
@@ -132,7 +141,13 @@ describe('parseLine: Claude', () => {
     ]);
     const p = page(await readFeed(f, 'claude'));
     expect(p.entries).toEqual([
-      { id: 'u2', at: Date.parse('2026-09-14T10:00:05.000Z'), kind: 'human', text: 'вопрос' },
+      {
+        id: 'u2',
+        at: Date.parse('2026-09-14T10:00:05.000Z'),
+        kind: 'human',
+        text: 'вопрос',
+        cursor: cursorOf(f, '"u2"'),
+      },
     ]);
     expect(p.skipped).toBe(0);
   });
@@ -240,7 +255,13 @@ describe('parseLine: Codex', () => {
     ]);
     const p = page(await readFeed(f, 'codex'));
     expect(p.entries.map((e) => e.kind)).toEqual(['human', 'thinking', 'tool', 'agent']);
-    expect(p.entries[0]).toEqual({ id: 'msg_u', at: Date.parse('2026-09-14T11:00:02.000Z'), kind: 'human', text: 'собери плагин' });
+    expect(p.entries[0]).toEqual({
+      id: 'msg_u',
+      at: Date.parse('2026-09-14T11:00:02.000Z'),
+      kind: 'human',
+      text: 'собери плагин',
+      cursor: cursorOf(f, '"msg_u"'),
+    });
     expect(p.entries[1].text).toBe('план такой');
     expect(p.entries[2]).toMatchObject({ tool: 'exec_command', text: 'exec_command npm test' });
     expect(p.entries[3].id).toBe('msg_a');
@@ -438,6 +459,18 @@ describe('readFeed: курсоры и подкачка', () => {
     expect(round.entries.map((e) => e.text)).toEqual(['e7']);
   });
 
+  it('к записи со страницы прыгают её собственным курсором', async () => {
+    // Шов «нашёл поиском — показал окрестность» (история 9.1): экран держит в руках
+    // запись, а не курсор, поэтому место записи называет сама запись.
+    const f = many('cursor-jump.jsonl', 9);
+    const whole = page(await readFeed(f, 'claude', { limit: 9 }));
+    const mid = whole.entries[4];
+    expect(mid.text).toBe('e5');
+    const round = page(await readFeed(f, 'claude', { limit: 4, around: mid.cursor as string }));
+    expect(round.entries.map((e) => e.text)).toEqual(['e3', 'e4', 'e5', 'e6']);
+    expect(round.entries.map((e) => e.id)).toContain(mid.id);
+  });
+
   it('курсор от другого файла — отказ cursor-stale, а не чужая беседа', async () => {
     const f = many('cursor-stale.jsonl', 3);
     const st = fs.statSync(f);
@@ -573,6 +606,35 @@ describe('readFeed: пределы', () => {
     const prev = page(await readFeed(f, 'claude', { limit: 1, before: p.head }));
     const firstShown = Number(p.entries[0].text.slice(1, p.entries[0].text.indexOf(' ')));
     expect(prev.entries[0].text.startsWith(`e${firstShown - 1} `)).toBe(true);
+  });
+
+  it('на множестве коротких записей счёт страницы решает накладной вес записи', async () => {
+    // Потолок ответа считается весом записи, а не длиной её текста, и накладную часть этого
+    // веса задаёт постоянная в `weigh`. Той же постоянной меряет бюджет склейки цепочки
+    // `session-feed`, поэтому она обязана краснеть при подмене, а не держаться комментарием.
+    //
+    // Счёт взят арифметикой, а не тем же кодом: вес записи — 1000 байт текста + 5 байт
+    // идентификатора + 120 служебных = 1125 Б; 1 МиБ / 1125 = 932 записи (1125 × 932 =
+    // 1 048 500 ≤ 1 048 576, следующая уже не влезает). Постоянная тут решает всё: при 80
+    // вместо 120 вес станет 1085 Б и в тот же потолок войдут 966 записей.
+    const text = 'y'.repeat(1000);
+    const lines = Array.from({ length: 1200 }, (_, i) =>
+      cHuman(`u${String(i + 1).padStart(4, '0')}`, text, '2026-09-14T14:02:30.000Z'),
+    );
+    const f = put('limit-bytes-short.jsonl', lines);
+    const p = page(await readFeed(f, 'claude', { limit: 1000 }));
+    expect(p.entries.length).toBe(932);
+    // Хвост файла, а не его начало: страницу оборвал бюджет, и оборвал её слева.
+    expect(p.entries[0].id).toBe('u0269');
+    expect(p.entries[p.entries.length - 1].id).toBe('u1200');
+    expect(p.bof).toBe(false);
+    expect(p.eof).toBe(true);
+    // Лимит записей не связывал: до 1000 страница не дошла.
+    expect(p.entries.length).toBeLessThan(1000);
+    // И текстом бюджет не выбран — по тексту влезла бы и следующая запись. В потолок
+    // страницу упёрла именно накладная часть веса.
+    const textBytes = p.entries.reduce((n, e) => n + Buffer.byteLength(e.text), 0);
+    expect(textBytes + 1000).toBeLessThan(1024 * 1024);
   });
 });
 
@@ -766,6 +828,147 @@ describe('лента: свалка опознаётся по телу, а не �
       },
     ]);
     const p = page(await readFeed(f, 'claude'));
-    expect(p.entries).toEqual([{ id: 'i1', at: Date.parse('2026-09-14T13:07:00.000Z'), kind: 'note', note: 'interrupted', text: '' }]);
+    expect(p.entries).toEqual([
+      {
+        id: 'i1',
+        at: Date.parse('2026-09-14T13:07:00.000Z'),
+        kind: 'note',
+        note: 'interrupted',
+        text: '',
+        cursor: cursorOf(f, '"i1"'),
+      },
+    ]);
+  });
+});
+
+describe('лента: аргумент есть — подпись его называет', () => {
+  it('имя инструмента не остаётся одно, когда дело названо в его же аргументе', async () => {
+    const f = put('tool-args.jsonl', [
+      cAssistant(
+        'a1',
+        [
+          { type: 'tool_use', id: 't1', name: 'WebSearch', input: { query: 'setFormula locale separator' } },
+          {
+            type: 'tool_use',
+            id: 't2',
+            name: 'ToolSearch',
+            input: { query: 'select:TaskCreate,TaskUpdate', max_results: 5 },
+          },
+          {
+            type: 'tool_use',
+            id: 't3',
+            name: 'Skill',
+            input: { skill: 'superpowers:brainstorming', args: 'новый сценарий' },
+          },
+          {
+            type: 'tool_use',
+            id: 't4',
+            name: 'SendMessage',
+            input: {
+              to: 'abaacf82855d7d8d0',
+              summary: 'Продолжить таск 01 после обрыва',
+              message: 'Сессия оркестратора прервалась, пока ты выполнял таск 01 — продолжи…',
+            },
+          },
+        ],
+        '2026-09-14T15:00:00.000Z',
+      ),
+    ]);
+    const p = page(await readFeed(f, 'claude'));
+    expect(p.entries.map((e) => e.text)).toEqual([
+      'WebSearch setFormula locale separator',
+      'ToolSearch select:TaskCreate,TaskUpdate',
+      'Skill superpowers:brainstorming',
+      'SendMessage Продолжить таск 01 после обрыва',
+    ]);
+  });
+
+  it('называет адресата, а не шифрованное тело письма', async () => {
+    // На живых данных `message` у этих вызовов — шифрованный текст (`gAAAAAB…`), и в
+    // подписи ему делать нечего: дело называет тот, кому письмо, а не его содержимое.
+    const call = (ordinal: number, name: string, args: object): unknown => ({
+      timestamp: '2026-09-14T15:01:00.000Z',
+      ordinal,
+      type: 'response_item',
+      payload: { type: 'function_call', id: `fc_${ordinal}`, name, arguments: JSON.stringify(args), call_id: `c${ordinal}` },
+    });
+    const sealed = 'gAAAAABqkstWtu7Z0EH20CPxkNqln2msobq5u68J1zg75ko7p1cyOAY1Zr1RQx06G6zkG';
+    const f = put('tool-args-codex.jsonl', [
+      xMeta('2026-09-14T15:01:00.000Z'),
+      call(1, 'send_message', { target: '/root/ticket_02', message: sealed }),
+      call(2, 'followup_task', { target: 'coverage_check', message: sealed }),
+      call(3, 'spawn_agent', { task_name: 'ticket_01', fork_turns: 'none', message: sealed }),
+    ]);
+    const p = page(await readFeed(f, 'codex'));
+    expect(p.entries.map((e) => e.text)).toEqual([
+      'send_message /root/ticket_02',
+      'followup_task coverage_check',
+      'spawn_agent ticket_01',
+    ]);
+  });
+});
+
+describe('лента: вопрос к человеку в подписи', () => {
+  it('показывает сам вопрос, а он лежит на элемент глубже', async () => {
+    const f = put('tool-args-ask.jsonl', [
+      cAssistant(
+        'a2',
+        [
+          {
+            type: 'tool_use',
+            id: 't5',
+            name: 'AskUserQuestion',
+            input: {
+              questions: [
+                {
+                  question: 'Запускать ли ./publish сейчас?',
+                  header: 'Публикация',
+                  multiSelect: false,
+                  options: [
+                    { label: 'Опубликовать', description: 'Генерирую JSON и архив' },
+                    { label: 'Не публиковать', description: 'Оставляю только исходник' },
+                  ],
+                },
+              ],
+            },
+          },
+          {
+            type: 'tool_use',
+            id: 't6',
+            name: 'request_user_input_async',
+            input: { questions: [{ title: 'Пришлите ответ запроса wireless_sensors', options: ['Да', 'Нет'] }] },
+          },
+        ],
+        '2026-09-14T15:02:00.000Z',
+      ),
+    ]);
+    const p = page(await readFeed(f, 'claude'));
+    expect(p.entries.map((e) => e.text)).toEqual([
+      'AskUserQuestion Запускать ли ./publish сейчас?',
+      'request_user_input_async Пришлите ответ запроса wireless_sensors',
+    ]);
+  });
+});
+
+describe('лента: показывать нечего — остаётся одно имя', () => {
+  // Стражник решения, а не новое поведение: эти вызовы и сегодня едут одним именем. Красным
+  // он станет от беспечного запасного правила «взять первую строку записи» — у `wait` строкой
+  // лежит `cell_id`, и в ленте вместо ожидания появилось бы «wait 9».
+  it('ожидание не подписывается ни миллисекундами, ни номером ячейки', async () => {
+    const f = put('tool-args-silent.jsonl', [
+      cAssistant(
+        'a3',
+        [
+          { type: 'tool_use', id: 't7', name: 'sleep', input: { duration_ms: 30000 } },
+          { type: 'tool_use', id: 't8', name: 'wait', input: { cell_id: '9', yield_time_ms: 10000, max_tokens: 50000 } },
+          { type: 'tool_use', id: 't9', name: 'wait_agent', input: { timeout_ms: 120000 } },
+          { type: 'tool_use', id: 't10', name: 'list_agents', input: {} },
+        ],
+        '2026-09-14T15:03:00.000Z',
+      ),
+    ]);
+    const p = page(await readFeed(f, 'claude'));
+    expect(p.entries.map((e) => e.text)).toEqual(['sleep', 'wait', 'wait_agent', 'list_agents']);
+    expect(p.entries.map((e) => e.kind)).toEqual(['tool', 'tool', 'tool', 'tool']);
   });
 });
