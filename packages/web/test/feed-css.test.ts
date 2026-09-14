@@ -69,3 +69,36 @@ describe('отметка записи, к которой перенесли ле
     expect(hitBg).not.toBe(plainBg);
   });
 });
+
+describe('разметка ответа агента', () => {
+  it('перевод строки внутри абзаца сохраняется, хотя у самой разметки его нет', () => {
+    // Запись держит pre-wrap ради сырого текста; у нарисованной разметки он снят,
+    // иначе отступы markdown превратились бы в пустоты. Абзацу он возвращается.
+    const text = el('div', 'th-feed__text th-feed__md');
+    const p = document.createElement('p');
+    text.append(p);
+    document.body.append(text);
+
+    expect(getComputedStyle(text).whiteSpace).toBe('normal');
+    expect(getComputedStyle(p).whiteSpace).toBe('pre-wrap');
+  });
+
+  it('блок кода прокручивается сам и не переносит строку', () => {
+    const pre = el('pre', 'th-md__pre');
+    const code = el('code', 'th-md__code');
+    pre.append(code);
+    document.body.append(pre);
+
+    expect(getComputedStyle(pre).overflowX).toBe('auto');
+    expect(getComputedStyle(code).whiteSpace).toBe('pre');
+  });
+
+  it('широкая таблица едет в своей обёртке, а не растягивает ленту', () => {
+    const wrap = el('div', 'th-md__tablewrap');
+    document.body.append(wrap);
+
+    const style = getComputedStyle(wrap);
+    expect(style.overflowX).toBe('auto');
+    expect(style.maxWidth).toBe('100%');
+  });
+});

@@ -63,3 +63,9 @@ export function noteTerminalMode(mode: TerminalMode): void {
 export function terminalModeName(mode: TerminalMode): string {
   return mode === 'control' ? t('term.modeControl') : t('term.modeAttach');
 }
+
+/** Однобуквенный вид режима для чипа в шапке: место в шапке дорогое, а слово
+ *  целиком остаётся в подсказке кнопки. */
+export function terminalModeLetter(mode: TerminalMode): string {
+  return mode === 'control' ? t('term.modeShortControl') : t('term.modeShortAttach');
+}

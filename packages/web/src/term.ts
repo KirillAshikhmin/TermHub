@@ -25,6 +25,7 @@ import {
   noteTerminalMode,
   otherTerminalMode,
   setTerminalModeRequest,
+  terminalModeLetter,
   terminalModeName,
   terminalModeRequest,
 } from './term-mode';
@@ -220,22 +221,12 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   let requestedMode: TerminalMode = openedMode;
   let activeMode: TerminalMode | undefined;
 
-  const altBadge = document.createElement('button');
-  altBadge.type = 'button';
-  altBadge.className = 'th-termbar__alt';
-  altBadge.hidden = true;
-  altBadge.textContent = t('term.altScreen');
-  altBadge.title = t('term.altScreenHint');
-  altBadge.setAttribute('aria-label', `${t('term.altScreen')}: ${t('term.altScreenHint')}`);
-  // На телефоне подсказки по наведению нет, а объяснение — половина смысла пометки:
-  // по нажатию говорим, почему история в этом приложении не листается.
-  altBadge.addEventListener('click', () => toast(t('term.altScreenHint')));
-
   const modeBtn = document.createElement('button');
   modeBtn.type = 'button';
   modeBtn.className = 'th-termbar__mode';
   const syncMode = (): void => {
-    modeBtn.textContent = activeMode ? terminalModeName(activeMode) : '—';
+    // Видно букву, слово целиком — в подсказке: шапка узкая, а режимов всего два.
+    modeBtn.textContent = activeMode ? terminalModeLetter(activeMode) : '—';
     // Просьбу переключили после открытия — она уедет только в следующий терминал.
     // Совпала с работающим режимом (агент уже подключил так) — обещать нечего.
     const awaitsOpen = requestedMode !== openedMode && requestedMode !== activeMode;
@@ -275,7 +266,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
   dot.setAttribute('role', 'status');
-  bar.append(tabs.el, altBadge, modeBtn, dot);
+  bar.append(tabs.el, modeBtn, dot);
   screen.append(bar);
 
   // Баннер переподключения (скрыт, пока соединение живо).
@@ -300,7 +291,8 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
    *  библиотеки над ним обещает прокрутку, которой не существует. Прячем его вместе с
    *  зажжённой пометкой — одним переключателем, чтобы они не разъехались. */
   function setAltScreen(on: boolean): void {
-    altBadge.hidden = !on;
+    // Видимой пометки у этого состояния больше нет — историю беседы показывает
+    // лента. Признак остаётся ради ползунка: листать в альтернативном экране нечего.
     host.classList.toggle('is-alt', on);
   }
   body.append(host);

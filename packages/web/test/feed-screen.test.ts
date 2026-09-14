@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { forgetCaps } from '../src/capabilities';
-import { mountFeed } from '../src/feed';
+import { mountFeed, searchFeed } from '../src/feed';
 import { setLang, t } from '../src/i18n';
 import type { FeedEntry, FeedOptions, FeedPage, FeedResult, Transport } from '../src/transport';
 
@@ -528,5 +528,92 @@ describe('оба края сразу', () => {
     feed.teardown();
 
     expect(await feed.loadOlder()).toBeNull();
+  });
+});
+
+// ── Разметка и кнопка «вниз» ─────────────────────────────────────────
+
+const MD: FeedEntry = {
+  id: 'm1',
+  at: 1_700_000_004_000,
+  kind: 'agent',
+  text: '## Готово\n\n- раз\n- два',
+  cursor: '7:80',
+};
+
+describe('ответ агента в ленте нарисован, а не показан markdown-ом', () => {
+  it('заголовок и список — узлами, решётки и дефисы не видны', async () => {
+    const { transport } = feedTransport(() => page({ entries: [MD] }));
+    mountFeed(host, 'work', transport);
+    await flush();
+
+    const box = entries('agent')[0]!;
+    expect(box.querySelector('h2')?.textContent).toBe('Готово');
+    expect(box.querySelectorAll('li')).toHaveLength(2);
+    expect(box.textContent).not.toContain('##');
+  });
+
+  it('тег из ответа агента остаётся видимой строкой, а не элементом', async () => {
+    const dirty: FeedEntry = { id: 'x', at: 1, kind: 'agent', text: 'верну <img onerror=alert(1)> как есть' };
+    const { transport } = feedTransport(() => page({ entries: [dirty] }));
+    mountFeed(host, 'work', transport);
+    await flush();
+
+    const box = entries('agent')[0]!;
+    expect(box.querySelector('img')).toBeNull();
+    expect(box.textContent).toContain('<img onerror=alert(1)>');
+  });
+
+  it('реплику человека оставляет как набрали — её markdown-ом не считаем', async () => {
+    const asked: FeedEntry = { id: 'h', at: 1, kind: 'human', text: '## это просто решётки' };
+    const { transport } = feedTransport(() => page({ entries: [asked] }));
+    mountFeed(host, 'work', transport);
+    await flush();
+
+    const box = entries('human')[0]!;
+    expect(box.querySelector('h2')).toBeNull();
+    expect(box.textContent).toContain('## это просто решётки');
+  });
+
+  it('поиск и прыжок работают по исходному тексту, а не по нарисованному', async () => {
+    const { transport } = feedTransport(() => page({ entries: [MD] }));
+    const feed = mountFeed(host, 'work', transport);
+    await flush();
+
+    // Ищется то, что написал агент: «## Готово» на экране решёток не показывает,
+    // но находкой остаётся — иначе разметка сломала бы поиск по беседе.
+    expect(searchFeed(feed.entries(), '## Готово')).toHaveLength(1);
+    // Точка прыжка по-прежнему на самой записи, а не потерялась внутри разметки.
+    expect(entries('agent')[0]!.dataset.cursor).toBe('7:80');
+  });
+});
+
+describe('кнопка «вниз»', () => {
+  const fab = (): HTMLButtonElement => host.querySelector('.th-feed__fab') as HTMLButtonElement;
+
+  it('у конца беседы её нет — последнюю запись закрывать нечем', async () => {
+    const { transport } = feedTransport(() => page({ entries: [HUMAN, AGENT] }));
+    mountFeed(host, 'work', transport);
+    await flush();
+
+    expect(fab().hidden).toBe(true);
+  });
+
+  it('появляется, когда ушли листать историю, и возвращает к последней записи', async () => {
+    const { transport } = feedTransport(() => page({ entries: [HUMAN, AGENT] }));
+    mountFeed(host, 'work', transport);
+    await flush();
+
+    const l = list();
+    Object.defineProperty(l, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(l, 'clientHeight', { value: 200, configurable: true });
+    l.scrollTop = 300;
+    l.dispatchEvent(new Event('scroll'));
+    expect(fab().hidden).toBe(false);
+
+    fab().click();
+
+    expect(l.scrollTop).toBe(1000);
+    expect(fab().hidden).toBe(true);
   });
 });

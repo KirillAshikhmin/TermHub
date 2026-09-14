@@ -17,10 +17,11 @@
 import { openCreateModal } from './dashboard';
 import { formatDate } from './format';
 import { t } from './i18n';
+import { renderMarkdown } from './markdown';
 import { sfeedHash } from './routes';
 import { mountSessionBar } from './tabs';
 import type { FeedEntry, FeedOptions, FeedPage, FeedResult, Transport } from './transport';
-import { errorScreen, renderHoloBar, wireToolbar } from './ui';
+import { errorScreen, renderHoloBar, svgIcon, wireToolbar } from './ui';
 
 /** Размер страницы: хвост открывается быстро, листание тянет такими же кусками. */
 const LIMIT = 100;
@@ -189,7 +190,17 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   skippedEl.className = 'th-feed__skipped';
   skippedEl.hidden = true;
   listEl.append(edgeEl, itemsEl, tailEl, noticeEl, skippedEl);
-  main.append(head, searchSlot, listEl);
+
+  // Кнопка «вниз»: уйдя листать историю, вернуться к концу беседы больше нечем.
+  // У конца её нет — там она только закрывала бы последнюю запись.
+  const fab = document.createElement('button');
+  fab.type = 'button';
+  fab.className = 'th-fab th-feed__fab';
+  fab.setAttribute('aria-label', t('feed.toBottom'));
+  fab.title = t('feed.toBottom');
+  fab.append(svgIcon('down'));
+  fab.hidden = true;
+  main.append(head, searchSlot, listEl, fab);
   host.append(sbar.el, toolbar, main);
   hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main }).hide;
 
@@ -214,9 +225,14 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   let highlightTimer = 0;
 
   const nearBottom = (): boolean => listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight <= NEAR_BOTTOM;
+  const paintFab = (): void => {
+    fab.hidden = nearBottom();
+  };
   const toBottom = (): void => {
     listEl.scrollTop = listEl.scrollHeight;
+    paintFab();
   };
+  fab.addEventListener('click', toBottom);
 
   const showNotice = (text: string): void => {
     noticeEl.hidden = false;
@@ -319,7 +335,14 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     }
     const text = document.createElement('div');
     text.className = 'th-feed__text';
-    text.textContent = entry.text;
+    // Ответ агента приезжает markdown-ом и в терминале нарисован — в ленте он
+    // рисуется тем же набором: заголовки, списки, таблицы, код. Реплику человека
+    // рисовать нечем — её набрали руками, и в терминале она тоже как набрана.
+    if (entry.kind === 'human') text.textContent = entry.text;
+    else {
+      text.classList.add('th-feed__md');
+      text.append(renderMarkdown(entry.text));
+    }
     box.append(meta, text);
     if (entry.truncated) {
       const cut = document.createElement('div');
@@ -406,6 +429,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     }
     paintHeader();
     paintEdge();
+    paintFab();
     return fresh.length;
   };
 
@@ -732,6 +756,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
 
   // ── Листание вверх ───────────────────────────────────────────────────
   listEl.addEventListener('scroll', () => {
+    paintFab();
     if (listEl.scrollTop <= NEAR_TOP) void loadOlder();
     // Хвоста беседы в окне нет (`eof` ложь — так бывает после прыжка к находке):
     // у нижнего края дочитываем вперёд, как у верхнего дочитываем назад. Края не
@@ -756,6 +781,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
 
   paintHeader();
   paintEdge();
+  paintFab();
   void enqueue(tailJob);
 
   return {

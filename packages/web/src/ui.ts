@@ -35,6 +35,7 @@ const ICONS: Record<string, string> = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  feed: '<path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3.5 21l1.9-5.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 13h4.5"/>',
 };
 
 /** Инлайн-иконка (stroke = currentColor). */
@@ -417,16 +418,20 @@ export function renderHoloBar(opts: {
   bar.className = 'th-holobar';
   bar.setAttribute('role', 'tablist');
   const enc = encodeURIComponent(opts.session);
-  const mkTab = (key: 'term' | 'files' | 'repo' | 'gradle' | 'feed', label: string, hash: string): HTMLElement => {
+  const mkTab = (key: 'term' | 'files' | 'repo' | 'gradle', label: string, hash: string): HTMLElement => {
     const a = document.createElement('a');
-    a.className = `th-holotab${opts.active === key ? ' is-active' : ''}`;
+    a.className = `th-holotab th-holotab--${key}${opts.active === key ? ' is-active' : ''}`;
     a.href = hash;
-    a.textContent = label;
+    const caption = document.createElement('span');
+    caption.className = 'th-holotab__label';
+    caption.textContent = label;
+    a.append(caption);
     a.setAttribute('role', 'tab');
     a.setAttribute('aria-selected', String(opts.active === key));
     return a;
   };
-  bar.append(mkTab('term', t('holo.session'), termHash(opts.session)));
+  const termTab = mkTab('term', t('holo.session'), termHash(opts.session));
+  bar.append(termTab);
   const scope = opts.transport?.clientScope;
   if (!scope || scope.files) {
     bar.append(mkTab('files', t('nav.files'), `#/sfiles/${enc}`));
@@ -442,26 +447,39 @@ export function renderHoloBar(opts: {
   hide.addEventListener('click', opts.onHide);
   bar.append(hide);
   const transport = opts.transport;
-  // Последний таб — «Лента»; она есть, только если возможность `feed` объявили ОБЕ
-  // стороны (ADR 0018). Пересечение считается на подключении, но на первом показе
-  // после перезагрузки обмен может быть ещё в пути — тогда таб встаёт по его ответу.
-  // Файловой области лента не касается: гостю без файлов она видна (§8).
-  let tail: HTMLElement = hide; // якорь для табов, приезжающих позже
-  const addFeed = (): void => {
-    tail = mkTab('feed', t('holo.feed'), sfeedHash(opts.session));
-    bar.insertBefore(tail, hide);
-  };
+  // Лента — не пятая вкладка, а маленькая кнопка ВНУТРИ плашки «Терминал», справа
+  // от подписи: ряд остаётся из четырёх, а лента из него достижима. Её нет вовсе,
+  // если возможность `feed` объявили не обе стороны (ADR 0018); пересечение считается
+  // на подключении, но после перезагрузки обмен бывает ещё в пути — тогда кнопка
+  // встаёт по его ответу. Файловой области лента не касается: гостю без файлов она
+  // видна (§8). На экране ленты (`active: 'feed'`) не подсвечен ни один таб, и
+  // «Терминал» первым же и есть дорога назад.
   if (transport) {
     void whenCap('feed', transport).then((ok) => {
-      if (ok) addFeed();
+      if (!ok) return;
+      const feed = document.createElement('button');
+      feed.type = 'button';
+      feed.className = 'th-holotab__feed';
+      feed.setAttribute('aria-label', t('holo.feed'));
+      feed.title = t('holo.feed');
+      feed.append(svgIcon('feed'));
+      feed.addEventListener('click', (e) => {
+        // Кнопка живёт внутри ссылки на терминал: без этих двух строк клик по ней
+        // ушёл бы и в переход вкладки, и промахнуться мимо ленты стало бы легко.
+        e.preventDefault();
+        e.stopPropagation();
+        location.hash = sfeedHash(opts.session);
+      });
+      termTab.append(feed);
     });
   }
+  //
   // Таб Gradle — только у Gradle-проекта, и бар его не ждёт: остальные табы уже на
-  // экране, Gradle встаёт перед «Лентой», когда детект вернул проект (история 4).
+  // экране, Gradle встаёт последним, когда детект вернул проект (история 4).
   if (transport && (!scope || scope.files)) {
     void detectGradle(transport, opts.session).then(
       (project) => {
-        if (project) bar.insertBefore(mkTab('gradle', t('holo.gradle'), sgradleHash(opts.session)), tail);
+        if (project) bar.insertBefore(mkTab('gradle', t('holo.gradle'), sgradleHash(opts.session)), hide);
       },
       () => {
         // Не спросили — таба нет; следующий рендер бара спросит снова (кэш не занят).

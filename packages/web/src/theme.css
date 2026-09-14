@@ -1453,6 +1453,7 @@ main.th-files {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   height: 44px;
   padding: 0 4px;
   text-decoration: none;
@@ -1997,72 +1998,72 @@ main.th-gradle {
 
 /* Подсветка синтаксиса (highlight.js), GitHub-палитра. Тёмная по умолчанию,
    светлая — при data-theme='light'. */
-.th-fileview__text .hljs-comment,
-.th-fileview__text .hljs-quote {
+:is(.th-fileview__text, .th-feed__md) .hljs-comment,
+:is(.th-fileview__text, .th-feed__md) .hljs-quote {
   color: #8b949e;
   font-style: italic;
 }
-.th-fileview__text .hljs-keyword,
-.th-fileview__text .hljs-selector-tag,
-.th-fileview__text .hljs-literal,
-.th-fileview__text .hljs-type,
-.th-fileview__text .hljs-doctag {
+:is(.th-fileview__text, .th-feed__md) .hljs-keyword,
+:is(.th-fileview__text, .th-feed__md) .hljs-selector-tag,
+:is(.th-fileview__text, .th-feed__md) .hljs-literal,
+:is(.th-fileview__text, .th-feed__md) .hljs-type,
+:is(.th-fileview__text, .th-feed__md) .hljs-doctag {
   color: #ff7b72;
 }
-.th-fileview__text .hljs-string,
-.th-fileview__text .hljs-attr,
-.th-fileview__text .hljs-regexp {
+:is(.th-fileview__text, .th-feed__md) .hljs-string,
+:is(.th-fileview__text, .th-feed__md) .hljs-attr,
+:is(.th-fileview__text, .th-feed__md) .hljs-regexp {
   color: #a5d6ff;
 }
-.th-fileview__text .hljs-number,
-.th-fileview__text .hljs-built_in {
+:is(.th-fileview__text, .th-feed__md) .hljs-number,
+:is(.th-fileview__text, .th-feed__md) .hljs-built_in {
   color: #79c0ff;
 }
-.th-fileview__text .hljs-title,
-.th-fileview__text .hljs-section {
+:is(.th-fileview__text, .th-feed__md) .hljs-title,
+:is(.th-fileview__text, .th-feed__md) .hljs-section {
   color: #d2a8ff;
 }
-.th-fileview__text .hljs-name,
-.th-fileview__text .hljs-tag,
-.th-fileview__text .hljs-bullet {
+:is(.th-fileview__text, .th-feed__md) .hljs-name,
+:is(.th-fileview__text, .th-feed__md) .hljs-tag,
+:is(.th-fileview__text, .th-feed__md) .hljs-bullet {
   color: #7ee787;
 }
-.th-fileview__text .hljs-attribute,
-.th-fileview__text .hljs-variable,
-.th-fileview__text .hljs-params {
+:is(.th-fileview__text, .th-feed__md) .hljs-attribute,
+:is(.th-fileview__text, .th-feed__md) .hljs-variable,
+:is(.th-fileview__text, .th-feed__md) .hljs-params {
   color: #ffa657;
 }
-.th-fileview__text .hljs-meta {
+:is(.th-fileview__text, .th-feed__md) .hljs-meta {
   color: #8b949e;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-comment,
-:root[data-theme='light'] .th-fileview__text .hljs-quote {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-comment,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-quote {
   color: #6e7781;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-keyword,
-:root[data-theme='light'] .th-fileview__text .hljs-selector-tag,
-:root[data-theme='light'] .th-fileview__text .hljs-literal,
-:root[data-theme='light'] .th-fileview__text .hljs-type {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-keyword,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-selector-tag,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-literal,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-type {
   color: #cf222e;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-string,
-:root[data-theme='light'] .th-fileview__text .hljs-attr {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-string,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-attr {
   color: #0a3069;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-number,
-:root[data-theme='light'] .th-fileview__text .hljs-built_in {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-number,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-built_in {
   color: #0550ae;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-title,
-:root[data-theme='light'] .th-fileview__text .hljs-section {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-title,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-section {
   color: #8250df;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-name,
-:root[data-theme='light'] .th-fileview__text .hljs-tag {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-name,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-tag {
   color: #116329;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-attribute,
-:root[data-theme='light'] .th-fileview__text .hljs-variable {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-attribute,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-variable {
   color: #953800;
 }
 .th-fileview__note {
@@ -2147,29 +2148,25 @@ main.th-gradle {
 
 /* Пометка приложения, ушедшего в альтернативный экран: у такого истории не бывает.
    Нажатие объясняет причину словами (на телефоне подсказки по наведению нет). */
-.th-termbar__alt {
-  color: var(--claude);
-  background: none;
-  font: inherit;
-  font-size: 0.8rem;
-  padding: 2px 8px;
-  border: 1px solid currentcolor;
-  border-radius: var(--r);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-/* Способ подключения терминала: показывает режим, который вернул агент, и служит
+/* Способ подключения терминала: одной буквой (C — control mode, A — attach),
+   слово целиком живёт в подсказке. Показывает режим, который вернул агент, и служит
    переключателем просьбы на следующее открытие (is-pending — просьба ждёт его). */
 .th-termbar__mode {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   color: var(--text-dim);
   background: none;
   font: inherit;
   font-size: 0.8rem;
-  padding: 2px 8px;
+  font-weight: 700;
+  line-height: 1;
   border: 1px solid var(--border);
-  border-radius: var(--r);
-  white-space: nowrap;
+  border-radius: var(--r-full);
   cursor: pointer;
 }
 
@@ -3202,4 +3199,175 @@ main.th-feed {
 }
 :root[data-theme='light'] .th-feed__entry.is-hit {
   background: rgba(22, 183, 144, 0.3);
+}
+
+/* ── Разметка ответа агента в ленте ─────────────────────────────────
+   Ответ приезжает markdown-ом и в терминале нарисован; здесь он рисуется тем же
+   набором. Сама запись держит white-space: pre-wrap (перевод строки от агента —
+   часть сообщения), поэтому у разметки он снимается и возвращается абзацам. */
+.th-feed__md {
+  white-space: normal;
+}
+.th-feed__md > :first-child {
+  margin-top: 0;
+}
+.th-feed__md > :last-child {
+  margin-bottom: 0;
+}
+.th-feed__md p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+.th-feed__md h1,
+.th-feed__md h2,
+.th-feed__md h3,
+.th-feed__md h4,
+.th-feed__md h5,
+.th-feed__md h6 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+  font-weight: 650;
+  color: var(--text);
+}
+.th-feed__md h1 {
+  font-size: 1.15rem;
+}
+.th-feed__md h2 {
+  font-size: 1.06rem;
+}
+.th-feed__md h3 {
+  font-size: 1rem;
+}
+.th-feed__md h4,
+.th-feed__md h5,
+.th-feed__md h6 {
+  font-size: 0.94rem;
+  color: var(--text-dim);
+}
+.th-md__list {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.th-md__list .th-md__list {
+  margin: 2px 0;
+}
+.th-feed__md li {
+  margin: 2px 0;
+}
+.th-feed__md li > p {
+  margin: 0 0 4px;
+}
+.th-md__link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.th-md__inlinecode {
+  padding: 1px 4px;
+  border-radius: var(--r-xs, 4px);
+  background: var(--bg-elev-2);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+/* Блок кода прокручивается сам, а не растягивает ленту: строка в ответе агента
+   бывает длиннее экрана телефона, и перенос кода ломает его чтение. */
+.th-md__pre {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.th-md__code {
+  display: block;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+/* Та же оговорка, что и у кода: широкая таблица едет в своей обёртке. */
+.th-md__tablewrap {
+  margin: 8px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.th-md__table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.th-md__table th,
+.th-md__table td {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.th-md__table th {
+  background: var(--bg-elev-2);
+  font-weight: 650;
+}
+.th-feed__md blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+.th-feed__md hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+.th-feed__md s {
+  color: var(--text-dim);
+}
+/* Кнопка «вниз»: у конца беседы её нет (feed.ts прячет), поэтому последнюю запись
+   она не закрывает; ниже полосы поиска, поверх списка — как FAB у Проводника. */
+.th-feed__fab {
+  width: 46px;
+  height: 46px;
+}
+.th-feed__fab .th-icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* Лента — кнопка ВНУТРИ плашки «Терминал», справа от подписи. Подпись съедается
+   многоточием сама по себе, кнопка при этом не сжимается и не обрезается: ряд на
+   узком экране остаётся из четырёх читаемых вкладок. */
+.th-holotab__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-holotab__feed {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.th-holotab__feed .th-icon {
+  width: 15px;
+  height: 15px;
+}
+.th-holotab__feed:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.th-holotab__feed:active {
+  color: var(--accent);
 }

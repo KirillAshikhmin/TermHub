@@ -6,12 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLang, t } from '../src/i18n';
 import { mountTerminal } from '../src/term';
+import { terminalModeLetter } from '../src/term-mode';
 import { FakeTerminal, stubResizeObserver, termTransport } from './term-harness';
 
 vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')).FakeTerminal }));
 
-/** Пометка приложения в альтернативном экране. */
-const altBadge = (root: HTMLElement): HTMLElement => root.querySelector('.th-termbar__alt') as HTMLElement;
 /** Хост терминала: на нём висит признак «экран занят полноэкранным приложением». */
 const termHost = (root: HTMLElement): HTMLElement => root.querySelector('.th-term__host') as HTMLElement;
 /** Переключатель способа подключения (он же показывает работающий режим). */
@@ -29,24 +28,21 @@ beforeEach(() => {
   document.body.append(root);
 });
 
-describe('пометка альтернативного экрана', () => {
-  it('появляется по кадру состояния и исчезает, когда приложение из него вышло', () => {
+describe('признак альтернативного экрана', () => {
+  it('видимой пометки у него нет: историю беседы показывает лента, а не шапка', () => {
     const { transport, opened } = termTransport();
     const handle = mountTerminal(root, 'work', transport);
-    expect(altBadge(root).hidden).toBe(true);
 
     opened[0]!.opts.onTerminalState!({ altScreen: true });
-    expect(altBadge(root).hidden).toBe(false);
 
-    opened[0]!.opts.onTerminalState!({ altScreen: false });
-    expect(altBadge(root).hidden).toBe(true);
+    expect(root.querySelector('.th-termbar__alt')).toBeNull();
     handle.teardown();
   });
 
   it('прячет ползунок прокрутки, пока экран занят таким приложением', () => {
     // Листать в альтернативном экране нечего: истории у него нет. Ползунок библиотеки над
-    // ним обещал бы прокрутку, которой не существует, — прячем его тем же признаком, что
-    // зажигает пометку, чтобы эти два не разъехались.
+    // ним обещал бы прокрутку, которой не существует, — поэтому признак altScreen из кадра
+    // состояния гасит его сам, ничего видимого в шапке для этого не требуя.
     const { transport, opened } = termTransport();
     const handle = mountTerminal(root, 'work', transport);
     expect(termHost(root).classList.contains('is-alt')).toBe(false);
@@ -68,20 +64,7 @@ describe('пометка альтернативного экрана', () => {
     opened[0]!.opts.onStatus!('connected');
 
     expect(termHost(root).classList.contains('is-alt')).toBe(false);
-    expect(altBadge(root).hidden).toBe(true);
-    handle.teardown();
-  });
-
-  it('объясняет причину человеку: по нажатию показывает, что истории у такого приложения нет', () => {
-    const { transport, opened } = termTransport();
-    const handle = mountTerminal(root, 'work', transport);
-    opened[0]!.opts.onTerminalState!({ altScreen: true });
-
-    altBadge(root).click();
-
-    const toastText = document.querySelector('.th-toast')?.textContent;
-    expect(toastText).toBe(t('term.altScreenHint'));
-    expect(altBadge(root).title).toBe(t('term.altScreenHint'));
+    expect(termHost(root).classList.contains('is-alt')).toBe(false);
     handle.teardown();
   });
 
@@ -89,12 +72,12 @@ describe('пометка альтернативного экрана', () => {
     const { transport, opened } = termTransport();
     const handle = mountTerminal(root, 'work', transport);
     opened[0]!.opts.onTerminalState!({ mode: 'control' }); // режим агент назвал сразу, про экран ещё ничего
-    expect(altBadge(root).hidden).toBe(true);
+    expect(termHost(root).classList.contains('is-alt')).toBe(false);
 
     opened[0]!.opts.onTerminalState!({ altScreen: true }); // приложение ушло в альтернативный экран
 
-    expect(altBadge(root).hidden).toBe(false);
-    expect(modeBtn(root).textContent).toBe(t('term.modeControl')); // кадр без режима его не стёр
+    expect(termHost(root).classList.contains('is-alt')).toBe(true);
+    expect(modeBtn(root).textContent).toBe(terminalModeLetter('control')); // кадр без режима его не стёр
     handle.teardown();
   });
 
@@ -103,19 +86,19 @@ describe('пометка альтернативного экрана', () => {
     const handle = mountTerminal(root, 'work', transport);
     opened[0]!.opts.onStatus('connected');
     opened[0]!.opts.onTerminalState!({ altScreen: true });
-    expect(altBadge(root).hidden).toBe(false);
+    expect(termHost(root).classList.contains('is-alt')).toBe(true);
 
     // Связь оборвалась и поднялась заново — за ней у агента новый терминал, и что в нём
     // на экране, известно только из нового кадра.
     opened[0]!.opts.onStatus('reconnecting');
     opened[0]!.opts.onStatus('connected');
 
-    expect(altBadge(root).hidden).toBe(true); // прошлое «включён» с подключением не переехало
+    expect(termHost(root).classList.contains('is-alt')).toBe(false); // прошлое «включён» с подключением не переехало
     opened[0]!.opts.onTerminalState!({ mode: 'control' }); // кадр без altScreen её не зажигает
-    expect(altBadge(root).hidden).toBe(true);
+    expect(termHost(root).classList.contains('is-alt')).toBe(false);
 
     opened[0]!.opts.onTerminalState!({ altScreen: true }); // зажечь вправе только новый кадр
-    expect(altBadge(root).hidden).toBe(false);
+    expect(termHost(root).classList.contains('is-alt')).toBe(true);
     handle.teardown();
   });
 });
@@ -140,7 +123,7 @@ describe('переключатель способа подключения', () 
     // просьбу attach агент исполняет всегда, запретить он может только control.
     opened[0]!.opts.onTerminalState!({ mode: 'attach' });
 
-    expect(modeBtn(root).textContent).toBe(t('term.modeAttach'));
+    expect(modeBtn(root).textContent).toBe(terminalModeLetter('attach'));
     // Просьба уехала и закрыта — ждать нечего; расхождение с ответом видно отдельным признаком.
     expect(modeBtn(root).classList.contains('is-pending')).toBe(false);
     expect(modeBtn(root).classList.contains('is-overridden')).toBe(true);
@@ -160,7 +143,7 @@ describe('переключатель способа подключения', () 
 
     expect(frames).toEqual([]); // текущему каналу ничего не отправлено
     expect(opened[0]!.closed).toBe(false); // и он не закрыт
-    expect(modeBtn(root).textContent).toBe(t('term.modeControl')); // работает по-прежнему control
+    expect(modeBtn(root).textContent).toBe(terminalModeLetter('control')); // работает по-прежнему control
     expect(modeBtn(root).classList.contains('is-pending')).toBe(true); // просьба ждёт открытия
     first.teardown();
 
@@ -189,7 +172,7 @@ describe('переключатель способа подключения', () 
     const handle = mountTerminal(root, 'work', transport);
     opened[0]!.opts.onStatus('connected');
     opened[0]!.opts.onTerminalState!({ mode: 'attach' });
-    expect(modeBtn(root).textContent).toBe(t('term.modeAttach'));
+    expect(modeBtn(root).textContent).toBe(terminalModeLetter('attach'));
     expect(modeBtn(root).classList.contains('is-overridden')).toBe(true);
 
     opened[0]!.opts.onStatus('reconnecting');
@@ -199,7 +182,7 @@ describe('переключатель способа подключения', () 
     expect(modeBtn(root).classList.contains('is-overridden')).toBe(false); // расхождение — из прошлого
 
     opened[0]!.opts.onTerminalState!({ mode: 'attach' }); // назвал — тогда и показываем
-    expect(modeBtn(root).textContent).toBe(t('term.modeAttach'));
+    expect(modeBtn(root).textContent).toBe(terminalModeLetter('attach'));
     expect(modeBtn(root).classList.contains('is-overridden')).toBe(true);
     handle.teardown();
   });
@@ -211,5 +194,35 @@ describe('переключатель способа подключения', () 
     handle.teardown();
 
     expect(localStorage.getItem('termhub.terminalMode')).toBe('attach');
+  });
+});
+
+describe('чип режима — одной буквой', () => {
+  it('C для control mode, A для attach — а слово целиком остаётся в подсказке', () => {
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+
+    opened[0]!.opts.onTerminalState!({ mode: 'control' });
+    expect(modeBtn(root).textContent).toBe('C');
+    expect(modeBtn(root).title).toContain(t('term.modeControl'));
+    expect(modeBtn(root).getAttribute('aria-label')).toContain(t('term.modeSwitch'));
+
+    opened[0]!.opts.onTerminalState!({ mode: 'attach' });
+    expect(modeBtn(root).textContent).toBe('A');
+    expect(modeBtn(root).title).toContain(t('term.modeAttach'));
+    handle.teardown();
+  });
+
+  it('расхождение просьбы с действительностью видно и на одной букве — своим видом', () => {
+    // Слова «просили другое» на чипе больше нет, поэтому признак обязан оставаться
+    // видом кнопки: иначе на букве расхождение исчезло бы совсем.
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+
+    opened[0]!.opts.onTerminalState!({ mode: 'attach' }); // просили control, агент дал attach
+
+    expect(modeBtn(root).textContent).toBe('A');
+    expect(modeBtn(root).classList.contains('is-overridden')).toBe(true);
+    handle.teardown();
   });
 });
