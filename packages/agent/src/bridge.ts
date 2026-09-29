@@ -63,7 +63,8 @@ export function attachTerminal(opts: {
   /** Общий budget назначается bridge-обвязкой; прямой attach остаётся тестируемым без него. */
   ptyPool?: PtyPool;
 }): TerminalHandle {
-  const args = [...(opts.socketName ? ['-L', opts.socketName] : []), 'attach', '-t', `=${opts.session}`];
+  // Завершающее ':' отделяет имя сессии: иначе точка в sprut.app трактуется как панель.
+  const args = [...(opts.socketName ? ['-L', opts.socketName] : []), 'attach', '-t', `=${opts.session}:`];
   const lease = opts.ptyPool?.acquire();
   let child: IPty;
   try {

@@ -132,7 +132,7 @@ describe('attachTerminal', () => {
       onBell: () => {},
     });
     expect(file).toBe('tmux');
-    expect(args).toEqual(['-L', 'sock1', 'attach', '-t', '=mysess']);
+    expect(args).toEqual(['-L', 'sock1', 'attach', '-t', '=mysess:']);
   });
 
   it('клампует размеры при спавне: мусор → границы [20..500]×[5..300]', () => {
@@ -391,7 +391,7 @@ describe('wireTerminalWs', () => {
     two.emit('message', resizeFrame(80, 24));
 
     expect(mockSpawn).toHaveBeenCalledTimes(2);
-    expect(second.isKilled()).toBe(false);
+    expect(second.isDestroyed()).toBe(false);
   });
 
   it('исчерпанный PTY-budget отклоняет новую вкладку Error-кадром без нового forkpty', () => {
