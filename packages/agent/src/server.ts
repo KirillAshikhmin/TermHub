@@ -274,6 +274,8 @@ export class AgentServer {
       return this.sendJson(res, 200, await this.sessions.list());
     if (method === 'POST' && pathname === '/api/sessions') return this.createSession(req, res);
     if (method === 'POST' && pathname === '/api/sessions/rename') return this.renameSession(req, res);
+    if (method === 'DELETE' && pathname === '/api/sessions' && url.searchParams.has('name'))
+      return this.killSession(res, url.searchParams.get('name')!);
     if (method === 'DELETE' && pathname.startsWith('/api/sessions/')) {
       let name: string;
       try {
@@ -653,7 +655,7 @@ export class AgentServer {
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const match = /^\/ws\/term\/(.+)$/.exec(url.pathname);
-    if (!match) {
+    if (!match && !(url.pathname === '/ws/term' && url.searchParams.has('name'))) {
       socket.destroy();
       return;
     }
@@ -669,13 +671,13 @@ export class AgentServer {
     }
     let name: string;
     try {
-      name = decodeURIComponent(match[1]!);
+      name = url.pathname === '/ws/term' ? url.searchParams.get('name')! : decodeURIComponent(match![1]!);
     } catch {
       socket.destroy();
       return;
     }
     // Ссылка на СУЩЕСТВУЮЩУЮ сессию (её мог завести пользователь через `tm`, тогда имя
-    // берётся из каталога и может содержать точку). В tmux уходит только с префиксом «=».
+    // берётся из каталога и может содержать точку). В tmux имя разрешается в ID через точное сравнение.
     if (!isExistingSessionName(name)) {
       socket.destroy();
       return;

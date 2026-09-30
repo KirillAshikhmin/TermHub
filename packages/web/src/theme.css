@@ -2867,3 +2867,8 @@ main.th-gradle {
   font-size: 13px;
   color: var(--muted);
 }
+
+/* Непрочитанный звонок заметен и в выбранной вкладке. */
+.th-tab.has-bell {
+  box-shadow: inset 0 -3px 0 #d99b20;
+}

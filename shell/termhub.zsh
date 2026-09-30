@@ -1,15 +1,28 @@
 # TermHub shell commands. Source this file from zsh or bash.
 tm() {
   if [ -n "$1" ]; then
+    if [ "$(printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]')" != "$1" ]; then
+      printf 'Invalid session name.\n'; return 1
+    fi
     _th_taken=$(tmux -L termhub list-sessions -F '#{session_name}' 2>/dev/null) || _th_taken=''
     if printf '%s\n' "$_th_taken" | grep -qxF -- "$1"; then
-      tmux -L termhub attach -t "=$1:"
+      _th_id=$(tmux -L termhub list-sessions -F '#{session_id}	#{session_name}' |
+        TH_SESSION_NAME="$1" awk -F '\t' '("x" $2) == ("x" ENVIRON["TH_SESSION_NAME"]) { print $1; exit }')
+      [ -n "$_th_id" ] || return 1
+      tmux -L termhub attach -t "$_th_id:"
     else
-      tmux -L termhub new -s "$1"
+      case "$1" in *\\*) printf 'Backslashes are not supported in new session names.\n'; return 1;; esac
+      _th_new=${1//\#/##}
+      case "$_th_new" in *';') _th_new="${_th_new%;}\\;";; esac
+      tmux -L termhub new -s "$_th_new"
     fi
     return $?
   fi
   _th_base=$(basename "$PWD")
+  case "$_th_base" in *\\*) printf 'Use tm with an explicit session name without backslashes.\n'; return 1;; esac
+  if [ "$(printf '%s' "$_th_base" | LC_ALL=C tr -d '[:cntrl:]')" != "$_th_base" ]; then
+    printf 'Invalid session name.\n'; return 1
+  fi
   _th_taken=$(tmux -L termhub list-sessions -F '#{session_name}' 2>/dev/null) || _th_taken=''
   _th_name=$_th_base
   _th_n=0
@@ -17,7 +30,9 @@ tm() {
     _th_n=$((_th_n + 1))
     _th_name="$_th_base$_th_n"
   done
-  tmux -L termhub new -s "$_th_name"
+  _th_new=${_th_name//\#/##}
+  case "$_th_new" in *';') _th_new="${_th_new%;}\\;";; esac
+  tmux -L termhub new -s "$_th_new"
 }
 _th_rows() {
   _th_tab=$(printf '\t')
@@ -57,7 +72,9 @@ _THEOF
 }
 _th_field() { printf '%s\n' "$1" | cut -f"$2"; }
 _th_kill() {
-  if tmux -L termhub kill-session -t "=$1" 2>/dev/null; then printf 'Closed %s\n' "$1"
+  _th_id=$(tmux -L termhub list-sessions -F '#{session_id}	#{session_name}' 2>/dev/null |
+    TH_SESSION_NAME="$1" awk -F '\t' '("x" $2) == ("x" ENVIRON["TH_SESSION_NAME"]) { print $1; exit }')
+  if [ -n "$_th_id" ] && tmux -L termhub kill-session -t "$_th_id" 2>/dev/null; then printf 'Closed %s\n' "$1"
   else printf 'Could not close %s\n' "$1"; fi
 }
 tml() {

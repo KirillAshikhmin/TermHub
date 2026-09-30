@@ -878,8 +878,7 @@ export function openRenameModal(transport: Transport, current: string, onDone: (
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      // Имя нормализуем как при создании (только [A-Za-z0-9_-], ≤40).
-      const next = sanitizeSessionName(input.value.trim());
+      const next = input.value;
       if (!next || next === current) {
         close();
         return;

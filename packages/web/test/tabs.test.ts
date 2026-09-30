@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLang, t } from '../src/i18n';
 import { mountSessionTabs, pickNeighbor, renderSessionTab, updateSessionTab } from '../src/tabs';
+import { observeBells, recordBell } from '../src/bell-seen';
 import { activity } from '../src/activity';
 import type { Transport } from '../src/transport';
 
@@ -44,11 +45,12 @@ describe('renderSessionTab / updateSessionTab', () => {
     expect(tab.querySelector('.th-tab__btn')!.getAttribute('aria-current')).toBe('true');
   });
 
-  it('звонок виден только на неактивном табе', () => {
+  it('новый звонок виден и подсвечен на активном и фоновом табе', () => {
     const inactive = renderSessionTab({ name: 'a', bell: true, title: '' }, false, t, noop, noop);
     expect(inactive.querySelector('.th-tab__bell')).not.toBeNull();
     const active = renderSessionTab({ name: 'a', bell: true, title: '' }, true, t, noop, noop);
-    expect(active.querySelector('.th-tab__bell')).toBeNull();
+    expect(active.querySelector('.th-tab__bell')).not.toBeNull();
+    expect(active.classList.contains('has-bell')).toBe(true);
   });
 
   it('клик по имени вызывает onSwitch с именем', () => {
@@ -133,10 +135,25 @@ describe('mountSessionTabs', () => {
     setLang('ru');
     vi.useFakeTimers();
     activity.reset();
+    observeBells([]);
   });
   afterEach(() => vi.useRealTimers());
 
   const baseOpts = { current: 'a', onSwitch: noop, onKill: noop, onCreate: noop };
+
+  it('BEL immediately marks current tab and polling does not acknowledge it', async () => {
+    const { transport } = stubTransport([[sessionFixture('a')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport });
+    await vi.advanceTimersByTimeAsync(0);
+    recordBell('a');
+    expect(tabs.el.querySelector('.th-tab__bell')).not.toBeNull();
+    expect(tabs.el.querySelector('.has-bell')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(tabs.el.querySelector('.th-tab__bell')).not.toBeNull();
+    tabs.el.querySelector<HTMLButtonElement>('.th-tab__btn')!.click();
+    expect(tabs.el.querySelector('.th-tab__bell')).toBeNull();
+    tabs.teardown();
+  });
 
   it('сообщает очищенный pane_title текущей сессии и обновляет его на месте', async () => {
     const onCurrentTitle = vi.fn();

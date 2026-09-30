@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { bellUnseen, observeBells } from '../src/bell-seen';
 import { mountTerminal } from '../src/term';
 import { FakeTerminal, stubResizeObserver, termTransport } from './term-harness';
 
@@ -21,6 +22,17 @@ describe('очередь ввода до подключения', () => {
     stubResizeObserver();
     root = document.createElement('div');
     document.body.append(root);
+  });
+
+  it('terminal BEL becomes unread and input acknowledges it', () => {
+    observeBells([]);
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onBell();
+    expect(bellUnseen('work')).toBe(true);
+    FakeTerminal.instances[0]!.type('x');
+    expect(bellUnseen('work')).toBe(false);
+    handle.teardown();
   });
 
   it('набранное до connected не уходит в транспорт; на connected — сначала RESIZE, затем очередь', () => {

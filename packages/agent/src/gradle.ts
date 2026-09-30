@@ -755,6 +755,8 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   // Вторую сборку поверх идущей молча не запускаем: вызывающий сам решит, гасить
   // ли прежнюю (история 16), и придёт снова с force.
   const current = await runStatus(opts);
+  if (current.phase !== 'idle' && !current.command)
+    throw new Error('Build session name is occupied by a non-build session');
   if (current.phase === 'running' && !opts.force) return current;
 
   // Прежняя сборочная сессия (с выводом прошлого запуска) уступает место новой.
@@ -789,6 +791,8 @@ export async function stopRun(opts: RunTargetOpts): Promise<GradleRunState> {
   const name = buildSessionName(opts.session);
   const key = stopKey(name, opts.socketName);
   const state = await runStatus(opts);
+  if (state.phase !== 'idle' && !state.command)
+    throw new Error('Build session name is occupied by a non-build session');
   if (state.phase !== 'running') {
     // Останавливать нечего — и счёт «Стопов» начинается заново.
     stopSent.delete(key);

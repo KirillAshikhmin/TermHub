@@ -2,6 +2,8 @@
 // о WS: спавнит pty на `tmux attach`, отдаёт вывод байтами и сигналит о BEL/выходе.
 // wireTerminalWs строит из неё обработчик терминальных WS для AgentServer.
 
+import { execFileSync } from 'node:child_process';
+import { findSessionId, SESSION_ID_FORMAT } from './tmux-session.js';
 import { spawn } from 'node-pty';
 import type { IPty } from 'node-pty';
 import type { WebSocket, RawData } from 'ws';
@@ -63,8 +65,10 @@ export function attachTerminal(opts: {
   /** Общий budget назначается bridge-обвязкой; прямой attach остаётся тестируемым без него. */
   ptyPool?: PtyPool;
 }): TerminalHandle {
-  // Завершающее ':' отделяет имя сессии: иначе точка в sprut.app трактуется как панель.
-  const args = [...(opts.socketName ? ['-L', opts.socketName] : []), 'attach', '-t', `=${opts.session}:`];
+  const socketArgs = opts.socketName ? ['-L', opts.socketName] : [];
+  const sessionId = findSessionId(execFileSync('tmux', [...socketArgs, 'list-sessions', '-F', SESSION_ID_FORMAT],
+    { encoding: 'utf8', timeout: 3000, maxBuffer: 4 * 1024 * 1024 }), opts.session);
+  const args = [...socketArgs, 'attach', '-t', `${sessionId}:`];
   const lease = opts.ptyPool?.acquire();
   let child: IPty;
   try {

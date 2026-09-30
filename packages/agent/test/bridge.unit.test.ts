@@ -6,6 +6,7 @@ import { PtyPool } from '../src/pty-pool.js';
 
 // node-pty мокаем целиком: полный контроль над spawn, включая синхронный throw
 // (кейс «бинарь tmux отсутствует»), без реального tmux/pty.
+vi.mock('node:child_process', () => ({ execFileSync: vi.fn(() => '$7\tmysess\n$8\ts\n$9\tsess\n$10\tone\n$11\ttwo\n') }));
 vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 const mockSpawn = vi.mocked(spawn);
@@ -132,7 +133,7 @@ describe('attachTerminal', () => {
       onBell: () => {},
     });
     expect(file).toBe('tmux');
-    expect(args).toEqual(['-L', 'sock1', 'attach', '-t', '=mysess:']);
+    expect(args).toEqual(['-L', 'sock1', 'attach', '-t', '$7:']);
   });
 
   it('клампует размеры при спавне: мусор → границы [20..500]×[5..300]', () => {

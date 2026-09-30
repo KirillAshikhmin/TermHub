@@ -232,15 +232,16 @@ describe('SessionService.create — валидация', () => {
 
   it('rename → rename-session с точным (=) старым именем', async () => {
     const svc = new SessionService({ roots: [root] });
+    stubTmux(() => ({ stdout: '$7\told\n' }));
     await svc.rename('old', 'new');
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
-    expect(args).toEqual(['rename-session', '-t', '=old', 'new']);
+    expect(args).toEqual(['rename-session', '-t', '$7', '--', 'new']);
   });
 
   it('rename отвергает недопустимое имя (старое или новое)', async () => {
     const svc = new SessionService({ roots: [root] });
-    await expect(svc.rename('bad name!', 'ok')).rejects.toThrow(/name/i);
-    await expect(svc.rename('ok', 'a.b')).rejects.toThrow(/name/i);
+    await expect(svc.rename('bad\nname', 'ok')).rejects.toThrow(/name/i);
+    await expect(svc.rename('ok', 'a\nb')).rejects.toThrow(/name/i);
   });
 });
 
@@ -248,15 +249,24 @@ describe('SessionService.kill', () => {
   it('вызывает kill-session -t =<name> (без fuzzy-матчинга)', async () => {
     stubTmux(() => ({}));
     const svc = new SessionService({ roots: ['/tmp'], socketName: 'termhub-test-u' });
+    stubTmux(() => ({ stdout: '$7\tmain\n' }));
     await svc.kill('main');
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
-    expect(args).toEqual(['-L', 'termhub-test-u', 'kill-session', '-t', '=main']);
+    expect(args).toEqual(['-L', 'termhub-test-u', 'kill-session', '-t', '$7']);
+  });
+
+  it('kill accepts dotted existing names and uses an exact session target', async () => {
+    stubTmux(() => ({}));
+    const svc = new SessionService({ roots: ['/tmp'] });
+    stubTmux(() => ({ stdout: '$9\tsprut.app1\n' }));
+    await svc.kill('sprut.app1');
+    expect(mockExecFile.mock.calls.at(-1)![1]).toEqual(['kill-session', '-t', '$9']);
   });
 
   it('отвергает недопустимое имя без вызова tmux', async () => {
     stubTmux(() => ({}));
     const svc = new SessionService({ roots: ['/tmp'] });
-    await expect(svc.kill('bad name!')).rejects.toThrow(/name/i);
+    await expect(svc.kill('bad\nname')).rejects.toThrow(/name/i);
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 });

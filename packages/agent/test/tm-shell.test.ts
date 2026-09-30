@@ -23,9 +23,10 @@ printf '%s\\n' '${CALL}' "$@" >> "$TH_LOG"
 if [ "$1" = -L ]; then shift 2; fi
 case "$1" in
   list-sessions)
-    [ "$2" = -F ] && [ "$3" = '#{session_name}' ] || exit 2
+    [ "$2" = -F ] || exit 2
     [ -s "$TH_TAKEN" ] || { echo 'no server running' >&2; exit 1; }
-    cat "$TH_TAKEN"
+    if [ "$3" = '#{session_name}' ]; then cat "$TH_TAKEN"
+    else awk '{ printf "$%d\\t%s\\n", NR, $0 }' "$TH_TAKEN"; fi
     ;;
   new|attach) exit 0 ;;
   *) exit 2 ;;
@@ -119,6 +120,17 @@ describe.each(shells)('tm под %s: нумерация имени папки ч
   });
 
   it('tm foo.bar — точное подключение к существующей сессии с точкой', () => {
-    expect(runTm(shell, 'foo.bar', ['foo', 'foo.bar'])).toEqual([LIST, ['-L', SOCKET, 'attach', '-t', '=foo.bar:']]);
+    expect(runTm(shell, 'foo.bar', ['foo', 'foo.bar'])).toEqual([LIST, ['-L', SOCKET, 'list-sessions', '-F', '#{session_id}\t#{session_name}'], ['-L', SOCKET, 'attach', '-t', '$2:']]);
   });
+  it.each(['$1', '01', 'with space', 'проект', '[ab]*?', 'a:b'])('attaches by ID for literal name %s', (name) => {
+    expect(runTm(shell, "'" + name + "'", ['1', name]).at(-1)).toEqual(['-L', SOCKET, 'attach', '-t', '$2:']);
+  });
+  it('escapes tmux formats when creating a literal hash name', () => {
+    expect(runTm(shell, "'#hash'", []).at(-1)).toEqual(NEW('##hash'));
+  });
+
+  it('escapes a terminal command separator in a new name', () => {
+    expect(runTm(shell, "'foo;'", []).at(-1)).toEqual(NEW('foo\\;'));
+  });
+
 });

@@ -125,7 +125,7 @@ class LanTermChannel implements TermChannel {
     session: string,
     private readonly opts: TermChannelOpts,
   ) {
-    this.url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/term/${encodeURIComponent(session)}`;
+    this.url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/term?name=${encodeURIComponent(session)}`;
     this.connect();
     // Возврат PWA из фона (Android усыпляет WS) / вернулась сеть — реконнектим сразу.
     document.addEventListener('visibilitychange', this.onVisible);

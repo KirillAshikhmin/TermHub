@@ -105,6 +105,17 @@ describe('gradle — запуск в tmux (изолированный сокет
     expect(tmuxAvailable, NO_TMUX).toBe(true);
   });
 
+  it('does not hide or stop a user session occupying a build name', async () => {
+    fakeGradlew('exit 0');
+    const name = buildSessionName(session);
+    execFileSync('tmux', ['-L', socketName, 'new-session', '-d', '-s', name]);
+    const svc = new SessionService({ roots: [projectDir], socketName });
+    expect((await svc.list()).some((s) => s.name === name)).toBe(true);
+    await expect(startRun({ session, dir: projectDir, tasks: ['build'], force: true, socketName })).rejects.toThrow(/occupied/);
+    await expect(stopRun({ session, socketName })).rejects.toThrow(/occupied/);
+    expect((await svc.list()).some((s) => s.name === name)).toBe(true);
+  });
+
   it('startRun поднимает сборочную сессию, доводит её до finished и печатает код выхода', async () => {
     fakeGradlew('exec sleep 2');
 

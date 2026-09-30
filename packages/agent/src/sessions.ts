@@ -7,14 +7,15 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionInfo } from '@termhub/protocol';
 import { sessionWorking, sessionTitleText } from '@termhub/protocol';
-import { isBuildSessionName } from './gradle.js';
+import { findSessionId, isExistingSessionName, literalTmuxName, SESSION_ID_FORMAT } from './tmux-session.js';
+export { isExistingSessionName } from './tmux-session.js';
 
 const POLL_INTERVAL_MS = 2000;
 const EXEC_MAX_BUFFER = 4 * 1024 * 1024;
 
 /** Форматы вывода tmux (поля разделены табом). */
 const SESSION_FORMAT =
-  '#{session_name}\t#{session_path}\t#{session_activity}\t#{session_attached}\t#{pane_title}';
+  '#{?@termhub_gradle_cmd,,#{session_name}\t#{session_path}\t#{session_activity}\t#{session_attached}\t#{pane_title}}';
 const PANE_FORMAT = '#{session_name}\t#{pane_current_command}\t#{window_bell_flag}';
 
 // «Работает ли» определяется общим с вебом правилом (protocol/session-title):
@@ -26,25 +27,15 @@ const PANE_FORMAT = '#{session_name}\t#{pane_current_command}\t#{window_bell_fla
 /** Команды-оболочки: их не считаем «командой сессии» (см. выбор command). */
 const SHELL_COMMANDS = new Set(['zsh', 'bash', 'sh', '-zsh', 'login']);
 
-/** Имя сессии: буквы/цифры/подчёркивание, дефис; 1–40 символов. Точка/двоеточие
- *  ЗАПРЕЩЕНЫ: tmux трактует их как разделители target (`session:window.pane`) — сессию
- *  с точкой в имени потом не адресовать (attach/kill по `-t` не находят её). */
+/** Консервативные имена для формы создания: буквы/цифры, «_», «-».
+ *  Существующие сессии из shell могут содержать точки и требуют точной адресации. */
 const NAME_RE = /^[\w-]{1,40}$/;
 /** Имя каталога: ровно одно имя, без слэша, NUL и управляющих символов (таб/перевод строки). */
 const DIR_RE = /^[^/\0\t\n\r]+$/;
 
-/** Имя сессии, которое TermHub умеет СОЗДАВАТЬ (строгий контракт create/kill/rename). */
+/** Имя сессии, которое TermHub умеет СОЗДАВАТЬ (контракт create). */
 export function isCreatableSessionName(name: string): boolean {
   return NAME_RE.test(name);
-}
-
-/** Имя УЖЕ существующей сессии — для ссылки на неё (гостевой scope, WS-апгрейд).
- *  Шире, чем контракт создания: сессии, заведённые пользователем через `tm`, берут имя
- *  из каталога и могут содержать точку («v1.1») — на такие тоже надо уметь ссылаться.
- *  В tmux имя уходит только с точным префиксом «=», поэтому разделители target не опасны;
- *  отсекаем пустое, слишком длинное и управляющие символы. */
-export function isExistingSessionName(name: string): boolean {
-  return name.length > 0 && name.length <= 40 && !/[\u0000-\u001f\u007f]/.test(name);
 }
 
 /** Предел длины имени сессии (тот же, что в NAME_RE). */
@@ -192,7 +183,7 @@ export class SessionService {
     // Сборочные сессии Gradle наружу не отдаём: иначе они полезли бы в дашборд,
     // в полосу вкладок и в поллинг звонков. Attach на них при этом работает —
     // WS-роут проверяет имя, а не список.
-    return parseListOutput(sessionsOut, panesOut).filter((s) => !isBuildSessionName(s.name));
+    return parseListOutput(sessionsOut, panesOut);
   }
 
   /** Все занятые имена на сокете. Нарочно сырой list-sessions, а не list(): тот прячет
@@ -273,20 +264,19 @@ export class SessionService {
     throw new Error(`Could not create session for «${req.name}»: name kept colliding after ${DUPLICATE_RETRIES} attempts`);
   }
 
+  private async sessionId(name: string): Promise<string> {
+    if (!isExistingSessionName(name)) throw new Error('Invalid session name');
+    return findSessionId(await this.tmux(['list-sessions', '-F', SESSION_ID_FORMAT]), name);
+  }
+
   async kill(name: string): Promise<void> {
-    if (!NAME_RE.test(name))
-      throw new Error(`Invalid session name «${name}»: letters, digits, «_», «-» allowed, 1–40 characters`);
-    // Префикс «=» отключает fuzzy-матчинг tmux (иначе -t матчит по префиксу).
-    await this.tmux(['kill-session', '-t', `=${name}`]);
+    await this.tmux(['kill-session', '-t', await this.sessionId(name)]);
   }
 
   async rename(oldName: string, newName: string): Promise<void> {
-    for (const n of [oldName, newName])
-      if (!NAME_RE.test(n))
-        throw new Error(`Invalid session name «${n}»: letters, digits, «_», «-» allowed, 1–40 characters`);
-    // Префикс «=» — точное совпадение старого имени (как в kill); tmux сохраняет
-    // сессию (pty/attach живут), меняется только имя.
-    await this.tmux(['rename-session', '-t', `=${oldName}`, newName]);
+    if (!isExistingSessionName(newName) || newName.includes('\\')) throw new Error('Invalid session name: empty names, controls and backslashes are not supported');
+    // rename-session разворачивает tmux-форматы: экранируем # в буквальном имени.
+    await this.tmux(['rename-session', '-t', await this.sessionId(oldName), '--', literalTmuxName(newName)]);
   }
 
   async dirs(): Promise<{ root: string; dirs: string[] }[]> {

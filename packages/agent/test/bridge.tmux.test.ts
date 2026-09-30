@@ -52,7 +52,7 @@ function fixtureConfig(over: Partial<TermhubConfig> = {}): TermhubConfig {
   };
 }
 
-describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app'])('TerminalBridge — реальный tmux + WS: %s', (sessionName) => {
+describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app', '$1', 'проект with spaces', '..', 'a/b:%#'])('TerminalBridge — реальный tmux + WS: %s', (sessionName) => {
   const socketName = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
   let root: string;
   let server: AgentServer;
@@ -64,13 +64,13 @@ describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app'])('TerminalBridge �
 
   // Явно отделяем точное имя сессии от окна/панели, включая имена с точкой.
   function capturePane(): string {
-    return tmux(['capture-pane', '-p', '-t', `=${sessionName}:`]);
+    return tmux(['capture-pane', '-p', '-t', `${tmux(['list-sessions', '-F', '#{session_id}']).trim()}:`]);
   }
 
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-bridge-'));
     fs.mkdirSync(path.join(root, 'work'));
-    tmux(['new-session', '-d', '-s', sessionName, '-c', path.join(root, 'work')]);
+    tmux(['new-session', '-d', '-s', sessionName.replaceAll('#', '##'), '-c', path.join(root, 'work')]);
 
     const sessions = new SessionService({ roots: [root], socketName });
     server = new AgentServer({ config: fixtureConfig({ sessionRoots: [root] }), sessions });
@@ -104,7 +104,7 @@ describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app'])('TerminalBridge �
 
   it('RESIZE→attach: send-keys виден в WS-DATA, DATA пишется в pty, закрытие WS не убивает сессию', async () => {
     const cookie = await login();
-    const wsUrl = `${base.replace('http', 'ws')}/ws/term/${encodeURIComponent(sessionName)}`;
+    const wsUrl = `${base.replace('http', 'ws')}/ws/term?name=${encodeURIComponent(sessionName)}`;
     const ws = new WebSocket(wsUrl, { headers: { cookie } });
 
     let output = '';
@@ -123,7 +123,7 @@ describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app'])('TerminalBridge �
     await delay(600); // дать pty заспавниться и приаттачиться к сессии
 
     // Ввод в сессию извне (tmux send-keys) → должен долететь до WS-клиента как DATA.
-    tmux(['send-keys', '-t', `=${sessionName}:`, 'echo hello-bridge', 'Enter']);
+    tmux(['send-keys', '-t', `${tmux(['list-sessions', '-F', '#{session_id}']).trim()}:`, 'echo hello-bridge', 'Enter']);
     expect(await waitFor(() => output.includes('hello-bridge'), 5000)).toBe(true);
 
     // DATA от WS-клиента → pty.write → команда выполняется в сессии.

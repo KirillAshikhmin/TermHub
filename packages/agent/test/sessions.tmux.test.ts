@@ -72,6 +72,38 @@ describe.skipIf(!tmuxAvailable)('SessionService — реальный tmux (из�
     expect(names).toEqual(['main', 'main1', 'main2']);
   });
 
+  it('kill dotted session removes only the exact name and preserves neighbours', async () => {
+    for (const name of ['sprut', 'sprut.app', 'sprut.app1', 'sprut.app10']) {
+      execFileSync('tmux', ['-L', socketName, 'new-session', '-d', '-s', name]);
+    }
+    await svc.kill('sprut.app1');
+    const remaining = (await svc.list()).map((session) => session.name);
+    expect(remaining).not.toContain('sprut.app1');
+    for (const name of ['sprut', 'sprut.app', 'sprut.app10']) expect(remaining).toContain(name);
+    await expect(svc.kill('sprut.app1')).rejects.toThrow();
+    expect((await svc.list()).map((session) => session.name)).toEqual(remaining);
+  });
+
+  it.each([';', 'foo;', 'foo;;', 'foo; kill-server', '_gradle_user', 'with space', 'проект 🚀', 'x'.repeat(80), '.', '..', 'a:b', 'a/b', 'a%20b', '[ab]*?', '#hash', '=equal', '$1', '@1', '-flag'])('literal rename/kill preserves neighbours: %s', async (name) => {
+    const before = (await svc.list()).map((s) => s.name);
+    execFileSync('tmux', ['-L', socketName, 'new-session', '-d', '-s', name.replaceAll('#', '##').replace(/;$/, '\\;')]);
+    expect((await svc.list()).map((s) => s.name)).toContain(name);
+    const renamed = name + '.renamed#h;';
+    await svc.rename(name, renamed);
+    expect((await svc.list()).map((s) => s.name)).toContain(renamed);
+    await svc.kill(renamed);
+    await expect(svc.kill(name)).rejects.toThrow();
+    expect((await svc.list()).map((s) => s.name)).toEqual(before);
+  });
+
+  it('existing backslashes can be addressed by their actual tmux label', async () => {
+    const before = (await svc.list()).map((s) => s.name);
+    execFileSync('tmux', ['-L', socketName, 'new-session', '-d', '-s', 'back\\slash']);
+    const name = (await svc.list()).find((s) => !before.includes(s.name))!.name;
+    await svc.kill(name);
+    expect((await svc.list()).map((s) => s.name)).toEqual(before);
+  });
+
   it('dirs() перечисляет подкаталоги корня', async () => {
     const dirs = await svc.dirs();
     expect(dirs).toEqual([{ root, dirs: ['projectA'] }]);

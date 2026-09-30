@@ -293,6 +293,16 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     expect(seen).toBe('old->new');
   });
 
+  it.each(['.', '..', 'проект /?#%:$1', 'x'.repeat(80)])('DELETE query preserves the exact name: %s', async (name) => {
+    const kill = vi.fn(async () => {});
+    s = await start({ sessions: stubSessions({ kill }) });
+    const res = await fetch(`${s.base}/api/sessions?name=${encodeURIComponent(name)}`, {
+      method: 'DELETE', headers: { cookie: authCookie() },
+    });
+    expect(res.status).toBe(200);
+    expect(kill).toHaveBeenCalledWith(name);
+  });
+
   it('DELETE /api/sessions/:name несуществующей → 404 (tmux exit≠0)', async () => {
     s = await start({
       sessions: stubSessions({
@@ -532,7 +542,7 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     // владелец видел в UI «одна сессия, только чтение», а гость получал всё.
     const onShare = vi.fn(async () => ({ code: 'ABCD-EFGH-JKMN-PQRS', expiresAt: 42 }));
     s = await start({ onShare });
-    for (const bad of [{ session: '', write: false, files: false }, { session: 'a'.repeat(41) }, { session: 42 }, 'nonsense']) {
+    for (const bad of [{ session: '', write: false, files: false }, { session: 'bad\nname' }, { session: 42 }, 'nonsense']) {
       const res = await fetch(`${s.base}/api/share`, {
         method: 'POST',
         headers: { cookie: authCookie(), 'content-type': 'application/json' },
@@ -731,18 +741,14 @@ describe('AgentServer — WS /ws/term/:name (upgrade)', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('upgrade с именем длиннее 40 символов отвергается', async () => {
+  it.each(['a'.repeat(80), '.', '..', 'проект /?#%:$1'])('upgrade принимает буквальное имя через query: %s', async (name) => {
     s = await start({});
-    const handler = vi.fn();
-    s.server.attachTerminalWs(handler);
-    const rejected = await new Promise<boolean>((resolve) => {
-      const ws = new WebSocket(wsUrl(s.base, 'a'.repeat(41)), { headers: { cookie: authCookie() } });
-      ws.on('open', () => resolve(false));
-      ws.on('error', () => resolve(true));
-      ws.on('close', () => resolve(true));
+    const got = new Promise<string>((resolve) => {
+      s.server.attachTerminalWs((ws, session) => { resolve(session); ws.close(1000); });
     });
-    expect(rejected).toBe(true);
-    expect(handler).not.toHaveBeenCalled();
+    const ws = new WebSocket(`${s.base.replace('http', 'ws')}/ws/term?name=${encodeURIComponent(name)}`, { headers: { cookie: authCookie() } });
+    await new Promise<void>((resolve, reject) => { ws.on('close', () => resolve()); ws.on('error', reject); });
+    expect(await got).toBe(name);
   });
 
   it('upgrade к существующей сессии с пробелом/точкой в имени проходит (её создал `tm` из каталога)', async () => {

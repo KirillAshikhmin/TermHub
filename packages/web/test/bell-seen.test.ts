@@ -43,3 +43,27 @@ describe('bell-seen', () => {
     expect(unseenBellCount()).toBe(0);
   });
 });
+
+describe('persistent bell events', () => {
+  it('keeps a short tmux bell until acknowledged', () => {
+    observeBells([{ name: 'pulse', bell: true }]);
+    observeBells([{ name: 'pulse', bell: false }]);
+    expect(bellUnseen('pulse')).toBe(true);
+    markBellSeen('pulse');
+    expect(bellUnseen('pulse')).toBe(false);
+  });
+
+  it('marks working to waiting even when tmux has already cleared BEL', () => {
+    observeBells([{ name: 'task', bell: false, title: '⠋ Build' }]);
+    observeBells([{ name: 'task', bell: false, title: '✳ Build' }]);
+    expect(bellUnseen('task')).toBe(true);
+    markBellSeen('task');
+    observeBells([{ name: 'task', bell: false, title: '✳ Build' }]);
+    expect(bellUnseen('task')).toBe(false);
+  });
+
+  it('does not ring for an idle session first seen at startup', () => {
+    observeBells([{ name: 'idle', bell: false, title: '✳ Idle' }]);
+    expect(bellUnseen('idle')).toBe(false);
+  });
+});

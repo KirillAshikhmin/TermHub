@@ -119,7 +119,7 @@ describe('setup pure helpers', () => {
     // Список перечитывается внутри цикла — иначе номера съезжают после закрытия.
     expect(block.indexOf('while :; do')).toBeLessThan(block.lastIndexOf('_th_all=$(_th_rows)'));
     // Префикс «=» отключает fuzzy-матчинг: без него `Sprut` попал бы в `Sprut1`.
-    expect(block).toContain(`kill-session -t "=$1"`);
+    expect(block).toContain(`kill-session -t "$_th_id"`);
     expect(block).toContain(`tmux -L ${TMUX_SOCKET} kill-session`);
   });
 
@@ -150,7 +150,7 @@ describe('setup pure helpers', () => {
     // `list-sessions -F '#{session_name}'` и сравниваются дословно (не `has-session -t "=…"`:
     // точка в цели tmux — разделитель), затем `new -s`. Само правило — вживую в tm-shell.test.ts.
     expect(block.includes('tm() {')).toBe(true);
-    expect(block.includes(`tmux -L ${TMUX_SOCKET} attach -t "=$1:"`)).toBe(true);
+    expect(block.includes(`tmux -L ${TMUX_SOCKET} attach -t "$_th_id:"`)).toBe(true);
     expect(block.includes(`tmux -L ${TMUX_SOCKET} list-sessions -F '#{session_name}'`)).toBe(true);
     expect(block.includes('has-session')).toBe(false);
     expect(block.includes(`tmux -L ${TMUX_SOCKET} new -s "`)).toBe(true);

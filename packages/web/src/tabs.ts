@@ -14,7 +14,7 @@ import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOr
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
 import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
-import { bellUnseen, markBellSeen, observeBells, unseenBellCount } from './bell-seen';
+import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 
 const POLL_INTERVAL = 3000;
@@ -100,7 +100,11 @@ export function renderSessionTab(
   // Тап по вкладке не должен уводить фокус с textarea xterm (на телефоне это закрывает
   // экранную клавиатуру ещё до смены экрана) — тот же приём, что у быстрых клавиш.
   main.addEventListener('mousedown', (e) => e.preventDefault());
-  main.addEventListener('click', () => onSwitch(info.name));
+  main.addEventListener('click', () => {
+    markBellSeen(info.name);
+    updateAppBadge(unseenBellCount());
+    onSwitch(info.name);
+  });
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'th-tab__close';
@@ -147,8 +151,7 @@ function setTabLabel(main: HTMLElement | null, info: TabInfo): void {
   }
 }
 
-/** Обновляет таб НА МЕСТЕ: подсветка активного, значок звонка (только на
- *  неактивных — активная сессия и так звенит через свой канал). */
+/** Обновляет таб на месте: активность и непрочитанный звонок видны независимо друг от друга. */
 export function updateSessionTab(
   tab: HTMLElement,
   info: TabInfo,
@@ -162,7 +165,8 @@ export function updateSessionTab(
   setTabActivityDot(main, translate, showActivity);
   setTabLabel(main, info);
 
-  const showBell = info.bell && !active;
+  const showBell = info.bell;
+  tab.classList.toggle('has-bell', showBell);
   let bell = tab.querySelector<HTMLElement>('.th-tab__bell');
   if (showBell) {
     if (!bell && main) {
@@ -285,7 +289,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     for (const s of shown) {
       const hot = sessionWorking(s.title) || (!sessionManaged(s.title) && activity.isHot(s.name));
       // 🔔 — только пока звонок «не прочитан»; у текущей сессии он всегда прочитан.
-      const info = { ...s, bell: bellUnseen(s.name) && s.name !== opts.current };
+      const info = { ...s, bell: bellUnseen(s.name) };
       const card = renderSessionCard(info, t, {
         now,
         showActivity: hot,
@@ -370,7 +374,6 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
         tabs.delete(name);
       }
     }
-    markBellSeen(opts.current); // текущую сессию смотрим — её звонок прочитан
     for (const s of sessions) {
       const existing = tabs.get(s.name);
       const isCurrent = s.name === opts.current;
@@ -405,6 +408,11 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     }
   };
 
+  markBellSeen(opts.current); // просмотр при переключении, а не на каждом полле
+  const unsubscribeBell = onBellChange(() => {
+    updateAppBadge(unseenBellCount());
+    if (latest.length) render(latest);
+  });
   let stopped = false;
   let scrolledOnce = false;
   const refresh = async (): Promise<void> => {
@@ -439,6 +447,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     el: wrap,
     teardown(): void {
       stopped = true;
+      unsubscribeBell();
       window.clearInterval(timer);
       document.removeEventListener('keydown', onKeyDown);
     },

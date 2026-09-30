@@ -138,7 +138,7 @@ export const api = {
   sessions: () => request<SessionInfo[]>('GET', '/api/sessions'),
   createSession: (input: CreateSessionInput) =>
     request<CreateSessionResult | undefined>('POST', '/api/sessions', { body: input }),
-  killSession: (name: string) => request<void>('DELETE', `/api/sessions/${encodeURIComponent(name)}`),
+  killSession: (name: string) => request<void>('DELETE', `/api/sessions?name=${encodeURIComponent(name)}`),
   renameSession: (from: string, to: string) => request<void>('POST', '/api/sessions/rename', { body: { from, to } }),
   dirs: () => request<DirGroup[]>('GET', '/api/dirs'),
   diag: () => request<DiagInfo>('GET', '/api/diag'),

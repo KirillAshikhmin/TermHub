@@ -21,7 +21,7 @@ import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
 import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
-import { markBellSeen, unseenBellCount } from './bell-seen';
+import { markBellSeen, recordBell, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { detectPaths, filePathParts, parentRel } from './termlinks';
 import { filesHash, sfilesHash, termHash } from './routes';
@@ -469,6 +469,8 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   let pending: Uint8Array[] = [];
   let pendingBytes = 0;
   const sendData = (bytes: Uint8Array): void => {
+    markBellSeen(session);
+    updateAppBadge(unseenBellCount());
     if (readOnly) return;
     if (connected) {
       channel?.write(bytes);
@@ -516,7 +518,12 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     cols: term.cols,
     rows: term.rows,
     onData: (bytes) => term.write(bytes),
-    onBell: () => playBell(),
+    onBell: () => {
+      if (disposed) return;
+      recordBell(session);
+      updateAppBadge(unseenBellCount());
+      playBell();
+    },
     onStatus: (state) => {
       if (disposed) return;
       setDot(state);
