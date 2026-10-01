@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mountDashboard } from '../src/dashboard';
 import { setLang } from '../src/i18n';
-import type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileContent, FileEntry, FileStat, ShareInfo, TermChannel, TermChannelOpts, Transport } from '../src/transport';
+import type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FeedResult, FileContent, FileEntry, FileStat, ShareInfo, TermChannel, TermChannelOpts, Transport } from '../src/transport';
 import { toast } from '../src/ui';
 
 // vi.mock хоистится над импортами самим vitest — порядок объявления не важен.
@@ -39,6 +39,14 @@ class ScriptedTransport implements Transport {
 
   list(): Promise<SessionInfo[]> {
     return this.failing ? Promise.reject(new Error('boom')) : Promise.resolve([]);
+  }
+
+  capabilities(): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+
+  feed(): Promise<FeedResult> {
+    return Promise.resolve({ ok: false, reason: 'no-transcript', detail: '' });
   }
 
   create(req: CreateSessionInput): Promise<string> {

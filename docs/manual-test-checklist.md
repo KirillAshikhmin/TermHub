@@ -63,6 +63,40 @@ real mobile keyboard are required).
 - [ ] Return from a session workspace to the dashboard/login/pairing screen — the
       browser/PWA title returns to `TermHub`
 
+### Connection method and the alternate screen
+
+- [ ] Open a session — the chip in the header names the working connection method
+      (`control mode`), and the agent log shows the same mode
+- [ ] Tap the chip — a message "Next time the terminal opens: attach" appears, the
+      chip is marked as pending, yet the live terminal keeps running in its current
+      mode (input/output are not interrupted)
+- [ ] Go back to the session list and open the session again — the chip shows
+      `attach`; switch it back to `control mode`
+- [ ] Set `"terminalMode": "attach"` in the agent config and restart the agent — a
+      client request for `control mode` is ignored: the chip shows `attach` and is
+      marked as overridden — tapping it explains that the agent picks the mode (the
+      agent setting outranks the request)
+- [ ] In a Codex session (control mode) scroll the output with a finger — the
+      history scrolls locally, without the network, and no tmux status line is
+      visible
+- [ ] 📱 In that same agent session, drag a finger across the output — it is the
+      terminal history that scrolls, while the app window with its panels stays put
+      (the page itself does not move and pull-to-refresh does not fire); a slow
+      short drag moves the history too instead of standing still
+- [ ] A session with a running Claude Code has no history: the "Full-screen app"
+      badge is lit and there is nothing to scroll. Claude takes the alternate
+      screen on its own and the ban on the agent socket has been revoked
+      (ADR 0020) — a known limitation rather than a breakage
+- [ ] Run `vim` (or `htop`) in the session — a "Full-screen app" badge appears;
+      tapping it explains that such an app keeps no scrollback, and a touch drag
+      now scrolls inside the app itself
+- [ ] Quit `vim` — the badge disappears, the pane screen is restored and the
+      history scrolls locally again
+- [ ] Open "Diagnostics" — the "Terminal connection method (last known)" row names
+      the mode of the last connection (the agent does not report it in diagnostics,
+      so the row reflects the last state frame, possibly from another agent), and
+      "Client request" the one chosen by the switch
+
 ## Files
 
 - [ ] Open text, image, media, binary, and oversized/truncated files — every viewer

@@ -1,41 +1,38 @@
-// Мост pty ↔ tmux attach ↔ WebSocket. attachTerminal — чистая функция без знания
-// о WS: спавнит pty на `tmux attach`, отдаёт вывод байтами и сигналит о BEL/выходе.
+// Мост tmux ↔ WebSocket. attachTerminal — обвязка без знания о WS: открывает связь с
+// сессией через session-link (control mode с откатом на `tmux attach`), отдаёт вывод
+// байтами и сигналит о звонке, выбранном режиме, альтернативном экране и выходе.
 // wireTerminalWs строит из неё обработчик терминальных WS для AgentServer.
 
 import { execFileSync } from 'node:child_process';
 import { findSessionId, SESSION_ID_FORMAT } from './tmux-session.js';
-import { spawn } from 'node-pty';
-import type { IPty } from 'node-pty';
 import type { WebSocket, RawData } from 'ws';
 import { encodeFrame, jsonFrame, frameJson, decodeFrame, FrameType } from '@termhub/protocol';
+import type { TerminalMode } from '@termhub/protocol';
+import { open as openSession } from './session-link.js';
 import { defaultPtyPool, PtyUnavailableError, type PtyPool } from './pty-pool.js';
 
-/** Байт BEL: его появление в выводе pty → колокольчик. */
+/** Байт BEL: его появление в выводе → колокольчик. */
 const BEL = 0x07;
 /** В LAN один WS на терминал → мультиплексирования нет, channel всегда 0. */
 const LAN_CHANNEL = 0;
-
-/** Границы размера терминала: мусор с клиента не должен ронять pty. */
-const MIN_COLS = 20;
-const MAX_COLS = 500;
-const MIN_ROWS = 5;
-const MAX_ROWS = 300;
 
 /** Backpressure pty→WS: при переполнении буфера WS паузим pty, при сливе — возобновляем. */
 const WS_HIGH_WATER = 1 << 20; // 1 MiB — порог паузы pty
 const WS_LOW_WATER = 256 * 1024; // 256 KiB — порог возобновления
 const WS_DRAIN_INTERVAL_MS = 50; // период опроса bufferedAmount при паузе
 
-/** `destroy()` есть у UnixTerminal и закрывает master-FD, но отсутствует в IPty d.ts. */
-type DestroyablePty = IPty & { destroy(): void };
+/** Сколько вывода ждёт снимка экрана. Дальше ждать нечего: то, что было на экране,
+ *  уже перерисовано этим выводом, и придержанный мегабайт стоит дороже картинки. */
+const SNAPSHOT_BACKLOG_LIMIT = 1 << 20;
 
-// Историю scrollback клиенту НЕ дотягиваем. `tmux attach` первым же байтом шлёт
-// `ESC[?1049h` (вход в alt-screen) и не выходит из него до detach, поэтому любой дамп,
-// отданный клиенту, лёг бы в невидимый normal-буфер xterm. Глубокая история доступна
-// штатно — через copy-mode самого tmux (клиент форвардит колесо/драг в tmux при
-// `mouse on`), и там видно все 50000 строк history-limit без пропусков.
+/** Сколько живой вывод ждёт снимка по времени. Молчащий capture-pane отпустил бы его
+ *  только по сроку команды (10 с) — столько пользователь смотрел бы в пустой экран.
+ *  Поток без снимка лучше: снимок всего лишь дорисовывает то, что было до подключения. */
+const SNAPSHOT_HOLD_MS = 3000;
 
-/** Управление живым pty поверх tmux-сессии. */
+const EMPTY = new Uint8Array(0);
+
+/** Управление живым терминалом поверх tmux-сессии. */
 export interface TerminalHandle {
   write(b: Uint8Array): void;
   resize(c: number, r: number): void;
@@ -44,16 +41,18 @@ export interface TerminalHandle {
   /** Возобновить чтение из pty после слива буфера WS. */
   resume(): void;
   dispose(): void;
+  /** Способ подключения, выбранный при открытии; undefined — решение ещё идёт.
+   *  Он же уходит наружу колбэком `onMode`, как только становится известен. */
+  readonly mode?: TerminalMode;
+  /** Снимок экрана с историей — то, что уже было в сессии до подключения. Пусто в режиме
+   *  attach (там экран приходит перерисовкой) и при отказе tmux. Открытие терминала
+   *  снимок берёт само и отдаёт его первым же `onData`; метод остаётся для повторного. */
+  snapshot?(lines?: number): Promise<Uint8Array>;
 }
 
-/** Приводит size к целому в [min, max]; нечисловое/NaN → min. */
-function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.max(min, Math.min(max, Math.trunc(value)));
-}
-
-/** Спавнит pty на `tmux attach` к сессии и связывает её вывод с колбэками.
- *  Знанием о WS не обладает — обвязку строит wireTerminalWs. */
+/** Открывает терминал сессии и связывает его вывод с колбэками. Каким способом добыты
+ *  байты — control mode или прежний attach — решает session-link; знанием о WS функция
+ *  не обладает, обвязку строит wireTerminalWs. */
 export function attachTerminal(opts: {
   session: string;
   socketName?: string;
@@ -62,32 +61,27 @@ export function attachTerminal(opts: {
   onData: (b: Uint8Array) => void;
   onExit: () => void;
   onBell: (session: string) => void;
-  /** Общий budget назначается bridge-обвязкой; прямой attach остаётся тестируемым без него. */
+  /** Настройка агента (`config.terminalMode`): `attach` запрещает control mode
+   *  и просьбой клиента не перебивается. */
+  configMode?: TerminalMode;
+  /** Просьба клиента: LAN — поле первого кадра RESIZE, relay — поле кадра OPEN.
+   *  Незнакомое значение игнорируется. */
+  requestedMode?: string;
+  /** Режим выбран — клиент показывает его в интерфейсе. */
+  onMode?: (mode: TerminalMode) => void;
+  /** Приложение в активной панели вошло в альтернативный экран или вышло из него. */
+  onAltScreen?: (active: boolean) => void;
+  /** Общий budget назначается bridge-обвязкой; прямой вызов остаётся тестируемым без него. */
   ptyPool?: PtyPool;
 }): TerminalHandle {
   const socketArgs = opts.socketName ? ['-L', opts.socketName] : [];
   const sessionId = findSessionId(execFileSync('tmux', [...socketArgs, 'list-sessions', '-F', SESSION_ID_FORMAT],
     { encoding: 'utf8', timeout: 3000, maxBuffer: 4 * 1024 * 1024 }), opts.session);
-  const args = [...socketArgs, 'attach', '-t', `${sessionId}:`];
-  const lease = opts.ptyPool?.acquire();
-  let child: IPty;
-  try {
-    child = spawn('tmux', args, {
-      name: 'xterm-256color',
-      cols: clamp(opts.cols, MIN_COLS, MAX_COLS),
-      rows: clamp(opts.rows, MIN_ROWS, MAX_ROWS),
-      // encoding:null → node-pty отдаёт сырые Buffer'ы (в d.ts тип — string): вывод
-      // терминала бинарен, декодировать в строку нельзя (порвёт multibyte и BEL-скан).
-      encoding: null,
-      env: { ...process.env, TERM: 'xterm-256color' },
-    });
-  } catch (err) {
-    lease?.release();
-    throw err;
-  }
-
   let disposed = false;
-  const release = (): void => lease?.release();
+  // Снимок отдан (или его не будет) — дальше вывод идёт клиенту напрямую.
+  let streaming = false;
+  const backlog: Uint8Array[] = [];
+  let backlogBytes = 0;
 
   // Скан на «звонок» с переносом состояния между чанками: BEL (0x07) считается
   // звонком, только если он НЕ терминатор OSC-последовательности. Shell ставит
@@ -98,7 +92,7 @@ export function attachTerminal(opts: {
   // границу чанков (OSC может быть разорван между двумя onData).
   let inOsc = false;
   let escPending = false;
-  const scanBell = (bytes: Buffer): boolean => {
+  const scanBell = (bytes: Uint8Array): boolean => {
     let bell = false;
     for (let i = 0; i < bytes.length; i += 1) {
       const b = bytes[i];
@@ -122,52 +116,109 @@ export function attachTerminal(opts: {
     return bell;
   };
 
-  const onDataDisp = child.onData((chunk: string): void => {
-    const bytes = chunk as unknown as Buffer;
-    if (disposed) return;
-    if (scanBell(bytes)) opts.onBell(opts.session);
-    opts.onData(bytes);
+  /** Срок придержания: его снимает первый же flush, чей бы повод ни был. */
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearHold = (): void => {
+    if (holdTimer === undefined) return;
+    clearTimeout(holdTimer);
+    holdTimer = undefined;
+  };
+
+  /** Отпускает придержанный вывод: с этого момента поток идёт клиенту сразу. */
+  const flush = (): void => {
+    clearHold();
+    streaming = true;
+    for (const part of backlog) opts.onData(part);
+    backlog.length = 0;
+    backlogBytes = 0;
+  };
+
+  const link = openSession(sessionId, {
+    socketName: opts.socketName,
+    cols: opts.cols,
+    rows: opts.rows,
+    configMode: opts.configMode,
+    requestedMode: opts.requestedMode,
+    onData: (bytes: Uint8Array): void => {
+      if (disposed) return;
+      if (scanBell(bytes)) opts.onBell(opts.session);
+      if (streaming) {
+        opts.onData(bytes);
+        return;
+      }
+      backlog.push(bytes);
+      backlogBytes += bytes.length;
+      if (backlogBytes > SNAPSHOT_BACKLOG_LIMIT) flush();
+    },
+    onExit: (): void => {
+      if (disposed) return;
+      disposed = true;
+      clearHold();
+      opts.onExit();
+    },
+    onAltScreen: opts.onAltScreen,
+    ptyPool: opts.ptyPool,
   });
 
-  const onExitDisp = child.onExit((): void => {
-    if (disposed) return;
-    disposed = true;
-    release();
-    onDataDisp.dispose();
-    onExitDisp.dispose();
-    opts.onExit();
-  });
+  // В режиме attach решение принято синхронно и снимка не будет: tmux сам перерисует
+  // экран при подключении. Control mode экран не перерисовывает — то, что на нём уже
+  // есть, приходит снимком, и живой вывод до него придерживается: иначе он лёг бы
+  // на экран раньше картинки, поверх которой его напечатали.
+  if (link.mode !== undefined) streaming = true;
+  else
+    holdTimer = setTimeout((): void => {
+      // Отмена снимка по сроку — событие для лога: молча пропавшая история экрана
+      // неотличима от истории, которой не было, а отказ самой команды уже логируется.
+      console.warn(`[bridge] snapshot skipped for session ${opts.session}: no answer in ${SNAPSHOT_HOLD_MS} ms`);
+      flush();
+    }, SNAPSHOT_HOLD_MS);
+  void link.ready
+    .then(async (mode: TerminalMode): Promise<void> => {
+      if (disposed) return;
+      opts.onMode?.(mode);
+      // Снимок берётся сразу после готовности: пока capture-pane в полёте, session-link
+      // держит вывод панели, поэтому дважды на экран он не попадёт.
+      const shot = mode === 'control' ? await link.snapshot() : EMPTY;
+      if (disposed) return;
+      // Звонок по снимку не бьём: в истории он уже отзвонил, когда случился.
+      if (!streaming && shot.length > 0) opts.onData(shot);
+      flush();
+    })
+    .catch((err: unknown): void => {
+      // Это продолжение промиса, а не колбэк pty: непойманное отклонение здесь валит
+      // процесс агента целиком, а не одну вкладку. Терминал при этом живой — вывод
+      // отпускаем, иначе экран остался бы пустым до срока придержания.
+      console.error(`[bridge] terminal handover failed for session ${opts.session}:`, err);
+      // Та же проверка, что на успешном пути: у мёртвого терминала придержанным кускам
+      // идти уже некуда.
+      if (disposed) return;
+      flush();
+    });
 
   return {
+    get mode(): TerminalMode | undefined {
+      return link.mode;
+    },
     write(b: Uint8Array): void {
-      if (disposed) return;
-      child.write(Buffer.from(b));
+      link.write(b);
     },
     resize(c: number, r: number): void {
-      if (disposed) return;
-      child.resize(clamp(c, MIN_COLS, MAX_COLS), clamp(r, MIN_ROWS, MAX_ROWS));
+      link.resize(c, r);
+    },
+    snapshot(lines?: number): Promise<Uint8Array> {
+      return disposed ? Promise.resolve(EMPTY) : link.snapshot(lines);
     },
     pause(): void {
-      if (disposed) return;
-      child.pause();
+      link.pause();
     },
     resume(): void {
-      if (disposed) return;
-      child.resume();
+      link.resume();
     },
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      release();
-      onDataDisp.dispose();
-      onExitDisp.dispose();
-      try {
-        // kill() посылает только SIGHUP и оставляет master-FD node-pty открытым.
-        // destroy() закрывает его перед сигналом дочернему tmux.
-        (child as DestroyablePty).destroy();
-      } catch {
-        // pty уже мёртв — идемпотентно
-      }
+      clearHold();
+      link.dispose();
     },
   };
 }
@@ -186,12 +237,17 @@ export function wireTerminalWs(opts: {
   socketName?: string;
   attach?: typeof attachTerminal;
   ptyPool?: PtyPool;
+  /** Настройка агента: способ подключения терминала (`config.terminalMode`). */
+  configMode?: TerminalMode;
 }): (ws: WebSocket, session: string) => void {
   const attach = opts.attach ?? attachTerminal;
   return (ws: WebSocket, session: string): void => {
     let handle: TerminalHandle | undefined;
     // Таймер слива буфера WS: жив, пока pty на паузе из-за backpressure.
     let drainTimer: ReturnType<typeof setInterval> | undefined;
+    // Что клиент знает о терминале: способ подключения и альтернативный экран.
+    let mode: TerminalMode | undefined;
+    let altScreen = false;
 
     const send = (bytes: Uint8Array): void => {
       if (ws.readyState !== ws.OPEN) return;
@@ -210,6 +266,9 @@ export function wireTerminalWs(opts: {
       }
     };
 
+    /** Кадр состояния терминала. Клиент старой версии его не знает и пропускает. */
+    const sendState = (): void => send(jsonFrame(FrameType.TerminalState, LAN_CHANNEL, { mode, altScreen }));
+
     ws.on('message', (data: RawData, isBinary: boolean): void => {
       if (!isBinary) return; // текстовые фреймы протоколом не используются — явный отказ
       let frame;
@@ -219,9 +278,9 @@ export function wireTerminalWs(opts: {
         return; // битый фрейм — игнорируем
       }
       if (frame.type === FrameType.Resize) {
-        let dims: { cols: number; rows: number };
+        let dims: { cols: number; rows: number; mode?: string };
         try {
-          dims = frameJson<{ cols: number; rows: number }>(frame);
+          dims = frameJson<{ cols: number; rows: number; mode?: string }>(frame);
         } catch {
           return;
         }
@@ -229,18 +288,29 @@ export function wireTerminalWs(opts: {
           handle.resize(dims.cols, dims.rows);
           return;
         }
-        // Первое сообщение (RESIZE) даёт размеры до attach — только тут спавним pty.
-        // spawn может бросить синхронно (например, бинарь tmux отсутствует) — ловим,
-        // чтобы не уронить процесс непойманным исключением в обработчике WS-message,
-        // и закрываем соединение кодом 1011 (internal error).
+        // Первое сообщение (RESIZE) даёт размеры и просьбу о способе подключения —
+        // только тут открывается терминал. Открытие может бросить синхронно (например,
+        // бинарь tmux отсутствует) — ловим, чтобы не уронить процесс непойманным
+        // исключением в обработчике WS-message, и закрываем соединение кодом 1011.
         try {
           handle = attach({
             session,
             socketName: opts.socketName,
             cols: dims.cols,
             rows: dims.rows,
+            configMode: opts.configMode,
+            // Та же проверка, что у relay в doOpen: чужой JSON не обязан класть сюда строку.
+            requestedMode: typeof dims.mode === 'string' ? dims.mode : undefined,
             onData: (b) => send(encodeFrame({ type: FrameType.Data, channel: LAN_CHANNEL, payload: b })),
             onBell: (s) => send(jsonFrame(FrameType.Bell, LAN_CHANNEL, { session: s })),
+            onMode: (m) => {
+              mode = m;
+              sendState();
+            },
+            onAltScreen: (active) => {
+              altScreen = active;
+              sendState();
+            },
             onExit: () => {
               send(jsonFrame(FrameType.Close, LAN_CHANNEL, { session }));
               if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1000);
@@ -261,7 +331,7 @@ export function wireTerminalWs(opts: {
           if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1011);
         }
       } else if (frame.type === FrameType.Data) {
-        // DATA до первого RESIZE (pty ещё нет) — игнорируем.
+        // DATA до первого RESIZE (терминала ещё нет) — игнорируем.
         if (handle) handle.write(frame.payload);
       }
     });

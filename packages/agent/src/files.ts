@@ -2,7 +2,8 @@
 // Только чтение. Безопасность — realpath-проверка: реальный путь (после резолва
 // symlink) обязан лежать внутри одного из корней (защита от ../ и symlink-побега).
 
-import fsp from 'node:fs/promises';
+import fsp, { type FileHandle } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FileContent, FileEntry, FileInfo } from '@termhub/protocol';
@@ -62,9 +63,18 @@ function looksBinary(buf: Buffer): boolean {
   return false;
 }
 
+interface ChunkUpload {
+  temp: string;
+  handle: FileHandle;
+  offset: number;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 /** Обёртка над файловой системой в пределах корней (whitelist). */
 export class FileService {
   private readonly roots: string[];
+  private readonly uploads = new Map<string, ChunkUpload>();
+  private readonly uploading = new Set<string>();
   private readonly opener: (filePath: string) => Promise<void>;
 
   constructor(opts: { roots: string[]; opener?: (filePath: string) => Promise<void> }) {
@@ -249,14 +259,52 @@ export class FileService {
    *  не остаётся «половинки» под настоящим именем. Существующий файл не перетираем. */
   async uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void> {
     const target = await this.resolveDest(root, subpath);
-    const temp = uploadTempPath(target);
-    if (offset === 0) {
-      await this.assertAbsent(target);
-      await fsp.writeFile(temp, data);
-    } else {
-      await fsp.appendFile(temp, data);
+    if (this.uploading.has(target)) throw new Error('Upload in progress');
+    this.uploading.add(target);
+    let upload = this.uploads.get(target);
+    if (upload?.timer) clearTimeout(upload.timer);
+    try {
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid offset');
+      if (offset === 0) {
+        if (upload) await this.discardUpload(target, upload);
+        await this.assertAbsent(target);
+        if (new Set([...this.uploads.keys(), ...this.uploading]).size > 32) {
+          throw new Error('Too many active uploads');
+        }
+        const temp = uploadTempPath(target);
+        const handle = await fsp.open(temp, 'wx', 0o600);
+        upload = { temp, handle, offset: 0 };
+        this.uploads.set(target, upload);
+      }
+      if (!upload) throw new Error('No active upload');
+      if (offset !== upload.offset) throw new Error('Invalid offset');
+      // Пишем через эксклюзивно открытый дескриптор, не открывая путь повторно.
+      await upload.handle.writeFile(data);
+      upload.offset += data.length;
+      if (last) {
+        await upload.handle.close();
+        await this.finishUpload(upload.temp, target);
+        this.uploads.delete(target);
+      } else {
+        const current = upload;
+        upload.timer = setTimeout(() => {
+          void this.discardUpload(target, current).catch(() => undefined);
+        }, 5 * 60 * 1000);
+        upload.timer.unref();
+      }
+    } catch (err) {
+      if (upload) await this.discardUpload(target, upload);
+      throw err;
+    } finally {
+      this.uploading.delete(target);
     }
-    if (last) await this.finishUpload(temp, target);
+  }
+
+  private async discardUpload(target: string, upload: ChunkUpload): Promise<void> {
+    if (this.uploads.get(target) === upload) this.uploads.delete(target);
+    if (upload.timer) clearTimeout(upload.timer);
+    await upload.handle.close().catch(() => undefined);
+    await fsp.rm(upload.temp, { force: true });
   }
 
   /** Приём файла потоком (LAN: тело POST идёт прямо на диск, без base64 и лимита JSON). */
@@ -264,36 +312,33 @@ export class FileService {
     const target = await this.resolveDest(root, subpath);
     const temp = uploadTempPath(target);
     await this.assertAbsent(target);
-    const handle = await fsp.open(temp, 'w');
+    const handle = await fsp.open(temp, 'wx', 0o600);
     try {
-      const writable = handle.createWriteStream();
-      await pipeline(stream, writable);
-    } catch (err) {
-      await fsp.rm(temp, { force: true });
-      throw err;
+      await pipeline(stream, handle.createWriteStream());
+      await this.finishUpload(temp, target);
     } finally {
       await handle.close().catch(() => undefined);
+      await fsp.rm(temp, { force: true });
     }
-    await this.finishUpload(temp, target);
   }
 
-  /** Требует отсутствия файла назначения (загрузка не должна молча затирать). */
+  /** Требует отсутствия файла назначения, включая dangling symlink. */
   private async assertAbsent(target: string): Promise<void> {
-    const exists = await fsp
-      .stat(target)
-      .then(() => true)
-      .catch(() => false);
-    if (exists) throw new Error('File already exists');
+    try {
+      await fsp.lstat(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+    throw new Error('File already exists');
   }
 
-  /** Переносит временный файл на место назначения (с повторной проверкой отсутствия). */
+  /** Публикует файл атомарно, без перезаписи даже при конкурентном создании цели. */
   private async finishUpload(temp: string, target: string): Promise<void> {
     try {
-      await this.assertAbsent(target);
-      await fsp.rename(temp, target);
-    } catch (err) {
+      await fsp.link(temp, target);
+    } finally {
       await fsp.rm(temp, { force: true });
-      throw err;
     }
   }
 
@@ -313,7 +358,7 @@ export class FileService {
 /** Имя временного файла загрузки рядом с целью: скрытый, с явным суффиксом — если
  *  загрузка оборвалась, понятно, что это и что его можно удалить. */
 function uploadTempPath(target: string): string {
-  return path.join(path.dirname(target), `.${path.basename(target)}.termhub-part`);
+  return path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.termhub-part`);
 }
 
 /** mode → строка прав rwxr-xr-x (младшие 9 бит). */
@@ -359,7 +404,7 @@ export async function runFileOp(files: FileOpCtl, req: Record<string, unknown>):
       // relay-путь загрузки: данные приходят кусками в base64 (JSON-кадр).
       const data = Buffer.from(String(req.data ?? ''), 'base64');
       const offset = Number(req.offset ?? 0);
-      if (!Number.isInteger(offset) || offset < 0) throw new Error('Invalid offset');
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid offset');
       return files.uploadChunk(root, sub, data, offset, req.last === true);
     }
     default:

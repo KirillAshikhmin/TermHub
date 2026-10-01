@@ -1,103 +1,66 @@
 window.STATE =
 {
-  "slug": "open-on-host",
-  "title": "Открытие файла на хосте",
+  "slug": "feed-screen",
+  "title": "Экран ленты в приложении: поиск и переход к месту",
   "mode": "semi",
   "depth": "normal",
   "polish": null,
-  "tier": "T1",
-  "briefFile": "2026-08-29-brief.md",
+  "tier": "T2",
+  "briefFile": "2026-09-14-brief.md",
   "memoryFile": "CLAUDE.md",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
-  "startedAt": "2026-08-29T15:45:36+03:00",
-  "updatedAt": "2026-08-29T16:25:56+03:00",
-  "finishedAt": "2026-08-29T16:25:56+03:00",
+  "startedAt": "2026-09-14T17:43:20+03:00",
+  "updatedAt": "2026-09-14T23:48:36+03:00",
+  "finishedAt": "2026-09-14T23:48:36+03:00",
   "stages": [
-    { "id": "preflight", "status": "done", "startedAt": "2026-08-29T15:45:36+03:00", "finishedAt": "2026-08-29T15:46:32+03:00" },
-    { "id": "manifest", "status": "done", "startedAt": "2026-08-29T15:46:32+03:00", "finishedAt": "2026-08-29T15:47:05+03:00" },
-    { "id": "briefing", "status": "skipped", "startedAt": "2026-08-29T15:47:05+03:00", "finishedAt": "2026-08-29T15:47:24+03:00", "note": "вопросов не потребовалось" },
-    { "id": "spec", "status": "done", "startedAt": "2026-08-29T15:47:24+03:00", "finishedAt": "2026-08-29T15:49:06+03:00", "note": "15 историй; G2: расхождений нет" },
-    { "id": "plan", "status": "done", "startedAt": "2026-08-29T15:49:06+03:00", "finishedAt": "2026-08-29T15:49:50+03:00", "note": "3 таска, ярус T1, 2 волны; T03 добавлен по подтверждённой пользователем Codex-регрессии" },
-    { "id": "build", "status": "done", "startedAt": "2026-08-29T15:49:50+03:00", "finishedAt": "2026-08-29T16:22:30+03:00", "note": "3 из 3 тасков готовы; 715/715; build и deploy зелёные" },
-    { "id": "review", "status": "done", "startedAt": "2026-08-29T16:22:30+03:00", "finishedAt": "2026-08-29T16:25:56+03:00", "note": "blind acceptance: все пользовательские сценарии реализованы; служебные файлы закрываются финальным коммитом" },
-    { "id": "final", "status": "done", "startedAt": "2026-08-29T16:25:40+03:00", "finishedAt": "2026-08-29T16:25:56+03:00" }
+    { "id": "preflight", "status": "done",   "startedAt": "2026-09-14T17:43:20+03:00", "finishedAt": "2026-09-14T17:45:00+03:00" },
+    { "id": "manifest",  "status": "done",   "startedAt": "2026-09-14T17:45:00+03:00", "finishedAt": "2026-09-14T17:47:00+03:00" },
+    { "id": "briefing",  "status": "done",   "startedAt": "2026-09-14T17:47:00+03:00", "finishedAt": "2026-09-14T20:46:35+03:00", "note": "вопрос снят пользователем — вид по умолчанию решён за него" },
+    { "id": "spec",      "status": "done",   "startedAt": "2026-09-14T20:46:35+03:00", "finishedAt": "2026-09-14T20:46:35+03:00", "note": "G2: сверка нашла 4 пропуска и 6 полупокрытий, все закрыты" },
+    { "id": "plan",      "status": "done",   "startedAt": "2026-09-14T20:46:35+03:00", "finishedAt": "2026-09-14T20:46:35+03:00", "note": "3 таска в 3 волны" },
+    { "id": "build",     "status": "done",   "startedAt": "2026-09-14T20:46:35+03:00", "finishedAt": "2026-09-14T21:50:14+03:00", "note": "3 таска, 4 коммита" },
+    { "id": "review",    "status": "done",   "finishedAt": "2026-09-14T21:50:14+03:00", "note": "3 оси, 7 кругов правок" },
+    { "id": "final",     "status": "done",   "startedAt": "2026-09-14T21:50:14+03:00", "finishedAt": "2026-09-14T23:48:36+03:00", "note": "слепая приёмка в браузере нашла три вещи, которых не поймали 377 тестов и три круга ревью" }
   ],
-  "requirements": {
-    "total": 11, "done": 11, "inTicket": 0, "inSpec": 0,
-    "placeholder": 0, "deferred": 0, "dropped": 0
-  },
+  "requirements": { "total": 16, "done": 16, "inTicket": 0, "inSpec": 0, "placeholder": 0, "deferred": 0, "dropped": 0 },
   "tickets": [
-    {
-      "id": "01",
-      "title": "Безопасное системное открытие файла",
-      "requirements": ["R03", "R04", "R05", "R09i", "R10i"],
-      "blockedBy": [],
-      "wave": 1,
-      "zone": ["packages/agent/src/host-open.ts", "packages/agent/src/files.ts", "packages/agent/src/server.ts", "packages/agent/src/relay-link.ts", "packages/agent/test/"],
-      "status": "done",
-      "startedAt": "2026-08-29T15:51:08+03:00",
-      "finishedAt": "2026-08-29T16:07:40+03:00",
-      "retries": 0,
-      "repairs": 1,
-      "handoffs": 0
-    },
-    {
-      "id": "02",
-      "title": "Кнопка «Открыть на хосте» в Проводнике",
-      "requirements": ["R01", "R02", "R03", "R05", "R06", "R07", "R08", "R09i", "R10i"],
-      "blockedBy": ["01"],
-      "wave": 2,
-      "zone": ["packages/web/src/files.ts", "packages/web/src/i18n.ts", "packages/web/test/", "docs/manual-test-checklist*.md"],
-      "status": "done",
-      "startedAt": "2026-08-29T16:11:15+03:00",
-      "finishedAt": "2026-08-29T16:22:30+03:00",
-      "retries": 0,
-      "repairs": 0,
-      "handoffs": 0
-    },
-    {
-      "id": "03",
-      "title": "Копирование при mouse tracking Codex",
-      "requirements": ["R11"],
-      "blockedBy": [],
-      "wave": 2,
-      "zone": ["packages/web/src/term.ts", "packages/web/test/term-copy*.test.ts", "packages/web/test/term-harness.ts", "docs/manual-test-checklist*.md"],
-      "status": "done",
-      "startedAt": "2026-08-29T16:11:15+03:00",
-      "finishedAt": "2026-08-29T16:16:20+03:00",
-      "retries": 0,
-      "repairs": 0,
-      "handoffs": 0
-    }
+    { "id": "01", "title": "Клиент ленты: один вызов, два транспорта", "requirements": ["R13i","R09"], "blockedBy": [], "wave": 1, "zone": ["packages/web/src/transport.ts", "packages/web/src/api.ts", "packages/web/src/relay-transport.ts"], "status": "done", "startedAt": "2026-09-14T20:46:35+03:00", "retries": 0, "repairs": 2, "handoffs": 0, "finishedAt": "2026-09-14T21:04:48+03:00", "tests": "14 в своём файле; веб 356, relay-link 37", "commit": "a560e3d" },
+    { "id": "02", "title": "Экран ленты: вкладка, разговор, листание", "requirements": ["R01","R02","R05","R06","R07","R08","R10","R11i","R12i","R14i","R15i","R16i","G01"], "blockedBy": ["01"], "wave": 2, "zone": ["packages/web/src/feed.ts", "packages/web/src/workspace.ts", "packages/web/src/i18n.ts", "packages/web/src/theme.css"], "status": "done", "startedAt": "2026-09-14T20:54:51+03:00", "retries": 0, "repairs": 2, "handoffs": 0, "finishedAt": "2026-09-14T21:48:47+03:00", "tests": "20 в своём файле; веб 377", "commit": "815e7de" },
+    { "id": "03", "title": "Поиск по ленте и переход к месту", "requirements": ["R03","R03.1","R04"], "blockedBy": ["02"], "wave": 3, "zone": ["packages/web/src/feed.ts"], "status": "done", "startedAt": "2026-09-14T21:09:55+03:00", "retries": 0, "repairs": 2, "handoffs": 0, "finishedAt": "2026-09-14T21:50:14+03:00", "tests": "11 в своём файле; веб 377", "commit": "815e7de + fcf5425" }
+    ,
+    { "id": "04", "title": "Лента глазами человека", "requirements": ["R04","R08","R03","G01"], "blockedBy": ["02","03"], "wave": 4, "zone": ["packages/web/src/feed.ts", "packages/web/src/theme.css"], "status": "done", "startedAt": "2026-09-14T21:59:39+03:00", "retries": 1, "repairs": 1, "handoffs": 0, "note": "по слепой приёмке в браузере: прыжок без отметки, дубль ярлыка, поиск мимо вех", "finishedAt": "2026-09-14T23:48:36+03:00", "tests": "384 passed (было 377)", "commit": "0501339" }
   ],
   "singlePass": null,
-  "tests": {
-    "targetedHostOpen": "98/98",
-    "targetedWeb": "19/19",
-    "full": "715/715",
-    "build": "passed",
-    "deployHealth": "ok",
-    "doctor": "All good; 11 tmux sessions; relay reachable"
-  },
+  "tests": { "at": "2026-09-14T21:51:08+03:00", "command": "npx vitest run", "result": "1064 passed, 76 файлов, всё зелёное" },
   "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
   "additions": [],
-  "coverage": {
-    "runs": 1,
-    "findings": 0,
-    "extra": "7 защитных/ошибочных сценариев прикреплены к R03/R09i/R10i"
-  },
+  "coverage": { "at": "2026-09-14T20:46:35+03:00", "missing": 4, "half": 6, "fixed": "назначены поля страницы (agent/live/complete/eof/skipped/branch), порог «внизу», исчерпание поиска, повтор cursor-stale, текст гостю, шов экран↔поиск, ADR 0020 и нешифрованная история во «Вне рамок»" },
   "concerns": [
-    "drop: дублирование resolveSafe/stat и FilesCtl — локальная структурная вкусовщина, публичный контракт не расходится",
-    "drop: relay open-host test использует Gradle fixture — тест изолирован по поведению и зелёный",
-    "drop: xterm mouse semantics закреплена fake — точный внешний контракт дополнительно проверен в исходниках установленного xterm",
-    "drop: redraw+Command+C покрыты отдельными тестами вместо одного сквозного — оба шва зелёные",
-    "report: при open-host можно войти в edit/cancel до завершения opener и получить новый активный экземпляр кнопки; обычный double-click заблокирован, edge-case не удерживает релиз"
+    "РАЗБОР 14.09.2026: из 15 отложенных находок 13 закрыты дозапросами по ходу прогона (eof, признак «внизу», feed.loading, регрессы на гонки, поколение gen, две копии hasCap, errorScreen, снимок поиска, [hidden], snippetAt, loadOlder, ветки прокрутки, живая проверка прокрутки). Остались две.",
+    "ОСТАЁТСЯ (в отчёт): план резал таски 02 и 03 по теме, а не по волне — оба правили feed.ts, и починку экрана пришлось держать до возврата поиска. Стоило это одного лишнего круга ожидания.",
+    "ОСТАЁТСЯ (в отчёт, вне зоны): подписи вкладок holo-бара обрезаются на ширине 320 px — предсуществующее, при трёх вкладках «Репозиторий» уже не влезал; пятая ужимает сильнее. Бар чужой, не трогали."
   ],
-  "reviewers": { "manifestSpec": "/root/host_open_review_ms", "craft": "/root/host_open_review_craft" },
+
+  "reviewers": { "manifestSpec": "a2a187356ce9bffb2", "craft": "a8b323303a427bacb" },
   "blind": {
-    "verdict": "agreed",
-    "implemented": ["open-on-host UI", "macOS host opener", "session preservation", "deploy", "Codex mouse-mode copy"],
-    "initialPartial": "служебные run/memory файлы были не закоммичены на момент проверки; закрываются финальным коммитом",
-    "drift": []
+    "at": "2026-09-14T21:59:00+03:00",
+    "how": "в браузере, на живом агенте и четырёх живых сессиях владельца",
+    "verdict": "лента в приложении есть и читается; переход к месту доезжает наполовину",
+    "confirmed": [
+      "два нажатия от списка сессий до беседы; вкладка держится при смене сессии",
+      "реплики целиком без обрезки, мышление за тумблером, инструменты строкой; пустых записей нет",
+      "открытие на хвосте, подкачка вверх без рывка: высота 4738 → 9456, позиция 0 → 4681",
+      "поиск нашёл и перенёс ленту через ~1900 записей с 12.09 на 14.09; отсутствующее слово дало честный ответ",
+      "терминал рядом жив: уход на вкладку и обратно не порвал сессию"
+    ],
+    "drift": [
+      "прыжок не оставляет отметки: фон записи тот же, что у соседей (замерено 10 раз по 120 мс) — R04 доставлено наполовину",
+      "ярлык инструмента задваивается: «Bash Bash cd …», «exec exec python3 …»",
+      "строка инструмента — сырая команда на две-три строки, а не «что сделал»",
+      "поиск не покрывает записи вида note",
+      "находка, скрытая фильтром мышления, остаётся в списке и ведёт в никуда"
+    ],
+    "not_checked": "ширина 320 px (расширение держало вкладку скрытой с замороженным viewport), гость и сессия без беседы",
+    "ticket": "04"
   }
 }

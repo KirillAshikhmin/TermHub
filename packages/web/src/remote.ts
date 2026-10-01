@@ -6,7 +6,9 @@
 import { initCrypto } from '@termhub/protocol';
 import type { Identity } from '@termhub/protocol';
 
+import { forgetCaps, negotiateCaps } from './capabilities';
 import { mountDashboard } from './dashboard';
+import { mountFeed } from './feed';
 import { mountFiles } from './files';
 import { mountGradle } from './gradle';
 import { mountRepo } from './repo';
@@ -30,6 +32,7 @@ export type RemoteRoute =
   | { name: 'sfiles'; session: string }
   | { name: 'srepo'; session: string }
   | { name: 'sgradle'; session: string }
+  | { name: 'sfeed'; session: string }
   | { name: 'diag' }
   | { name: 'pair' };
 
@@ -79,6 +82,7 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
   let firstOnlineDone = false;
 
   const dropTransport = (): void => {
+    forgetCaps(); // пересечение принадлежало прежнему агенту
     transport?.close();
     transport = null;
     activeAgentId = null;
@@ -117,6 +121,13 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
     // переехать в другую сеть. Молча игнорируем отказ (старый агент кадра не знает,
     // гостю отдаётся пустой список) — это удобство, а не условие работы.
     if (status === 'online') void refreshLocalUrls();
+    // Объявление возможностей (ADR 0018): обмен один на транспорт и запомнен
+    // (capabilities.ts), так что два online подряд агента не переспрашивают. Гасит
+    // его forgetCaps: потеря потока здесь и смена агента в dropTransport — после
+    // любого из них следующий online объявляется заново (агент мог обновиться),
+    // старый промолчит и пересечение останется пустым.
+    if (status !== 'online') forgetCaps();
+    else if (transport) void negotiateCaps(transport);
   };
 
   /** Спрашивает у агента его локальные адреса и запоминает их у известного агента. */
@@ -316,6 +327,11 @@ export async function createRemote(opts: { rerender: () => void }): Promise<Remo
       }
       if (route.name === 'sgradle') {
         if (transport) return mountGradle(root, transport, route.session);
+        location.hash = '#/';
+        return mountAgentPicker(root);
+      }
+      if (route.name === 'sfeed') {
+        if (transport) return mountFeed(root, route.session, transport).teardown;
         location.hash = '#/';
         return mountAgentPicker(root);
       }

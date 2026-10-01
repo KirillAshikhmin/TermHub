@@ -116,6 +116,37 @@ describe('gradle — запуск в tmux (изолированный сокет
     expect((await svc.list()).some((s) => s.name === name)).toBe(true);
   });
 
+  it.each([undefined, 'some-other-source'])('rejects build metadata with source %s before reading or controlling it', async (owner) => {
+    fakeGradlew('exit 0');
+    tmux(['new-session', '-d', '-s', buildName]);
+    tmux(['set-option', '-t', `=${buildName}:`, '@termhub_gradle_cmd', './gradlew privateTask']);
+    tmux(['set-option', '-t', `=${buildName}:`, '@termhub_gradle_started', String(Date.now())]);
+    if (owner !== undefined)
+      tmux(['set-option', '-t', `=${buildName}:`, '@termhub_gradle_source', Buffer.from(owner).toString('base64')]);
+    const before = tmux(['display-message', '-p', '-t', `=${buildName}:`, '#{session_id}']);
+    await expect(runStatus({ session, socketName })).rejects.toThrow(/occupied/);
+    await expect(stopRun({ session, socketName })).rejects.toThrow(/occupied/);
+    await expect(stopRun({ session, socketName })).rejects.toThrow(/occupied/);
+    await expect(startRun({ session, dir: projectDir, tasks: ['build'], force: true, socketName })).rejects.toThrow(/occupied/);
+    expect(tmux(['display-message', '-p', '-t', `=${buildName}:`, '#{session_id}'])).toBe(before);
+  });
+
+  it('does not adopt or kill a pre-upgrade short-hash build', async () => {
+    const legacyName = '_gradle_work_00e13e';
+    tmux(['new-session', '-d', '-s', legacyName]);
+    tmux(['set-option', '-t', `=${legacyName}:`, '@termhub_gradle_cmd', './gradlew oldTask']);
+    const before = tmux(['display-message', '-p', '-t', `=${legacyName}:`, '#{session_id}']);
+    try {
+      fakeGradlew('exec sleep 20');
+      await startRun({ session, dir: projectDir, tasks: ['newTask'], force: true, socketName });
+      expect(tmux(['display-message', '-p', '-t', `=${legacyName}:`, '#{session_id}'])).toBe(before);
+      expect(tmux(['show-options', '-qv', '-t', `=${legacyName}:`, '@termhub_gradle_cmd']).trim()).toBe('./gradlew oldTask');
+      expect(tmux(['show-options', '-qv', '-t', `=${buildName}:`, '@termhub_gradle_source']).trim()).toBe('d29yaw==');
+    } finally {
+      tmux(['kill-session', '-t', `=${legacyName}`]);
+    }
+  });
+
   it('startRun поднимает сборочную сессию, доводит её до finished и печатает код выхода', async () => {
     fakeGradlew('exec sleep 2');
 

@@ -24,6 +24,28 @@ describe('очередь ввода до подключения', () => {
     document.body.append(root);
   });
 
+  it('floating keyboard shares panel state and appears only with collapsed toolbars', () => {
+    const { transport } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    const floating = root.querySelector<HTMLButtonElement>('.th-term__keyboard-toggle')!;
+    const panelKey = root.querySelector<HTMLButtonElement>('.th-qk__keyboard')!;
+    expect(floating.classList.contains('is-hidden')).toBe(true);
+    root.querySelector<HTMLButtonElement>('.th-holobar__hide')!.click();
+    expect(floating.classList.contains('is-hidden')).toBe(false);
+    const initial = panelKey.getAttribute('aria-pressed');
+    floating.click();
+    expect(panelKey.getAttribute('aria-pressed')).not.toBe(initial);
+    expect(floating.getAttribute('aria-pressed')).toBe(panelKey.getAttribute('aria-pressed'));
+    expect(localStorage.getItem('termhub.keyboard')).toBe(panelKey.getAttribute('aria-pressed') === 'true' ? '1' : '0');
+    root.querySelector<HTMLButtonElement>('.th-term__toolbar-toggle:not(.th-term__keyboard-toggle)')!.click();
+    expect(floating.classList.contains('is-hidden')).toBe(true);
+    panelKey.click();
+    expect(floating.getAttribute('aria-pressed')).toBe(initial);
+    root.querySelector<HTMLButtonElement>('.th-holobar__hide')!.click();
+    expect(floating.getAttribute('aria-pressed')).toBe(initial);
+    handle.teardown();
+  });
+
   it('terminal BEL becomes unread and input acknowledges it', () => {
     observeBells([]);
     const { transport, opened } = termTransport();

@@ -241,8 +241,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // Создание сессий — только владельцу. Для relay scope известен после первого list();
   // до него прячем (mode==='relay'), иначе «+» мигнул бы гостю. render() ниже выставит
   // финальное состояние по transport.clientScope.
-  // style.display, а НЕ .hidden: у .th-btn свой display в CSS, он перекрывает [hidden].
-  createBtn.style.display = opts.transport.mode === 'relay' ? 'none' : '';
+  createBtn.hidden = opts.transport.mode === 'relay';
   createBtn.addEventListener('click', () => {
     closePanel();
     opts.onCreate();
@@ -360,7 +359,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
     // крестики-закрытия табов.
     const guest = opts.transport.clientScope != null;
-    createBtn.style.display = guest ? 'none' : '';
+    createBtn.hidden = guest;
     for (const el of tabs.values()) {
       const c = el.querySelector<HTMLElement>('.th-tab__close');
       if (c) c.style.display = guest ? 'none' : '';

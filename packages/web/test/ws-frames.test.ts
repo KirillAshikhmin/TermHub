@@ -2,7 +2,16 @@
 import { jsonFrame } from '@termhub/protocol/frames';
 import { describe, expect, it } from 'vitest';
 
-import { dataFrame, decodeFrame, frameJson, FrameType, LAN_CHANNEL, parseError, resizeFrame } from '../src/ws-frames';
+import {
+  dataFrame,
+  decodeFrame,
+  frameJson,
+  FrameType,
+  LAN_CHANNEL,
+  parseError,
+  parseTerminalState,
+  resizeFrame,
+} from '../src/ws-frames';
 import type { Frame } from '../src/ws-frames';
 
 describe('ws-frames', () => {
@@ -19,6 +28,33 @@ describe('ws-frames', () => {
     expect(frame.type).toBe(FrameType.Resize);
     expect(frame.channel).toBe(LAN_CHANNEL);
     expect(frameJson<{ cols: number; rows: number }>(frame)).toEqual({ cols: 120, rows: 40 });
+  });
+
+  it('resizeFrame с просьбой о режиме → JSON {cols,rows,mode}', () => {
+    const frame = decodeFrame(resizeFrame(120, 40, 'attach'));
+    expect(frame.type).toBe(FrameType.Resize);
+    expect(frameJson<Record<string, unknown>>(frame)).toEqual({ cols: 120, rows: 40, mode: 'attach' });
+  });
+
+  it('parseTerminalState — режим и альтернативный экран приходят независимо', () => {
+    const onlyMode = decodeFrame(jsonFrame(FrameType.TerminalState, LAN_CHANNEL, { mode: 'control' }));
+    expect(parseTerminalState(onlyMode)).toEqual({ mode: 'control' });
+    const onlyAlt = decodeFrame(jsonFrame(FrameType.TerminalState, LAN_CHANNEL, { altScreen: false }));
+    expect(parseTerminalState(onlyAlt)).toEqual({ altScreen: false });
+  });
+
+  it('parseTerminalState — чужие значения полей отброшены, а не приняты за состояние', () => {
+    const frame = decodeFrame(jsonFrame(FrameType.TerminalState, LAN_CHANNEL, { mode: 'turbo', altScreen: 1 }));
+    expect(parseTerminalState(frame)).toEqual({});
+  });
+
+  it('parseTerminalState — битый JSON payload не роняет клиента, возвращает {}', () => {
+    const frame: Frame = {
+      type: FrameType.TerminalState,
+      channel: LAN_CHANNEL,
+      payload: new TextEncoder().encode('{oops'),
+    };
+    expect(parseTerminalState(frame)).toEqual({});
   });
 
   it('пустой DATA-фрейм роундтрипится (только заголовок)', () => {

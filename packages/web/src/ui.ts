@@ -11,9 +11,14 @@ import { currentTheme, toggleTheme } from './theme';
 import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
-import { sgradleHash, termHash } from './routes';
+import { whenCap } from './capabilities';
+import { sfeedHash, sgradleHash, termHash } from './routes';
 
 const ICONS: Record<string, string> = {
+  terminal: '<path d="M4 6l6 6-6 6M12 18h8"/>',
+  branch: '<circle cx="6" cy="5" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="19" r="3"/><path d="M6 8v8M18 9a9 9 0 0 1-9 9"/>',
+  build: '<path d="M14 3l7 7-4 4-3-3-8 9-3-3 9-8-3-3z"/>',
+  keyboard: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M7 16h10"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   bell: '<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>',
@@ -34,6 +39,7 @@ const ICONS: Record<string, string> = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  feed: '<path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3.5 21l1.9-5.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 13h4.5"/>',
 };
 
 /** Инлайн-иконка (stroke = currentColor). */
@@ -402,11 +408,12 @@ export function knownGradle(transport: Transport, session: string): GradleProjec
 }
 
 /** Android-Holo таб-бар рабочего пространства сессии: Сессия / Проводник / Репозиторий
- *  (+ Gradle у Gradle-проекта) и «⋮» справа (сворачивает тулбар). Активный таб подчёркнут
- *  снизу цветной полосой во всю ширину. Скролла нет — табы делят ширину поровну.
- *  Проводник/Репозиторий ведут на session-scoped роуты (по пути сессии). */
+ *  (+ Gradle у Gradle-проекта, + Лента у агента с возможностью `feed`) и «⋮» справа
+ *  (сворачивает тулбар). Активный таб подчёркнут снизу цветной полосой во всю ширину.
+ *  Скролла нет — табы делят ширину поровну. Проводник/Репозиторий ведут на
+ *  session-scoped роуты (по пути сессии). */
 export function renderHoloBar(opts: {
-  active: 'term' | 'files' | 'repo' | 'gradle';
+  active: 'term' | 'files' | 'repo' | 'gradle' | 'feed';
   session: string;
   transport?: Transport;
   onHide: () => void;
@@ -417,14 +424,22 @@ export function renderHoloBar(opts: {
   const enc = encodeURIComponent(opts.session);
   const mkTab = (key: 'term' | 'files' | 'repo' | 'gradle', label: string, hash: string): HTMLElement => {
     const a = document.createElement('a');
-    a.className = `th-holotab${opts.active === key ? ' is-active' : ''}`;
+    a.className = `th-holotab th-holotab--${key}${opts.active === key ? ' is-active' : ''}`;
     a.href = hash;
-    a.textContent = label;
+    const icon = svgIcon({ term: 'terminal', files: 'folder', repo: 'branch', gradle: 'build' }[key]);
+    icon.classList.add('th-holotab__icon');
+    const text = document.createElement('span');
+    text.className = 'th-holotab__label';
+    text.textContent = label;
+    a.append(icon, text);
+    a.setAttribute('aria-label', label);
+    a.title = label;
     a.setAttribute('role', 'tab');
     a.setAttribute('aria-selected', String(opts.active === key));
     return a;
   };
-  bar.append(mkTab('term', t('holo.session'), termHash(opts.session)));
+  const termTab = mkTab('term', t('holo.session'), termHash(opts.session));
+  bar.append(termTab);
   const scope = opts.transport?.clientScope;
   if (!scope || scope.files) {
     bar.append(mkTab('files', t('nav.files'), `#/sfiles/${enc}`));
@@ -439,9 +454,36 @@ export function renderHoloBar(opts: {
   hide.addEventListener('mousedown', (e) => e.preventDefault());
   hide.addEventListener('click', opts.onHide);
   bar.append(hide);
-  // Четвёртый таб — только у Gradle-проекта, и бар его не ждёт: три таба уже на
-  // экране, Gradle встаёт перед «⋮», когда детект вернул проект (история 4).
   const transport = opts.transport;
+  // Лента — не пятая вкладка, а маленькая кнопка ВНУТРИ плашки «Терминал», справа
+  // от подписи: ряд остаётся из четырёх, а лента из него достижима. Её нет вовсе,
+  // если возможность `feed` объявили не обе стороны (ADR 0018); пересечение считается
+  // на подключении, но после перезагрузки обмен бывает ещё в пути — тогда кнопка
+  // встаёт по его ответу. Файловой области лента не касается: гостю без файлов она
+  // видна (§8). На экране ленты (`active: 'feed'`) не подсвечен ни один таб, и
+  // «Терминал» первым же и есть дорога назад.
+  if (transport) {
+    void whenCap('feed', transport).then((ok) => {
+      if (!ok) return;
+      const feed = document.createElement('button');
+      feed.type = 'button';
+      feed.className = 'th-holotab__feed';
+      feed.setAttribute('aria-label', t('holo.feed'));
+      feed.title = t('holo.feed');
+      feed.append(svgIcon('feed'));
+      feed.addEventListener('click', (e) => {
+        // Кнопка живёт внутри ссылки на терминал: без этих двух строк клик по ней
+        // ушёл бы и в переход вкладки, и промахнуться мимо ленты стало бы легко.
+        e.preventDefault();
+        e.stopPropagation();
+        location.hash = sfeedHash(opts.session);
+      });
+      termTab.append(feed);
+    });
+  }
+  //
+  // Таб Gradle — только у Gradle-проекта, и бар его не ждёт: остальные табы уже на
+  // экране, Gradle встаёт последним, когда детект вернул проект (история 4).
   if (transport && (!scope || scope.files)) {
     void detectGradle(transport, opts.session).then(
       (project) => {
@@ -462,6 +504,7 @@ export function renderHoloBar(opts: {
 export function wireToolbar(opts: {
   toolbars: HTMLElement[];
   floatMount: HTMLElement;
+  collapsedControls?: HTMLElement[];
   onChange?: () => void;
 }): { hide: () => void } {
   let visible = readToolbarVisible();
@@ -473,6 +516,7 @@ export function wireToolbar(opts: {
   const apply = (): void => {
     for (const el of opts.toolbars) el.classList.toggle('is-hidden', !visible);
     toggle.classList.toggle('is-hidden', visible);
+    for (const control of opts.collapsedControls ?? []) control.classList.toggle('is-hidden', visible);
     const label = visible ? t('term.toolbarHide') : t('term.toolbarShow');
     toggle.setAttribute('aria-label', label);
     toggle.title = label;
@@ -484,7 +528,7 @@ export function wireToolbar(opts: {
     opts.onChange?.();
   };
   toggle.addEventListener('click', () => set(true));
-  opts.floatMount.append(toggle);
+  opts.floatMount.append(toggle, ...(opts.collapsedControls ?? []));
   apply();
   return { hide: () => set(false) };
 }

@@ -89,6 +89,13 @@
   box-sizing: border-box;
 }
 
+/* Скрытое не показывается — одним правилом на всё приложение: собственный display
+   элемента (у кнопки, полосы, списка) иначе перебивает атрибут hidden, и элемент
+   висит на экране вопреки коду. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -1326,13 +1333,45 @@ select.th-input {
   touch-action: none;
   overscroll-behavior: contain;
 }
-.th-term__host .xterm-viewport,
-.th-term__host .xterm-screen {
+/* touch-action НЕ наследуется, а жест браузер решает по элементу под пальцем: хватает
+   одного непокрытого слоя, чтобы касание ушло в панораму страницы — а за ней (screen
+   следует за visualViewport, см. reposition в term.ts) уедет весь фиксированный экран
+   вместе с вкладками сессий и панелью клавиш, с кашей из недорисованных кусков.
+   Слои внутри терминала рисует библиотека и меняет от версии к версии (xterm 6 завёл
+   обёртку .xterm-scrollable-element, а у WebGL-рендерера под пальцем вообще <canvas>),
+   поэтому гасим жест на ВСЁМ поддереве хоста, а не на списке известных классов: нативная
+   прокрутка внутри терминала не нужна нигде — историю двигает наш JS (term.scrollLines),
+   а ползунок библиотеки тащится на pointer-событиях, которым touch-action:none только
+   помогает (браузер не отбирает у них жест через pointercancel). */
+.th-term__host * {
   touch-action: none;
 }
 .th-term__host .xterm {
   height: 100%;
   padding: 0;
+}
+/* Единственный слой библиотеки, объявленный нативным скролл-контейнером: xterm.css
+   держит на вьюпорте `overflow-y: scroll` с времён xterm 5, где история листалась им.
+   В xterm 6 вьюпорт пуст (прокрутку рисует .xterm-scrollable-element, scrollTop
+   вьюпорта всегда 0), но скролл-контейнером он остаётся — то есть целью и для панорамы
+   пальцем, и для scroll-into-view. Убираем, чтобы двигался ровно тот слой, которым
+   управляет наш код. Селектор с .xterm — чтобы перебить правило библиотеки: xterm.css
+   грузится ПОСЛЕ темы (term.ts импортирует его следом за main.ts), и при равной
+   специфичности выигрывает оно. Всему поддереву overflow не задаём намеренно:
+   .xterm-screen держит служебный textarea на left:-9999em, и скролл-контейнер из него
+   увёл бы терминал на 9999px при первом же фокусе ввода. Обе оси перечислены намеренно:
+   `hidden` по одной оси и `visible` по другой вычисляются в `auto` — скролл-контейнер
+   вернулся бы, только поперёк. */
+.th-term__host .xterm .xterm-viewport {
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+/* Полноэкранное приложение (альтернативный экран) истории не держит вовсе: листать нечего,
+   а ползунок библиотеки всё равно всплывает от каждого нашего wheel (тач-жест транслируется
+   в него) и обещает прокрутку, которой нет. Пока экран занят таким приложением — прячем.
+   Класс ставит term.ts по кадру состояния от агента и снимает на каждом подключении. */
+.th-term__host.is-alt .xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
 }
 
 /* Круглая кнопка-переключатель панели инструментов, поверх терминала справа-сверху. */
@@ -1414,6 +1453,7 @@ main.th-files {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   height: 44px;
   padding: 0 4px;
   text-decoration: none;
@@ -1958,72 +1998,72 @@ main.th-gradle {
 
 /* Подсветка синтаксиса (highlight.js), GitHub-палитра. Тёмная по умолчанию,
    светлая — при data-theme='light'. */
-.th-fileview__text .hljs-comment,
-.th-fileview__text .hljs-quote {
+:is(.th-fileview__text, .th-feed__md) .hljs-comment,
+:is(.th-fileview__text, .th-feed__md) .hljs-quote {
   color: #8b949e;
   font-style: italic;
 }
-.th-fileview__text .hljs-keyword,
-.th-fileview__text .hljs-selector-tag,
-.th-fileview__text .hljs-literal,
-.th-fileview__text .hljs-type,
-.th-fileview__text .hljs-doctag {
+:is(.th-fileview__text, .th-feed__md) .hljs-keyword,
+:is(.th-fileview__text, .th-feed__md) .hljs-selector-tag,
+:is(.th-fileview__text, .th-feed__md) .hljs-literal,
+:is(.th-fileview__text, .th-feed__md) .hljs-type,
+:is(.th-fileview__text, .th-feed__md) .hljs-doctag {
   color: #ff7b72;
 }
-.th-fileview__text .hljs-string,
-.th-fileview__text .hljs-attr,
-.th-fileview__text .hljs-regexp {
+:is(.th-fileview__text, .th-feed__md) .hljs-string,
+:is(.th-fileview__text, .th-feed__md) .hljs-attr,
+:is(.th-fileview__text, .th-feed__md) .hljs-regexp {
   color: #a5d6ff;
 }
-.th-fileview__text .hljs-number,
-.th-fileview__text .hljs-built_in {
+:is(.th-fileview__text, .th-feed__md) .hljs-number,
+:is(.th-fileview__text, .th-feed__md) .hljs-built_in {
   color: #79c0ff;
 }
-.th-fileview__text .hljs-title,
-.th-fileview__text .hljs-section {
+:is(.th-fileview__text, .th-feed__md) .hljs-title,
+:is(.th-fileview__text, .th-feed__md) .hljs-section {
   color: #d2a8ff;
 }
-.th-fileview__text .hljs-name,
-.th-fileview__text .hljs-tag,
-.th-fileview__text .hljs-bullet {
+:is(.th-fileview__text, .th-feed__md) .hljs-name,
+:is(.th-fileview__text, .th-feed__md) .hljs-tag,
+:is(.th-fileview__text, .th-feed__md) .hljs-bullet {
   color: #7ee787;
 }
-.th-fileview__text .hljs-attribute,
-.th-fileview__text .hljs-variable,
-.th-fileview__text .hljs-params {
+:is(.th-fileview__text, .th-feed__md) .hljs-attribute,
+:is(.th-fileview__text, .th-feed__md) .hljs-variable,
+:is(.th-fileview__text, .th-feed__md) .hljs-params {
   color: #ffa657;
 }
-.th-fileview__text .hljs-meta {
+:is(.th-fileview__text, .th-feed__md) .hljs-meta {
   color: #8b949e;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-comment,
-:root[data-theme='light'] .th-fileview__text .hljs-quote {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-comment,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-quote {
   color: #6e7781;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-keyword,
-:root[data-theme='light'] .th-fileview__text .hljs-selector-tag,
-:root[data-theme='light'] .th-fileview__text .hljs-literal,
-:root[data-theme='light'] .th-fileview__text .hljs-type {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-keyword,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-selector-tag,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-literal,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-type {
   color: #cf222e;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-string,
-:root[data-theme='light'] .th-fileview__text .hljs-attr {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-string,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-attr {
   color: #0a3069;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-number,
-:root[data-theme='light'] .th-fileview__text .hljs-built_in {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-number,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-built_in {
   color: #0550ae;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-title,
-:root[data-theme='light'] .th-fileview__text .hljs-section {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-title,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-section {
   color: #8250df;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-name,
-:root[data-theme='light'] .th-fileview__text .hljs-tag {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-name,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-tag {
   color: #116329;
 }
-:root[data-theme='light'] .th-fileview__text .hljs-attribute,
-:root[data-theme='light'] .th-fileview__text .hljs-variable {
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-attribute,
+:root[data-theme='light'] :is(.th-fileview__text, .th-feed__md) .hljs-variable {
   color: #953800;
 }
 .th-fileview__note {
@@ -2106,6 +2146,42 @@ main.th-gradle {
   white-space: nowrap;
 }
 
+/* Пометка приложения, ушедшего в альтернативный экран: у такого истории не бывает.
+   Нажатие объясняет причину словами (на телефоне подсказки по наведению нет). */
+/* Способ подключения терминала: одной буквой (C — control mode, A — attach),
+   слово целиком живёт в подсказке. Показывает режим, который вернул агент, и служит
+   переключателем просьбы на следующее открытие (is-pending — просьба ждёт его). */
+.th-termbar__mode {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-dim);
+  background: none;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  cursor: pointer;
+}
+
+.th-termbar__mode.is-pending {
+  color: var(--accent);
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+/* Агент подключил не тем способом, который просили (настройка агента или откат). */
+.th-termbar__mode.is-overridden {
+  color: var(--claude);
+  border-color: var(--claude);
+}
+
 /* Индикатор активности сессии — маленький кружок перед именем, «гуляющий» между
    двумя позициями (как индикатор в IDE). Кружок нарисован CSS (без шрифтовых
    артефактов брайля), движение — transform (надёжно везде). */
@@ -2148,9 +2224,6 @@ main.th-gradle {
   padding-bottom: max(8px, env(safe-area-inset-bottom));
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
-}
-.th-compose[hidden] {
-  display: none;
 }
 .th-compose__input {
   flex: 1;
@@ -2871,4 +2944,453 @@ main.th-gradle {
 /* Непрочитанный звонок заметен и в выбранной вкладке. */
 .th-tab.has-bell {
   box-shadow: inset 0 -3px 0 #d99b20;
+}
+
+/* ── Вкладка «Лента»: беседа сессии ─────────────────────────────────── */
+/* Шапка со значком агента и тумблером мышления, ниже — прокручиваемый список
+   записей. Ширина не меньше 320 px: длинные строки и «неразрывные» пути ломаются
+   переносом, а не уезжают вбок. */
+main.th-feed {
+  position: relative; /* якорь для плавающей ⋮ (wireToolbar) */
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.th-feed__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.th-feed__agent {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--claude);
+}
+.th-feed__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.th-feed__live::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+.th-feed__toggle-wrap {
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+/* Поиск живёт над списком: поле, строка о ходе поиска и находки столбиком. */
+.th-feed__search {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.th-feed__query {
+  font-size: 0.9rem;
+}
+.th-feed__searchstatus {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.th-feed__searchmore {
+  align-self: flex-start;
+  min-height: 0;
+}
+/* Находки не съедают ленту: свой столбик с прокруткой, не выше трети экрана. */
+.th-feed__hits:empty {
+  display: none;
+}
+.th-feed__hits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 34vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.th-feed__hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.th-feed__hit:hover {
+  background: var(--bg-hover);
+}
+/* Находка без точки прыжка (веха склейки) или временно скрытая тумблером
+   мышления — не притворяется живой: вид как у обычной, но не откликается. */
+.th-feed__hit:disabled {
+  opacity: 0.55;
+  cursor: default;
+  pointer-events: none;
+}
+.th-feed__hittime,
+.th-feed__hitkind {
+  flex: none;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+/* Строка вокруг совпадения — одна строка на находку: остаток прячется, а не
+   растягивает полосу поиска вбок. */
+.th-feed__hittext {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.th-feed__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch; /* инерция прокрутки на телефоне */
+  overscroll-behavior: contain;
+  padding: 10px 12px 16px;
+}
+.th-feed__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.th-feed__edge,
+.th-feed__skipped,
+.th-feed__notice {
+  padding: 8px 2px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  text-align: center;
+}
+.th-feed__notice {
+  color: var(--text);
+}
+/* Общее для всех записей: длинная строка переносится, а не растягивает экран. */
+.th-feed__entry {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.th-feed__entry--human,
+.th-feed__entry--agent,
+.th-feed__entry--thinking {
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+.th-feed__entry--human {
+  background: var(--accent-tint);
+  border-color: transparent;
+}
+.th-feed__entry--thinking {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-dim);
+}
+.th-feed__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+.th-feed__who {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.th-feed__text {
+  white-space: pre-wrap; /* перевод строки от агента — часть сообщения */
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.th-feed__cut {
+  margin-top: 4px;
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+/* Вызов инструмента — одна строка мелким шрифтом, без фона; подряд идущие стоят
+   столбиком без зазора. */
+.th-feed__entry--tool {
+  display: flex;
+  gap: 6px;
+  padding: 0 4px;
+  font-size: 0.76rem;
+  color: var(--text-faint);
+}
+.th-feed__entry--tool.is-cont {
+  margin-top: -6px;
+}
+.th-feed__toolname {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.th-feed__tooltext {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Веха — тонкая линия с подписью посередине. */
+.th-feed__entry--note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+.th-feed__notelabel {
+  margin-top: -12px;
+  padding: 0 8px;
+  background: var(--bg);
+}
+.th-feed__notetext {
+  text-align: center;
+}
+/* Запись, к которой перенесли ленту по находке. Одной рамки мало: на записи
+   человека она сливается с уже акцентным фоном пузыря, а глазами замечено, что
+   тонкая линия среди десятка записей теряется — поэтому фон меняется тоже, и
+   заметно сильнее любого фона записи (accent-tint у человека — 14%). */
+.th-feed__entry.is-hit {
+  background: rgba(56, 211, 168, 0.35);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .th-feed__entry.is-hit {
+    background: rgba(22, 183, 144, 0.3);
+  }
+}
+:root[data-theme='light'] .th-feed__entry.is-hit {
+  background: rgba(22, 183, 144, 0.3);
+}
+
+/* ── Разметка ответа агента в ленте ─────────────────────────────────
+   Ответ приезжает markdown-ом и в терминале нарисован; здесь он рисуется тем же
+   набором. Сама запись держит white-space: pre-wrap (перевод строки от агента —
+   часть сообщения), поэтому у разметки он снимается и возвращается абзацам. */
+.th-feed__md {
+  white-space: normal;
+}
+.th-feed__md > :first-child {
+  margin-top: 0;
+}
+.th-feed__md > :last-child {
+  margin-bottom: 0;
+}
+.th-feed__md p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+.th-feed__md h1,
+.th-feed__md h2,
+.th-feed__md h3,
+.th-feed__md h4,
+.th-feed__md h5,
+.th-feed__md h6 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+  font-weight: 650;
+  color: var(--text);
+}
+.th-feed__md h1 {
+  font-size: 1.15rem;
+}
+.th-feed__md h2 {
+  font-size: 1.06rem;
+}
+.th-feed__md h3 {
+  font-size: 1rem;
+}
+.th-feed__md h4,
+.th-feed__md h5,
+.th-feed__md h6 {
+  font-size: 0.94rem;
+  color: var(--text-dim);
+}
+.th-md__list {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.th-md__list .th-md__list {
+  margin: 2px 0;
+}
+.th-feed__md li {
+  margin: 2px 0;
+}
+.th-feed__md li > p {
+  margin: 0 0 4px;
+}
+.th-md__link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.th-md__inlinecode {
+  padding: 1px 4px;
+  border-radius: var(--r-xs, 4px);
+  background: var(--bg-elev-2);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+/* Блок кода прокручивается сам, а не растягивает ленту: строка в ответе агента
+   бывает длиннее экрана телефона, и перенос кода ломает его чтение. */
+.th-md__pre {
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.th-md__code {
+  display: block;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+/* Та же оговорка, что и у кода: широкая таблица едет в своей обёртке. */
+.th-md__tablewrap {
+  margin: 8px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.th-md__table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.th-md__table th,
+.th-md__table td {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.th-md__table th {
+  background: var(--bg-elev-2);
+  font-weight: 650;
+}
+.th-feed__md blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+.th-feed__md hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+.th-feed__md s {
+  color: var(--text-dim);
+}
+/* Кнопка «вниз»: у конца беседы её нет (feed.ts прячет), поэтому последнюю запись
+   она не закрывает; ниже полосы поиска, поверх списка — как FAB у Проводника. */
+.th-feed__fab {
+  width: 46px;
+  height: 46px;
+}
+.th-feed__fab .th-icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* Лента — кнопка ВНУТРИ плашки «Терминал», справа от подписи. Подпись съедается
+   многоточием сама по себе, кнопка при этом не сжимается и не обрезается: ряд на
+   узком экране остаётся из четырёх читаемых вкладок. */
+.th-holotab__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-holotab__feed {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.th-holotab__feed .th-icon {
+  width: 15px;
+  height: 15px;
+}
+.th-holotab__feed:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.th-holotab__feed:active {
+  color: var(--accent);
+}
+
+/* На телефоне навигация компактная, клавиатура доступна и со скрытыми панелями. */
+.th-holotab__icon,
+.th-term__keyboard-toggle { display: none; }
+@media (max-width: 600px), (pointer: coarse) {
+  .th-holotab__icon { display: inline-flex; width: 22px; height: 22px; }
+  .th-holotab__label { display: none; }
+  .th-term__keyboard-toggle {
+    display: flex;
+    top: auto;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    right: max(12px, env(safe-area-inset-right));
+    width: 44px;
+    height: 44px;
+  }
+  .th-term__keyboard-toggle.is-hidden { display: none; }
+  .th-term__keyboard-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 }

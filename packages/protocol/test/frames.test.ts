@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FrameType, decodeFrame, encodeFrame, frameJson, jsonFrame } from '../src/index.js';
-import type { Frame, SessionInfo } from '../src/index.js';
+import type { Frame, SessionInfo, TerminalState } from '../src/index.js';
 
 describe('encodeFrame/decodeFrame', () => {
   it('roundtrip с пустым payload', () => {
@@ -45,6 +45,15 @@ describe('encodeFrame/decodeFrame', () => {
     expect(() => encodeFrame({ type: FrameType.Data, channel: 65536, payload: new Uint8Array(0) })).toThrow(
       RangeError,
     );
+  });
+
+  it('кадр состояния терминала занял следующий свободный номер за GradleResult', () => {
+    expect(FrameType.GradleResult).toBe(42);
+    expect(FrameType.TerminalState).toBe(43);
+    const decoded = decodeFrame(jsonFrame(FrameType.TerminalState, 3, { mode: 'control', altScreen: true }));
+    expect(decoded.type).toBe(FrameType.TerminalState);
+    expect(decoded.channel).toBe(3);
+    expect(frameJson<TerminalState>(decoded)).toEqual({ mode: 'control', altScreen: true });
   });
 
   it('decode с type вне enum (200) не бросает и форвардит как есть', () => {

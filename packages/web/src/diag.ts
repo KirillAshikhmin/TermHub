@@ -1,10 +1,13 @@
 // Диагностическая страница: версия/аптайм агента, статус связи с relay, число
 // клиентов и сессий, корни. Отдаётся агентом (LAN-режим); в relay-режиме /api/diag
 // недоступен — показываем подсказку открыть на LAN-адресе. Обновляется поллингом.
+// Способ подключения терминала приходит не отсюда, а кадром состояния от агента —
+// страница называет последний известный (term-mode.ts) и текущую просьбу клиента.
 
 import { api } from './api';
 import type { DiagInfo } from './api';
 import { t } from './i18n';
+import { lastTerminalMode, terminalModeName, terminalModeRequest } from './term-mode';
 import { renderHeader, spinner } from './ui';
 import type { Transport } from './transport';
 
@@ -30,6 +33,7 @@ export function mountDiag(root: HTMLElement, transport?: Transport): () => void 
 
   const render = (d: DiagInfo): void => {
     main.replaceChildren();
+    const lastMode = lastTerminalMode();
     const card = document.createElement('div');
     card.className = 'th-diag__card';
 
@@ -48,6 +52,8 @@ export function mountDiag(root: HTMLElement, transport?: Transport): () => void 
       [t('diag.host'), `${d.host}:${d.port}${d.tls ? ' · TLS' : ''}`],
       [t('diag.uptime'), fmtUptime(d.uptimeMs)],
       [t('diag.sessions'), String(d.sessions)],
+      [t('diag.terminalMode'), lastMode ? terminalModeName(lastMode) : '—'],
+      [t('diag.terminalModeRequest'), terminalModeName(terminalModeRequest())],
     ];
     if (d.relay.configured) {
       rows.push(

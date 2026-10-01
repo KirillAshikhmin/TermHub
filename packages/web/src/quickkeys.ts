@@ -140,7 +140,9 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
   panel.append(enterToggle);
 
   // Экранная клавиатура.
-  panel.append(toggleButton('⌨', h.t('quickkeys.keyboard'), h.keyboardEnabled, h.onKeyboardToggle));
+  const keyboardToggle = toggleButton('⌨', h.t('quickkeys.keyboard'), h.keyboardEnabled, h.onKeyboardToggle);
+  keyboardToggle.classList.add('th-qk__keyboard');
+  panel.append(keyboardToggle);
 
   // Строка ввода (compose bar) — справа, после клавиатуры. Нативное поле для
   // свайпа/подсказок (терминальная textarea их не поддерживает).

@@ -7,7 +7,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { promisify } from 'node:util';
 
-import { loadConfig, TMUX_SOCKET, VERSION } from './config.js';
+import { loadConfig, readTerminalMode, TMUX_SOCKET, VERSION } from './config.js';
 
 const exec = promisify(execFile);
 
@@ -74,6 +74,14 @@ export async function runDoctor(): Promise<number> {
   } catch {
     warn('tmux', `no sessions on socket -L ${TMUX_SOCKET} — start a working session via tm`);
   }
+
+  const terminalMode = readTerminalMode(config, (message) => warn('Terminal mode', message));
+  ok(
+    'Terminal mode',
+    terminalMode === 'control'
+      ? 'control mode (tmux -CC), falls back to tmux attach'
+      : 'tmux attach (control mode disabled in config.json)',
+  );
 
   const scheme = config.tls ? 'https' : 'http';
   try {

@@ -65,7 +65,7 @@ export const MAX_ARGS = 32;
 
 /** Префикс сборочных сессий: они прячутся из списка сессий (§2 спецификации). */
 const BUILD_PREFIX = '_gradle_';
-/** ≤24 символа санитизированного имени + 6 hex — итог укладывается в `^[\w-]{1,40}$`. */
+/** Читаемый префикс; идентичность задаётся полным SHA-256 и метаданными источника. */
 const BUILD_NAME_MAX = 24;
 
 /** Лимиты чтения XML конфигураций (§5 спецификации). */
@@ -561,11 +561,12 @@ export async function listRunConfigs(dir: string): Promise<GradleRunConfig[]> {
 
 // ── Сборочная сессия и валидация ─────────────────────────────────────────────
 
-/** Имя сборочной tmux-сессии для рабочей: детерминировано, ≤40 символов,
- *  не сталкивается при обрезке (хвост — 6 hex от sha256 полного имени). */
+/** Полный SHA-256 разделяет имена с одинаковым читаемым префиксом.
+ *  Старые имена с шестизначным хешем намеренно не усыновляем и не удаляем:
+ *  в них не было полной идентичности источника, доказать владение невозможно. */
 export function buildSessionName(session: string): string {
   const safe = session.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, BUILD_NAME_MAX);
-  const hash = createHash('sha256').update(session, 'utf8').digest('hex').slice(0, 6);
+  const hash = createHash('sha256').update(session, 'utf8').digest('hex');
   return `${BUILD_PREFIX}${safe}_${hash}`;
 }
 
@@ -592,6 +593,7 @@ export function checkArgs(args: string[]): void {
 /** Пользовательские опции сборочной сессии: что запущено, когда и как зовут её
  *  оболочку в простое. Хранение в самой tmux-сессии, а не в памяти агента, —
  *  тогда после рестарта агента статус идущей сборки читается как ни в чём не бывало. */
+const OPT_SOURCE = '@termhub_gradle_source';
 const OPT_COMMAND = '@termhub_gradle_cmd';
 const OPT_STARTED = '@termhub_gradle_started';
 const OPT_SHELL = '@termhub_gradle_shell';
@@ -674,6 +676,11 @@ export interface RunTargetOpts {
  *  делать их одной. */
 const stopSent = new Set<string>();
 
+/** Base64 сохраняет полное имя, включая пробелы/табуляции, в одной колонке tmux. */
+function sourceIdentity(session: string): string {
+  return Buffer.from(session, 'utf8').toString('base64');
+}
+
 function stopKey(name: string, socketName?: string): string {
   return `${socketName ?? ''} ${name}`;
 }
@@ -690,14 +697,16 @@ function isBusy(current: string, idleShell: string): boolean {
  *  Запрос и только запрос: ничего в состоянии агента не меняет. */
 export async function runStatus(opts: RunTargetOpts): Promise<GradleRunState> {
   const name = buildSessionName(opts.session);
-  const fmt = `#{pane_current_command}\t#{${OPT_COMMAND}}\t#{${OPT_STARTED}}\t#{${OPT_SHELL}}`;
+  const fmt = `#{pane_current_command}\t#{${OPT_COMMAND}}\t#{${OPT_STARTED}}\t#{${OPT_SHELL}}\t#{${OPT_SOURCE}}`;
   const r = await tmux(['list-panes', '-t', paneTarget(name), '-F', fmt], opts.socketName);
   if (r.code !== 0) return idleState();
   let busy = false;
   let command = '';
   let started = '';
   for (const line of r.stdout.split('\n').filter((l) => l.length > 0)) {
-    const [current = '', cmd = '', at = '', shell = ''] = line.split('\t');
+    const [current = '', cmd = '', at = '', shell = '', source = ''] = line.split('\t');
+    if (!cmd || source !== sourceIdentity(opts.session))
+      throw new Error('Build session name is occupied by a session with unverified source identity');
     if (isBusy(current.trim(), shell.trim())) busy = true;
     if (cmd) command = cmd;
     if (at) started = at;
@@ -755,12 +764,11 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   // Вторую сборку поверх идущей молча не запускаем: вызывающий сам решит, гасить
   // ли прежнюю (история 16), и придёт снова с force.
   const current = await runStatus(opts);
-  if (current.phase !== 'idle' && !current.command)
-    throw new Error('Build session name is occupied by a non-build session');
   if (current.phase === 'running' && !opts.force) return current;
 
   // Прежняя сборочная сессия (с выводом прошлого запуска) уступает место новой.
-  await tmux(['kill-session', '-t', sessionTarget(name)], opts.socketName);
+  if (current.phase !== 'idle')
+    await tmux(['kill-session', '-t', sessionTarget(name)], opts.socketName);
   // Путь к JDK едет отдельным argv-элементом `-e VAR=<путь>`: кавычки не нужны,
   // пробелы в «/Applications/Android Studio.app/…» ничего не ломают.
   const jdkArgs = javaHome === null ? [] : ['-e', `JAVA_HOME=${javaHome}`, '-e', `${JDK_ENV_VAR}=${javaHome}`];
@@ -774,6 +782,8 @@ export async function startRun(opts: StartRunOpts): Promise<GradleRunState> {
   const target = paneTarget(name);
   // Имя оболочки в простое — эталон для «идёт или закончилось» (см. isBusy).
   const idleShell = (await tmux(['display-message', '-p', '-t', target, '#{pane_current_command}'], opts.socketName)).stdout.trim();
+  const tagged = await tmux(['set-option', '-t', target, OPT_SOURCE, sourceIdentity(opts.session)], opts.socketName);
+  if (tagged.code !== 0) throw new Error('Failed to record build source identity');
   await tmux(['set-option', '-t', target, OPT_COMMAND, line], opts.socketName);
   await tmux(['set-option', '-t', target, OPT_STARTED, String(startedAt)], opts.socketName);
   if (idleShell) await tmux(['set-option', '-t', target, OPT_SHELL, idleShell], opts.socketName);
@@ -791,8 +801,6 @@ export async function stopRun(opts: RunTargetOpts): Promise<GradleRunState> {
   const name = buildSessionName(opts.session);
   const key = stopKey(name, opts.socketName);
   const state = await runStatus(opts);
-  if (state.phase !== 'idle' && !state.command)
-    throw new Error('Build session name is occupied by a non-build session');
   if (state.phase !== 'running') {
     // Останавливать нечего — и счёт «Стопов» начинается заново.
     stopSent.delete(key);

@@ -364,3 +364,26 @@ describe('VcsService — amend и теги', () => {
     await expect(svc.tagDelete(root, 'proj', 'a b; rm -rf /')).rejects.toThrow(/branch name/i);
   });
 });
+
+describe('Git diff does not execute configured converters', () => {
+  it.each(['working', 'commit', 'untracked'])('disables textconv for %s diff', async (mode) => {
+    const dir = await fsp.mkdtemp(path.join(root, 'textconv-'));
+    await git(['init', '-q'], dir);
+    await fsp.writeFile(path.join(dir, '.gitattributes'), '*.txt diff=unsafe\n');
+    await fsp.writeFile(path.join(dir, 'file.txt'), 'before\n');
+    await git(['add', '.'], dir);
+    await git(['-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'], dir);
+    await fsp.writeFile(path.join(dir, 'file.txt'), 'after\n');
+    if (mode === 'commit') await git(['-c', 'commit.gpgsign=false', 'commit', '-qam', 'change'], dir);
+    if (mode === 'untracked') await fsp.writeFile(path.join(dir, 'new.txt'), 'after\n');
+    const marker = path.join(dir, 'executed');
+    const helper = path.join(dir, 'converter.sh');
+    await fsp.writeFile(helper, `#!/bin/sh\nprintf triggered > '${marker}'\ncat "$1"\n`, { mode: 0o700 });
+    await git(['config', 'diff.unsafe.textconv', helper], dir);
+    await git(['config', 'diff.unsafe.command', helper], dir);
+    const view = new VcsService({ roots: [dir] });
+    const diff = await view.diff(dir, '', mode === 'untracked' ? 'new.txt' : 'file.txt', mode === 'commit' ? 'HEAD' : undefined);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(diff).toContain('+after');
+  });
+});

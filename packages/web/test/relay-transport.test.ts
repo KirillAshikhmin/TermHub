@@ -1,152 +1,43 @@
 // @vitest-environment happy-dom
-// Юнит-тесты RelayTransport БЕЗ реального relay/агента: FakeWebSocket — глухая
-// эмуляция browser WebSocket (сама ничего не решает), ответы «агента» на другом
-// конце строит сам тест через настоящую крипто @termhub/protocol (sessionKeys
-// с ролью 'server', зеркально agent/relay-link.ts) — так можно расшифровать то,
-// что клиент реально шлёт на wire, и проверить порядок кадров.
+// Юнит-тесты RelayTransport БЕЗ реального relay/агента: обвязка (FakeWebSocket, хендшейк
+// «агента» настоящей крипто) — в relay-harness.ts, общая с тестами клиента ленты.
 import {
   decodeFrame,
-  fingerprint,
   frameJson,
   FrameType,
   generateIdentity,
-  initCrypto,
   jsonFrame,
   makeDecryptor,
   makeEncryptor,
   sessionKeys,
-  sign,
-  serverHandshakeTranscript,
   type Identity,
 } from '@termhub/protocol';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { b64, unb64 } from '../src/b64';
-import { RelayTransport } from '../src/relay-transport';
+import {
+  driveToHelloSent,
+  helloOkFrame,
+  installRelayHarness,
+  makeTransport,
+  NONCE,
+  respondHelloOk,
+  restream,
+  sockets,
+  streaming,
+  type FakeWebSocket,
+} from './relay-harness';
+import type { RelayTransport } from '../src/relay-transport';
 import type { TermChannelOpts } from '../src/transport';
 
 const td = new TextDecoder();
 const te = new TextEncoder();
 
-/**
- * Мини-эмуляция browser WebSocket. Ничего не знает про relay/агента — входящие
- * кадры доставляет тест вручную (triggerOpen/deliverText/deliverBinary), это
- * даёт полный детерминированный контроль над порядком событий.
- */
-class FakeWebSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
+installRelayHarness();
 
-  binaryType = '';
-  readyState: number = FakeWebSocket.CONNECTING;
-  onopen: (() => void) | null = null;
-  onmessage: ((ev: { data: unknown }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  readonly sent: Array<string | Uint8Array> = [];
-
-  constructor(public readonly url: string) {
-    sockets.push(this);
-  }
-
-  send(data: string | Uint8Array): void {
-    this.sent.push(data);
-  }
-
-  close(): void {
-    if (this.readyState === FakeWebSocket.CLOSED) return;
-    this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
-  }
-
-  triggerOpen(): void {
-    this.readyState = FakeWebSocket.OPEN;
-    this.onopen?.();
-  }
-
-  deliverText(text: string): void {
-    this.onmessage?.({ data: text });
-  }
-
-  deliverBinary(bytes: Uint8Array): void {
-    this.onmessage?.({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) });
-  }
+function noopOpts(extra: Partial<TermChannelOpts> = {}): TermChannelOpts {
+  return { cols: 80, rows: 24, onData: () => {}, onBell: () => {}, onEnd: () => {}, onStatus: () => {}, ...extra };
 }
-
-let sockets: FakeWebSocket[] = [];
-const createdTransports: RelayTransport[] = [];
-
-beforeAll(async () => {
-  await initCrypto();
-});
-
-beforeEach(() => {
-  sockets = [];
-  vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
-});
-
-afterEach(() => {
-  for (const transport of createdTransports) transport.close();
-  createdTransports.length = 0;
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-});
-
-function noopOpts(): TermChannelOpts {
-  return { cols: 80, rows: 24, onData: () => {}, onBell: () => {}, onEnd: () => {}, onStatus: () => {} };
-}
-
-function makeTransport(clientIdentity: Identity, agentIdentity: Identity): RelayTransport {
-  const transport = new RelayTransport({
-    url: 'ws://fake/relay',
-    identity: clientIdentity,
-    agent: { agentId: fingerprint(agentIdentity.edPub), edPub: b64(agentIdentity.edPub) },
-    clientName: 'test-client',
-  });
-  createdTransports.push(transport);
-  return transport;
-}
-
-/** Разобранный клиентский hello: edPub для ECDH и челлендж, которым агент обязан
- *  подписать свой hello-ok. */
-interface ClientHello {
-  edPub: Uint8Array;
-  nonce: Uint8Array;
-}
-
-/** connect → {connected} → клиент шлёт plaintext hello. Возвращает edPub и челлендж. */
-function driveToHelloSent(ws: FakeWebSocket): ClientHello {
-  ws.triggerOpen();
-  ws.deliverText(JSON.stringify({ t: 'connected' }));
-  const frame = decodeFrame(ws.sent[ws.sent.length - 1] as Uint8Array);
-  const hello = JSON.parse(td.decode(frame.payload)) as { t: string; edPub: string; nonce: string };
-  expect(hello.t).toBe('hello');
-  return { edPub: unb64(hello.edPub), nonce: unb64(hello.nonce) };
-}
-
-/** hello-ok, ПОДПИСАННЫЙ агентом челленджем клиента. Без валидной подписи клиент в
- *  streaming не входит — это и защищает его от переигрывания записанного потока. */
-function helloOkFrame(agentIdentity: Identity, serverHeader: Uint8Array, clientNonce: Uint8Array): Uint8Array {
-  return jsonFrame(FrameType.Data, 0, {
-    t: 'hello-ok',
-    header: b64(serverHeader),
-    nonce: b64(NONCE),
-    sig: b64(sign(agentIdentity.edSec, serverHandshakeTranscript(clientNonce, serverHeader))),
-  });
-}
-
-/** «Агент» отвечает hello-ok. Возвращает rx для расшифровки того, что клиент зашлёт дальше. */
-function respondHelloOk(ws: FakeWebSocket, agentIdentity: Identity, hello: ClientHello): Uint8Array {
-  const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
-  const agentEncryptor = makeEncryptor(tx);
-  ws.deliverBinary(helloOkFrame(agentIdentity, agentEncryptor.header, hello.nonce));
-  return rx;
-}
-
-/** Фиксированный челлендж для тестов (в проде — случайные 32 байта). */
-const NONCE = new Uint8Array(32).fill(7);
 
 describe('RelayTransport — onStreamReady: re-OPEN уходит раньше outbox', () => {
   it('первое подключение: DATA, набранная во время handshaking, доходит агенту ПОСЛЕ OPEN своего канала', () => {
@@ -322,26 +213,58 @@ describe('RelayTransport — list() пока поток не установле�
   });
 });
 
+describe('RelayTransport — способ подключения терминала', () => {
+  it('OPEN несёт просьбу о режиме: терминал relay создаётся на OPEN, к RESIZE решение уже принято', () => {
+    const { transport, ws, agentDec, firstEncrypted } = streaming();
+
+    transport.openTerm('work', noopOpts({ mode: 'attach' }));
+
+    const open = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(open.type).toBe(FrameType.Open);
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work', mode: 'attach' });
+  });
+
+  it('без просьбы OPEN прежней формы — {session}', () => {
+    const { transport, ws, agentDec, firstEncrypted } = streaming();
+
+    transport.openTerm('work', noopOpts());
+
+    const open = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work' });
+  });
+
+  it('после обрыва re-OPEN снова несёт просьбу: агент выбирает режим заново на каждое открытие', () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentIdentity } = streaming();
+    transport.openTerm('work', noopOpts({ mode: 'attach' }));
+
+    ws.close();
+    vi.advanceTimersByTime(1000); // backoff реконнекта
+    expect(sockets).toHaveLength(2);
+    const ws2 = sockets[1]!;
+    const again = restream(ws2, agentIdentity);
+
+    const open = decodeFrame(again.agentDec.pull(ws2.sent[again.firstEncrypted] as Uint8Array));
+    expect(open.type).toBe(FrameType.Open);
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work', mode: 'attach' });
+  });
+
+  it('кадр состояния терминала доходит до своего канала, а не до соседнего', () => {
+    const { transport, ws, agentEnc, agentDec, firstEncrypted } = streaming();
+    const work: unknown[] = [];
+    const play: unknown[] = [];
+    transport.openTerm('work', noopOpts({ onTerminalState: (s) => work.push(s) }));
+    transport.openTerm('play', noopOpts({ onTerminalState: (s) => play.push(s) }));
+    const workChannel = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array)).channel;
+
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.TerminalState, workChannel, { mode: 'control', altScreen: true })));
+
+    expect(work).toEqual([{ mode: 'control', altScreen: true }]);
+    expect(play).toEqual([]);
+  });
+});
+
 describe('RelayTransport — сопоставление ответов по id, а не по порядку', () => {
-  /** Доводит до streaming и возвращает средства «агента» для ответов. */
-  function streaming(): {
-    transport: RelayTransport;
-    ws: FakeWebSocket;
-    agentEnc: ReturnType<typeof makeEncryptor>;
-    agentDec: ReturnType<typeof makeDecryptor>;
-  } {
-    const clientIdentity = generateIdentity();
-    const agentIdentity = generateIdentity();
-    const transport = makeTransport(clientIdentity, agentIdentity);
-    const ws = sockets[0]!;
-    const hello = driveToHelloSent(ws);
-    const { rx, tx } = sessionKeys('server', agentIdentity, hello.edPub);
-    const agentEnc = makeEncryptor(tx);
-    const before = ws.sent.length;
-    ws.deliverBinary(helloOkFrame(agentIdentity, agentEnc.header, hello.nonce));
-    const fin = JSON.parse(td.decode(decodeFrame(ws.sent[before] as Uint8Array).payload)) as { header: string };
-    return { transport, ws, agentEnc, agentDec: makeDecryptor(rx, unb64(fin.header)) };
-  }
 
   /** Расшифровывает запросы, отправленные клиентом после хендшейка. */
   function sentRequests(ws: FakeWebSocket, agentDec: ReturnType<typeof makeDecryptor>, fromIdx: number): Array<Record<string, unknown>> {
@@ -469,5 +392,91 @@ describe('RelayTransport — create() дожидается подтвержде�
     const p = transport.create({ name: 'x', root: '/r', dir: 'd', preset: 'zsh' });
     ws.close();
     await expect(p).rejects.toThrow(/disconnected/);
+  });
+});
+
+describe('RelayTransport — объявление возможностей', () => {
+  it('шлёт свои имена кадром Capabilities и резолвится списком агента', async () => {
+    const { transport, ws, agentEnc, agentDec, firstEncrypted } = streaming();
+    const p = transport.capabilities(['feed']);
+
+    const sent = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(sent.type).toBe(FrameType.Capabilities);
+    expect(frameJson<{ caps: string[] }>(sent).caps).toEqual(['feed']);
+
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed', 'teleport'] })));
+    await expect(p).resolves.toEqual(['feed', 'teleport']);
+  });
+
+  it('агент молчит 2 с → пустой список, а не ошибка и не вечное ожидание', async () => {
+    vi.useFakeTimers();
+    const { transport } = streaming();
+    const p = transport.capabilities(['feed']);
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(p).resolves.toEqual([]);
+  });
+
+  it('обмен один на подключение: второй вызов не шлёт кадра и ждёт того же ответа', async () => {
+    const { transport, ws, agentEnc } = streaming();
+    const before = ws.sent.length;
+    const p1 = transport.capabilities(['feed']);
+    const p2 = transport.capabilities(['feed']);
+    expect(ws.sent.length).toBe(before + 1);
+
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(p1).resolves.toEqual(['feed']);
+    await expect(p2).resolves.toEqual(['feed']);
+  });
+
+  it('опоздавший после таймаута ответ не достаётся следующему обмену', async () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(p).resolves.toEqual([]);
+
+    // Обмен этого подключения уже состоялся молчанием: второго кадра нет...
+    const sentAfter = ws.sent.length;
+    const second = transport.capabilities(['feed']);
+    expect(ws.sent.length).toBe(sentAfter);
+    // ...и опоздавший ответ прежнего обмена не превращается в чужой результат.
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(second).resolves.toEqual([]);
+  });
+
+  it('после реконнекта объявляемся заново: обмен один на ПОДКЛЮЧЕНИЕ', async () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentIdentity, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(p).resolves.toEqual(['feed']);
+
+    ws.close();
+    vi.advanceTimersByTime(1000); // backoff реконнекта
+    const ws2 = sockets[1]!;
+    const again = restream(ws2, agentIdentity);
+    const before = ws2.sent.length;
+    const p2 = transport.capabilities(['feed']);
+
+    expect(ws2.sent.length).toBe(before + 1);
+    expect(decodeFrame(again.agentDec.pull(ws2.sent[before] as Uint8Array)).type).toBe(FrameType.Capabilities);
+    ws2.deliverBinary(again.agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: [] })));
+    await expect(p2).resolves.toEqual([]);
+  });
+
+  it('незнакомый кадр агента не трогает ожидающий обмен: ответ доходит следом', async () => {
+    const { transport, ws, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    // Кадр из будущего агента, которого этот клиент не знает: молча игнорируем.
+    ws.deliverBinary(agentEnc.push(jsonFrame(200 as FrameType, 0, { hello: 'from the future' })));
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { caps: ['feed'] })));
+    await expect(p).resolves.toEqual(['feed']);
+  });
+
+  it('ответ без списка (битый payload) → пустой список', async () => {
+    const { transport, ws, agentEnc } = streaming();
+    const p = transport.capabilities(['feed']);
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CapabilitiesResult, 0, { oops: 1 })));
+    await expect(p).resolves.toEqual([]);
   });
 });

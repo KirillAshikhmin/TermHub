@@ -21,6 +21,14 @@ import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
 import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
+import {
+  noteTerminalMode,
+  otherTerminalMode,
+  setTerminalModeRequest,
+  terminalModeLetter,
+  terminalModeName,
+  terminalModeRequest,
+} from './term-mode';
 import { markBellSeen, recordBell, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { detectPaths, filePathParts, parentRel } from './termlinks';
@@ -30,7 +38,7 @@ import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
 import { currentTheme } from './theme';
-import type { TermChannel, TermConnState, Transport } from './transport';
+import type { TerminalMode, TermChannel, TermConnState, Transport } from './transport';
 import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
 const FONT_MIN = 10;
@@ -202,10 +210,63 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     if (name === session) location.hash = neighbor ? termHash(neighbor) : '#/';
     else await tabs.refresh();
   }
+  // ── Способ подключения и пометка альтернативного экрана ──────────────
+  // Режим выбирает агент (его настройка старше просьбы клиента), поэтому чип
+  // показывает то, что пришло кадром состояния, а переключатель меняет просьбу
+  // для СЛЕДУЮЩЕГО открытия терминала — живой терминал остаётся в своём режиме.
+  // Просьба, с которой открыт ЭТОТ терминал (уезжает в кадр открытия ниже), и просьба,
+  // выбранная переключателем сейчас: расходятся ровно тогда, когда переключили уже после
+  // открытия — тогда просьба ждёт следующего.
+  const openedMode: TerminalMode = terminalModeRequest();
+  let requestedMode: TerminalMode = openedMode;
+  let activeMode: TerminalMode | undefined;
+
+  const modeBtn = document.createElement('button');
+  modeBtn.type = 'button';
+  modeBtn.className = 'th-termbar__mode';
+  const syncMode = (): void => {
+    // Видно букву, слово целиком — в подсказке: шапка узкая, а режимов всего два.
+    modeBtn.textContent = activeMode ? terminalModeLetter(activeMode) : '—';
+    // Просьбу переключили после открытия — она уедет только в следующий терминал.
+    // Совпала с работающим режимом (агент уже подключил так) — обещать нечего.
+    const awaitsOpen = requestedMode !== openedMode && requestedMode !== activeMode;
+    // Агент ответил не тем, что просили: его настройка старше просьбы, плюс возможен
+    // откат на attach. Просьба уже уехала, ждать её нечего — но расхождение видно.
+    const overridden = activeMode !== undefined && activeMode !== openedMode;
+    modeBtn.classList.toggle('is-pending', awaitsOpen);
+    modeBtn.classList.toggle('is-overridden', overridden);
+    const parts = [
+      activeMode ? t('term.modeActive', { mode: terminalModeName(activeMode) }) : t('term.modeUnknown'),
+    ];
+    if (overridden) parts.push(t('term.modeOverridden', { mode: terminalModeName(openedMode) }));
+    if (awaitsOpen) parts.push(t('term.modeNext', { mode: terminalModeName(requestedMode) }));
+    parts.push(t('term.modeSwitch'));
+    const label = parts.join(' · ');
+    modeBtn.title = label;
+    modeBtn.setAttribute('aria-label', label);
+  };
+  syncMode();
+  // Пометка экрана и показанный режим живут ровно одним подключением: оба знает только
+  // агент и оба приходят кадром состояния. Пережить смену канала им нельзя — иначе
+  // «включён» от терминала, открытого до перезапуска агента, горит над новой сессией,
+  // которой оно не касается. Поэтому каждое подключение начинает с «агент ещё ничего
+  // не называл», а зажечь пометку и назвать режим вправе только пришедший следом кадр.
+  const forgetAgentState = (): void => {
+    setAltScreen(false);
+    activeMode = undefined;
+    syncMode();
+  };
+  modeBtn.addEventListener('click', () => {
+    requestedMode = otherTerminalMode(requestedMode);
+    setTerminalModeRequest(requestedMode);
+    syncMode();
+    toast(t('term.modeNext', { mode: terminalModeName(requestedMode) }));
+  });
+
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
   dot.setAttribute('role', 'status');
-  bar.append(tabs.el, dot);
+  bar.append(tabs.el, modeBtn, dot);
   screen.append(bar);
 
   // Баннер переподключения (скрыт, пока соединение живо).
@@ -226,6 +287,14 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   body.className = 'th-term__body';
   const host = document.createElement('div');
   host.className = 'th-term__host';
+  /** Полноэкранное приложение забрало альтернативный экран: истории у него нет, и ползунок
+   *  библиотеки над ним обещает прокрутку, которой не существует. Прячем его вместе с
+   *  зажжённой пометкой — одним переключателем, чтобы они не разъехались. */
+  function setAltScreen(on: boolean): void {
+    // Видимой пометки у этого состояния больше нет — историю беседы показывает
+    // лента. Признак остаётся ради ползунка: листать в альтернативном экране нечего.
+    host.classList.toggle('is-alt', on);
+  }
   body.append(host);
   screen.append(body);
 
@@ -238,10 +307,10 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     fontSize,
     theme: xtermTheme(),
     cursorBlink: true,
-    // Локальный scrollback почти не задействован: `tmux attach` держит терминал в
-    // alt-screen (ESC[?1049h) всё время сессии, а у alt-буфера истории нет — прокрутка
-    // идёт через copy-mode самого tmux. Держим умеренное значение для случаев, когда
-    // терминал всё же в обычном буфере (до attach, после detach).
+    // В control mode локальный scrollback — основной путь: tmux не держит терминал в
+    // alt-screen, вывод ложится в обычный буфер, и история листается без сети. При
+    // откате на `tmux attach` (и в приложениях, ушедших в alt-screen) прокрутка снова
+    // идёт через copy-mode самого tmux — тач-скролл выбирает путь по активному буферу.
     scrollback: 5000,
     macOptionIsMeta: true,
     // Codex включает mouse tracking, поэтому обычный drag должен оставаться у TUI.
@@ -367,9 +436,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     // Без WebGL — дефолтный рендер xterm.
   }
 
-  // Мобильный скролл: транслируем тач-драг в wheel на корне xterm (touch xterm
-  // в приложение не форвардит; touch-action:none в CSS не даёт жесту утечь в
-  // страницу/pull-to-refresh). Цель — .xterm; если ещё не создан, host.
+  // Мобильный скролл: в обычном буфере тач-драг листает историю через term.scrollLines,
+  // в alt-screen — транслируется в wheel на корне xterm (touch xterm в приложение не
+  // форвардит; touch-action:none в CSS не даёт жесту утечь в страницу/pull-to-refresh).
   // По умолчанию тач-драг скроллит историю; в режиме выделения (тумблер в панели)
   // тот же драг выделяет текст для копирования — активен ровно один из двух.
   let stopTouchScroll: (() => void) | null = enableTouchScroll(host, term);
@@ -517,6 +586,9 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   channel = transport.openTerm(session, {
     cols: term.cols,
     rows: term.rows,
+    // Снимок просьбы на момент открытия: переключатель после этого меняет только
+    // то, что уедет в следующий терминал.
+    mode: openedMode,
     onData: (bytes) => term.write(bytes),
     onBell: () => {
       if (disposed) return;
@@ -524,11 +596,24 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       updateAppBadge(unseenBellCount());
       playBell();
     },
+    onTerminalState: (state) => {
+      if (disposed) return;
+      // Поля независимы: пришло одно — второе не трогаем.
+      if (state.mode) {
+        activeMode = state.mode;
+        noteTerminalMode(state.mode);
+        syncMode();
+      }
+      if (state.altScreen !== undefined) setAltScreen(state.altScreen);
+    },
     onStatus: (state) => {
       if (disposed) return;
       setDot(state);
       connected = state === 'connected';
       if (state === 'connected') {
+        // Новое подключение — новый терминал у агента: всё, что он называл прошлому,
+        // здесь недействительно (см. forgetAgentState).
+        forgetAgentState();
         banner.classList.remove('is-shown');
         doFit();
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.
@@ -729,6 +814,16 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   });
   compose.append(composeInput, composeSend);
 
+  const floatingKeyboard = iconButton('keyboard', t('quickkeys.keyboard'), () => {
+    panel.querySelector<HTMLButtonElement>('.th-qk__keyboard')?.click();
+  });
+  floatingKeyboard.className = 'th-term__toolbar-toggle th-term__keyboard-toggle';
+  floatingKeyboard.addEventListener('mousedown', (e) => e.preventDefault());
+  const syncFloatingKeyboard = (): void => {
+    floatingKeyboard.setAttribute('aria-pressed', String(keyboardEnabled));
+    floatingKeyboard.classList.toggle('is-off', !keyboardEnabled);
+  };
+  syncFloatingKeyboard();
   const panel = mountQuickKeys({
     // Фокус не трогаем: кнопки уже держат его через mousedown-preventDefault
     // (клавиатура не закрывается), а насильный term.focus() открывал бы её на
@@ -738,6 +833,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     keyboardEnabled,
     onKeyboardToggle: (enabled) => {
       keyboardEnabled = enabled;
+      syncFloatingKeyboard();
       writeKeyboardEnabled(enabled);
       applyKeyboardMode();
       // Включили — открываем клавиатуру сразу, выключили — прячем.
@@ -782,7 +878,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
 
   // Плавающая «⋮» (в теле терминала) — видна только когда тулбар свёрнут. ResizeObserver
   // на host сам пере-fit'ит терминал по кадрам анимации высоты панелей.
-  hideToolbar = wireToolbar({ toolbars, floatMount: body, onChange: doFit }).hide;
+  hideToolbar = wireToolbar({ toolbars, floatMount: body, collapsedControls: readOnly ? [] : [floatingKeyboard], onChange: doFit }).hide;
 
   // ── Подгонка под видимую область (клавиатура телефона) ───────────────
   const vv = window.visualViewport;

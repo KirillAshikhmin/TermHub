@@ -12,6 +12,7 @@ import {
   loadIdentity,
   loadAuthorized,
   saveAuthorized,
+  readTerminalMode,
 } from '../src/config.js';
 import type { TermhubConfig, AuthorizedDevice } from '../src/config.js';
 
@@ -105,5 +106,18 @@ describe('config', () => {
     expect(loadAuthorized()).toEqual(list);
     const mode = fs.statSync(path.join(tmp, 'authorized.json')).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+});
+
+describe('readTerminalMode', () => {
+  it('нет поля → control; attach уважается; незнакомое значение → control и предупреждение', () => {
+    expect(readTerminalMode({} as TermhubConfig)).toBe('control');
+    expect(readTerminalMode({ terminalMode: 'control' } as TermhubConfig)).toBe('control');
+    expect(readTerminalMode({ terminalMode: 'attach' } as TermhubConfig)).toBe('attach');
+    const warned: string[] = [];
+    const mode = readTerminalMode({ terminalMode: 'tmux' } as unknown as TermhubConfig, (m) => warned.push(m));
+    expect(mode).toBe('control');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('tmux');
   });
 });

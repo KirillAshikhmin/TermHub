@@ -165,17 +165,21 @@ describe('detectProject', () => {
 });
 
 describe('buildSessionName / isBuildSessionName', () => {
+  it('separates source names with a known truncated SHA-256 collision', () => {
+    expect(buildSessionName('aaaaaaaaaaaaaaaaaaaaaaaa3129'))
+      .not.toBe(buildSessionName('aaaaaaaaaaaaaaaaaaaaaaaa6972'));
+  });
   it('детерминирован, укладывается в контракт имени и не сталкивается при обрезке', () => {
     const a = buildSessionName('my-project');
     expect(a).toBe(buildSessionName('my-project'));
     expect(a.startsWith('_gradle_my-project_')).toBe(true);
-    expect(a).toMatch(/^[\w-]{1,40}$/);
+    expect(a).toMatch(/^[\w-]+_[a-f0-9]{64}$/);
 
     const long1 = buildSessionName('очень-длинное-имя-сессии-номер-один');
     const long2 = buildSessionName('очень-длинное-имя-сессии-номер-два');
-    expect(long1.length).toBeLessThanOrEqual(40);
-    expect(long2.length).toBeLessThanOrEqual(40);
-    expect(long1).toMatch(/^[\w-]{1,40}$/);
+    expect(long1.length).toBeLessThanOrEqual(97);
+    expect(long2.length).toBeLessThanOrEqual(97);
+    expect(long1).toMatch(/^[\w-]+_[a-f0-9]{64}$/);
     expect(long1).not.toBe(long2);
 
     expect(isBuildSessionName(long1)).toBe(true);

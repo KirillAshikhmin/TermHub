@@ -4,6 +4,8 @@
 // состояние проводника/репозитория сохраняется. Роутер (main.ts/remote.ts) переиспользует
 // живой workspace, пока не сменилась сессия/транспорт.
 
+import { whenCap } from './capabilities';
+import { mountFeed } from './feed';
 import { mountFiles } from './files';
 import { resetDocumentTitle, setSessionDocumentTitle } from './document-title';
 import type { GradleTab } from './gradle';
@@ -15,7 +17,7 @@ import { mountTerminal } from './term';
 import type { Transport } from './transport';
 import { detectGradle, knownGradle } from './ui';
 
-type WsTab = 'term' | 'files' | 'repo' | 'gradle';
+type WsTab = 'term' | 'files' | 'repo' | 'gradle' | 'feed';
 
 /** Смонтированный вид вкладки; focus есть только у терминала. */
 interface WsView {
@@ -37,6 +39,7 @@ export function routeWorkspace(route: RemoteRoute): { session: string; tab: WsTa
   if (route.name === 'sfiles') return { session: route.session, tab: 'files' };
   if (route.name === 'srepo') return { session: route.session, tab: 'repo' };
   if (route.name === 'sgradle') return { session: route.session, tab: 'gradle' };
+  if (route.name === 'sfeed') return { session: route.session, tab: 'feed' };
   return null;
 }
 
@@ -60,6 +63,7 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
       v = { el, clean: term.teardown, focus: term.focus };
     } else if (tab === 'files') v = { el, clean: mountFiles(el, transport, session) };
     else if (tab === 'repo') v = { el, clean: mountRepo(el, transport, session) };
+    else if (tab === 'feed') v = { el, clean: mountFeed(el, session, transport).teardown };
     else {
       gradleView = mountGradleTab(el, transport, session);
       v = { el, clean: gradleView.teardown };
@@ -79,6 +83,17 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
   let showSeq = 0;
   const show = (tab: WsTab): void => {
     const seq = (showSeq += 1);
+    // Ленты у старого агента нет вовсе (ADR 0018), и прямая ссылка на неё уводит на
+    // терминал, а не показывает пустой экран. Пересечение считается на подключении,
+    // но после перезагрузки обмен может быть ещё в пути — тогда ждём его ответа.
+    if (tab === 'feed') {
+      void whenCap('feed', transport).then((ok) => {
+        if (!alive || seq !== showSeq) return;
+        if (ok) reveal(ensure('feed'));
+        else toTerm();
+      });
+      return;
+    }
     if (tab === 'gradle') {
       const known = knownGradle(transport, session);
       // Вкладки Gradle у обычной папки нет: прямая ссылка уводит на терминал, а не

@@ -12,6 +12,7 @@ import { formatDate, formatSize } from './format';
 import { mountSessionBar } from './tabs';
 import { filesHash, parseSessionSub } from './routes';
 import { resolveSessionPath } from './session-path';
+import { highlightCode } from './markdown';
 import type { FileEntry, Transport } from './transport';
 
 /** Расширение → язык highlight.js (для подсветки текста). */
@@ -26,21 +27,14 @@ const LANG_BY_EXT: Record<string, string> = {
 };
 
 /** Подсветка текста по расширению. Сразу показываем plain, затем лениво грузим
- *  highlight.js (отдельный чанк) и заменяем на подсвеченный HTML. */
+ *  highlight.js (отдельный чанк) и заменяем на подсвеченные узлы — тем же разбором,
+ *  что и лента: вывод hljs разбирается сам, а не присваивается через innerHTML. */
 function highlightText(code: HTMLElement, text: string, name: string): void {
   code.textContent = text;
   const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
   const lang = LANG_BY_EXT[ext];
   if (!lang) return;
-  void import('./highlight')
-    .then(({ default: hljs }) => {
-      if (!hljs.getLanguage(lang)) return;
-      code.innerHTML = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
-      code.classList.add('hljs');
-    })
-    .catch(() => {
-      // подсветка недоступна — остаётся plain-текст
-    });
+  void highlightCode(code, text, lang);
 }
 
 /** Корни кэшируем на время сессии страницы: при hash-навигации экран

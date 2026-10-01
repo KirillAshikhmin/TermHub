@@ -257,6 +257,8 @@ How to contribute — [CONTRIBUTING.md](CONTRIBUTING.md).
 - [docs/security.md](docs/security.md) — threat model and cryptography
 - [docs/notifications.md](docs/notifications.md) — sound, push, HTTPS
 - [docs/manual-test-checklist.md](docs/manual-test-checklist.md) — manual test checklist
+- [docs/terminal-and-agents.ru.md](docs/terminal-and-agents.ru.md) — own terminal and agent
+  UX: analysis, decisions, roadmap (Russian only)
 
 ---
 

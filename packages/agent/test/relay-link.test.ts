@@ -40,6 +40,7 @@ import { SessionService } from '../src/sessions.js';
 import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
 import { saveAuthorized, loadAuthorized } from '../src/config.js';
+import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON } from './feed-fixture.js';
 import type { AuthorizedDevice } from '../src/config.js';
 
 /** Доступен ли tmux (иначе happy-LIST пропускается). */
@@ -641,6 +642,68 @@ describe('RelayLink — мультиплекс каналов и idle-тайма
     }
   });
 
+  it('OPEN несёт просьбу режима, а выбранный режим и альтернативный экран уходят кадром состояния', async () => {
+    let seen: { configMode?: unknown; requestedMode?: unknown } = {};
+    let onMode: ((m: string) => void) | undefined;
+    let onAltScreen: ((a: boolean) => void) | undefined;
+    const modeIdentity = generateIdentity();
+    const modeId = fingerprint(modeIdentity.edPub);
+    const modeLink = new RelayLink({
+      url: `ws://127.0.0.1:${relayHandle.port}/relay`,
+      identity: modeIdentity,
+      authorized: () => loadAuthorized(),
+      sessions,
+      configMode: 'control',
+      attach: ((opts: {
+        configMode?: unknown;
+        requestedMode?: unknown;
+        onMode?: (m: string) => void;
+        onAltScreen?: (a: boolean) => void;
+      }): TerminalHandle => {
+        seen = { configMode: opts.configMode, requestedMode: opts.requestedMode };
+        onMode = opts.onMode;
+        onAltScreen = opts.onAltScreen;
+        return { write: () => {}, resize: () => {}, pause: () => {}, resume: () => {}, dispose: () => {} };
+      }) as never,
+    });
+    modeLink.start();
+
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name: 'mode-laptop', edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now() },
+    ]);
+
+    try {
+      const { ws, col } = await connectClient(relayHandle.port, modeId);
+      ws.send(helloFrame(clientId, crypto.randomBytes(32), 'mode-laptop'), { binary: true });
+      const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+        header: string;
+        nonce: string;
+      };
+      const { rx, tx } = sessionKeys('client', clientId, modeIdentity.edPub);
+      const dec = makeDecryptor(rx, unb64(ok.header));
+      const enc = makeEncryptor(tx);
+      ws.send(finFrame(clientId, enc, ok), { binary: true });
+
+      ws.send(enc.push(jsonFrame(FrameType.Open, 4, { session: 'work', mode: 'attach' })), { binary: true });
+      const opened = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(opened.type).toBe(FrameType.OpenOk);
+      expect(seen).toEqual({ configMode: 'control', requestedMode: 'attach' });
+
+      onMode!('attach');
+      const first = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(first.type).toBe(FrameType.TerminalState);
+      expect(first.channel).toBe(4);
+      expect(frameJson<{ mode?: string; altScreen?: boolean }>(first)).toEqual({ mode: 'attach', altScreen: false });
+
+      onAltScreen!(true);
+      const second = decodeFrame(dec.pull(new Uint8Array((await col.next()).binary as Buffer)));
+      expect(frameJson<{ mode?: string; altScreen?: boolean }>(second)).toEqual({ mode: 'attach', altScreen: true });
+    } finally {
+      await modeLink.stop();
+    }
+  });
+
   it('pre-hello idle-таймаут: молчащего клиента агент закрывает и освобождает слот', async () => {
     const idleIdentity = generateIdentity();
     const idleId = fingerprint(idleIdentity.edPub);
@@ -1063,5 +1126,307 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     expect(foreign.type).toBe(FrameType.Error);
     expect(frameJson<{ code: string }>(foreign).code).toBe('forbidden');
     expect(openedSessions).toEqual([buildSessionName(GUEST_SESSION)]);
+  }, 25000);
+});
+
+describe('RelayLink — объявление возможностей', () => {
+  interface CapsClient {
+    ws: WebSocket;
+    /** Следующий кадр агента; null — агент промолчал дольше срока. */
+    next(): Promise<ReturnType<typeof decodeFrame> | null>;
+    send(bytes: Uint8Array): void;
+  }
+
+  /** Допущенный клиент, доведённый до streaming (hello → hello-ok → hello-fin).
+   *  `scope` — гость: ограничение одной сессией, как после шаринга. `at` — другой
+   *  мост (свой relay и своя личность): его связь тест рвёт, не трогая общий. */
+  async function capsClient(
+    name: string,
+    scope?: AuthorizedDevice['scope'],
+    at?: { port: number; agentId: string; edPub: Uint8Array },
+  ): Promise<CapsClient> {
+    const target = at ?? { port: relayHandle.port, agentId, edPub: agentIdentity.edPub };
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name, edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now(), scope },
+    ]);
+    const { ws, col } = await connectClient(target.port, target.agentId);
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), name), { binary: true });
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, target.edPub);
+    const clientDec = makeDecryptor(rx, unb64(ok.header));
+    const clientEnc = makeEncryptor(tx);
+    ws.send(finFrame(clientId, clientEnc, ok), { binary: true });
+    return {
+      ws,
+      next: async () => {
+        const msg = await Promise.race([col.next(), delay(2000).then(() => null)]);
+        return msg ? decodeFrame(clientDec.pull(new Uint8Array(msg.binary as Buffer))) : null;
+      },
+      send: (bytes: Uint8Array) => ws.send(clientEnc.push(bytes), { binary: true }),
+    };
+  }
+
+  it('на Capabilities отвечает своим списком возможностей', async () => {
+    const c = await capsClient('caps-laptop');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed', 'teleport'] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+    expect(frameJson<{ caps: string[] }>(frame!).caps).toContain('feed');
+  }, 25000);
+
+  it('клиент без общих имён получает тот же список — отказа нет', async () => {
+    const c = await capsClient('caps-old-laptop');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: [] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+    expect(frameJson<{ caps: string[] }>(frame!).caps).toContain('feed');
+  }, 25000);
+
+  it('гость со scope получает список наравне с хозяином: это данные протокола, не доступ', async () => {
+    const c = await capsClient('caps-guest', { session: SANDBOX_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+    expect(frameJson<{ caps: string[] }>(frame!).caps).toContain('feed');
+  }, 25000);
+
+  it('пересечение с последним объявившимся клиентом видно в status() — его показывает /api/diag', async () => {
+    const c = await capsClient('caps-diag-laptop');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed', 'teleport'] }));
+    expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
+    expect(link.status().caps).toContain('feed');
+
+    // Следующим объявился клиент постарше — показываем уже его пересечение.
+    const old = await capsClient('caps-old-phone');
+    old.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['teleport'] }));
+    expect((await old.next())?.type).toBe(FrameType.CapabilitiesResult);
+    expect(link.status().caps).toEqual([]);
+  }, 25000);
+
+  it('клиент ушёл — пересечение гаснет: диагностика не показывает того, кого уже нет', async () => {
+    const c = await capsClient('caps-leaving-phone');
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+    expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
+    expect(link.status().caps).toContain('feed');
+
+    c.ws.close();
+    // relay сообщает агенту client-close — ждём, пока мост останется без клиентов.
+    for (let i = 0; i < 150 && link.status().clients > 0; i += 1) await delay(20);
+    expect(link.status().clients).toBe(0);
+    expect(link.status().caps).toEqual([]);
+    // Время обмена гаснет вместе с пересечением: иначе призрак по нему перебил бы
+    // свежий обмен по LAN (/api/diag выбирает более поздний из двух).
+    expect(link.status().capsAt).toBe(0);
+  }, 25000);
+
+  it('связь с relay оборвалась — пересечение гаснет вместе с клиентами', async () => {
+    // Свой relay и свой мост: обрыв общего сломал бы соседние тесты файла.
+    const ownRelay = await startRelay({ port: 0, silent: true });
+    let relayClosed = false;
+    const ownIdentity = generateIdentity();
+    const ownLink = new RelayLink({
+      url: `ws://127.0.0.1:${ownRelay.port}/relay`,
+      identity: ownIdentity,
+      authorized: () => loadAuthorized(),
+      sessions,
+    });
+    ownLink.start();
+    try {
+      const c = await capsClient('caps-dropped-phone', undefined, {
+        port: ownRelay.port,
+        agentId: fingerprint(ownIdentity.edPub),
+        edPub: ownIdentity.edPub,
+      });
+      c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+      expect((await c.next())?.type).toBe(FrameType.CapabilitiesResult);
+      expect(ownLink.status().caps).toContain('feed');
+
+      await ownRelay.close();
+      relayClosed = true;
+      for (let i = 0; i < 150 && ownLink.status().connected; i += 1) await delay(20);
+      expect(ownLink.status().connected).toBe(false);
+      expect(ownLink.status().caps).toEqual([]);
+      expect(ownLink.status().capsAt).toBe(0);
+    } finally {
+      await ownLink.stop();
+      if (!relayClosed) await ownRelay.close();
+    }
+  }, 25000);
+
+  it('незнакомый кадр игнорируется: соединение живо и следующий кадр обслуживается', async () => {
+    const c = await capsClient('caps-future-laptop');
+    // Кадр из будущего клиента, которого этот агент не знает: ни ответа, ни разрыва.
+    c.send(encodeFrame({ type: 200 as FrameType, channel: 0, payload: te.encode('{}') }));
+    c.send(jsonFrame(FrameType.Capabilities, 0, { caps: ['feed'] }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CapabilitiesResult);
+  }, 25000);
+});
+
+describe('RelayLink — лента сессии через relay', () => {
+  const OWN_SESSION = 'feed-own';
+  const OTHER_SESSION = 'feed-other';
+  const DEVICE = 'feed-device';
+
+  let feedIdentity: Identity;
+  let feedId: string;
+  let feedLink: RelayLink;
+  let asked: { session: string; opts: Record<string, unknown> }[] = [];
+  /** Подставная лента бросает вместо ответа: сорванное чтение обязано доехать телом. */
+  let crash = false;
+
+  beforeAll(() => {
+    feedIdentity = generateIdentity();
+    feedId = fingerprint(feedIdentity.edPub);
+    feedLink = new RelayLink({
+      url: `ws://127.0.0.1:${relayHandle.port}/relay`,
+      identity: feedIdentity,
+      authorized: () => loadAuthorized(),
+      sessions: { list: async () => [] } as unknown as SessionService,
+      socketName,
+      feed: async (session, opts) => {
+        if (crash) throw new Error('transcript vanished');
+        asked.push({ session, opts: opts as Record<string, unknown> });
+        return FEED_PAGE;
+      },
+    });
+    feedLink.start();
+  });
+
+  afterAll(async () => {
+    await feedLink.stop();
+  });
+
+  beforeEach(() => {
+    asked = [];
+    crash = false;
+  });
+
+  interface FeedClient {
+    send(bytes: Uint8Array): void;
+    /** Следующий кадр агента; null — агент промолчал дольше срока. */
+    next(): Promise<ReturnType<typeof decodeFrame> | null>;
+  }
+
+  async function feedClient(scope?: AuthorizedDevice['scope']): Promise<FeedClient> {
+    const clientId = generateIdentity();
+    saveAuthorized([
+      { name: DEVICE, edPub: b64(clientId.edPub), fingerprint: fingerprint(clientId.edPub), addedAt: Date.now(), scope },
+    ]);
+    const { ws, col } = await connectClient(relayHandle.port, feedId);
+    ws.send(helloFrame(clientId, crypto.randomBytes(32), DEVICE), { binary: true });
+    const ok = JSON.parse(td.decode(decodeFrame(new Uint8Array((await col.next()).binary as Buffer)).payload)) as {
+      header: string;
+      nonce: string;
+    };
+    const { rx, tx } = sessionKeys('client', clientId, feedIdentity.edPub);
+    const dec = makeDecryptor(rx, unb64(ok.header));
+    const enc = makeEncryptor(tx);
+    ws.send(finFrame(clientId, enc, ok), { binary: true });
+    return {
+      send: (bytes: Uint8Array) => ws.send(enc.push(bytes), { binary: true }),
+      next: async () => {
+        const msg = await Promise.race([col.next(), delay(2000).then(() => null)]);
+        return msg ? decodeFrame(dec.pull(new Uint8Array(msg.binary as Buffer))) : null;
+      },
+    };
+  }
+
+  it('владелец: на кадр Feed приходит FeedResult с тем же JSON, что и у GET /api/feed', async () => {
+    const c = await feedClient();
+    // Вместе с запросом едет лишнее: путь и ввод. Адресация ленты — только имя сессии,
+    // поэтому до неё не доходит ни то, ни другое (ни писать, ни читать чужой файл).
+    c.send(
+      jsonFrame(FrameType.Feed, 0, {
+        session: OWN_SESSION,
+        limit: 50,
+        before: '42:120',
+        path: '/etc/passwd',
+        data: 'rm -rf /',
+      }),
+    );
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(frame!.payload)).toBe(FEED_PAGE_JSON);
+    expect(asked).toEqual([
+      { session: OWN_SESSION, opts: { limit: 50, before: '42:120', after: undefined, around: undefined } },
+    ]);
+  }, 25000);
+
+  it('гость получает ленту СВОЕЙ сессии без права write и без права files', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(frame!.payload)).toBe(FEED_PAGE_JSON);
+    expect(asked.map((a) => a.session)).toEqual([OWN_SESSION]);
+  }, 25000);
+
+  it('пустые значения в запросе равносильны отсутствующим, как и в URL §9', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, limit: '', before: '', after: '', around: '' }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(asked).toEqual([
+      { session: OWN_SESSION, opts: { limit: undefined, before: undefined, after: undefined, around: undefined } },
+    ]);
+  }, 25000);
+
+  it('неожиданный сбой чтения отвечает тем же телом, что и по LAN, а мост остаётся жив', async () => {
+    const c = await feedClient();
+    crash = true;
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+
+    const crashed = await c.next();
+    expect(crashed?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(crashed!.payload)).toBe(FEED_CRASH_JSON);
+
+    // Соединение живо: следующий запрос обслуживается как ни в чём не бывало.
+    crash = false;
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+    expect(td.decode((await c.next())!.payload)).toBe(FEED_PAGE_JSON);
+  }, 25000);
+
+  it('гость не получает ленту сборочной сессии своей сессии: беседы агента в ней нет', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: true, files: true });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: buildSessionName(OWN_SESSION) }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(frameJson<Record<string, unknown>>(frame!)).toEqual({
+      ok: false,
+      reason: 'forbidden',
+      detail: 'session not shared',
+    });
+    expect(asked).toEqual([]);
+  }, 25000);
+
+  // Отказ ленты едет кадром ЛЕНТЫ, а не общим Error: тем же кадром гостю отвечают на
+  // девять других запросов контрольного канала (caffeinate он повторяет раз в три
+  // секунды), и клиент, принимающий Error за ответ ленты, показывал бы чужой отказ
+  // вместо беседы.
+  it('гость с полными правами не получает ленту чужой сессии: отказ кадром ленты, файл не читается', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: true, files: true });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OTHER_SESSION }));
+
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(frameJson<Record<string, unknown>>(frame!)).toEqual({
+      ok: false,
+      reason: 'forbidden',
+      detail: 'session not shared',
+    });
+    expect(asked).toEqual([]);
   }, 25000);
 });

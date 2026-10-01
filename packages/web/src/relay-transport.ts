@@ -12,6 +12,7 @@ import {
   jsonFrame,
   makeDecryptor,
   makeEncryptor,
+  parseCaps,
   sessionKeys,
   sign,
   verify,
@@ -24,10 +25,13 @@ import {
   type SessionInfo,
   type FileEntry,
   type FileContent,
+  type TerminalMode,
 } from '@termhub/protocol';
 
 import { b64, unb64 } from './b64';
-import type { CaffeinateState, DeviceInfo, DeviceScope, FileStat, ShareInfo } from './api';
+import { parseTerminalState } from './ws-frames';
+import { feedQuery } from './api';
+import type { CaffeinateState, DeviceInfo, DeviceScope, FeedOptions, FeedResult, FileStat, ShareInfo } from './api';
 import type {
   CreateSessionInput,
   DirGroup,
@@ -42,6 +46,20 @@ const CONTROL_CHANNEL = 0;
 const FIRST_TERM_CHANNEL = 1;
 /** Тайм-аут ответа на LIST (покрывает и начальный хендшейк). */
 const LIST_TIMEOUT_MS = 10_000;
+// Молчание агента на объявление возможностей: старый агент незнакомый кадр просто
+// игнорирует, поэтому ждать ответа как обычного запроса нельзя — 2 с и «не умеет».
+const CAPS_TIMEOUT_MS = 2000;
+// Сколько ещё правдоподобен ответ на запрос ленты, который сдался по таймауту. Позже
+// этого срока ответ считается потерянным, а долг — недействительным: иначе один
+// неоплаченный долг съедал бы ответ каждого следующего запроса и лента молча умирала
+// бы до реконнекта.
+//
+// Два значит «короче периода опроса ленты» (3 с), а не замер: сколько именно опаздывает
+// потерянный ответ, померить нечем — кадр идёт без идентификатора запроса, и точное
+// сопоставление стоило бы побайтового совпадения тел LAN и relay, на котором держится
+// общая фикстура агента (feed-fixture.ts). Остаточный риск — одна чужая страница на
+// экране, который и так перезапрашивает.
+const FEED_STALE_MS = 2000;
 /** Тайм-аут ответа на экшены Gradle: `tasks` ждёт настоящий `gradle tasks --all`,
  *  у которого на стороне агента свой потолок 180 с — общий 10-секундный обрывал бы
  *  первое открытие вкладки на холодном демоне. */
@@ -53,6 +71,12 @@ const BACKOFF_MAX_MS = 15_000;
 const CHALLENGE_BYTES = 32;
 
 const utf8dec = new TextDecoder();
+
+/** Часы для сроков: монотонные, а не настенные. Сдвиг системного времени и сон машины
+ *  гасили бы срок долга досрочно — ровно в ту дыру, которую долг и закрывает. */
+function monotonicNow(): number {
+  return performance.now();
+}
 
 /** Статус relay-линка для оркестратора (баннер «подключение/переподключение»).
  *  `outdated` — рассинхрон версий протокола между этим бандлом и агентом: чинится
@@ -69,6 +93,12 @@ interface TermEntry {
   opts: TermChannelOpts;
   /** true после OPEN_OK; сбрасывается на реконнекте (пере-OPEN). */
   opened: boolean;
+}
+
+/** Полезная нагрузка OPEN. Просьба о режиме едет именно здесь: терминал relay
+ *  создаётся на OPEN, и к первому RESIZE решение агентом уже принято. */
+function openPayload(entry: TermEntry): { session: string; mode?: TerminalMode } {
+  return entry.opts.mode ? { session: entry.session, mode: entry.opts.mode } : { session: entry.session };
 }
 
 /** Ожидающий LIST_RESULT (FIFO — за раз в полёте обычно один). */
@@ -97,6 +127,24 @@ interface PendingCaffeinate {
 /** Ожидающий PUSH_KEY_RESULT (FIFO). */
 interface PendingPushKey {
   resolve: (key: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** Ожидающий CAPABILITIES_RESULT. Он всегда один: кадр без id, поэтому очередь
+ *  из нескольких обменов разъезжалась бы при таймауте — опоздавший ответ достался
+ *  бы соседу. Молчание — не ошибка: истёкший таймер резолвит пустым списком. */
+interface PendingCaps {
+  resolve: (caps: string[]) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** Ожидающий FEED_RESULT. Слот один, как у возможностей: кадр идёт без идентификатора
+ *  запроса, и очередь из нескольких разъехалась бы на первом же таймауте — опоздавший
+ *  ответ достался бы соседу. Запрос в полёте поэтому тоже один. */
+interface PendingFeed {
+  resolve: (result: FeedResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -207,6 +255,19 @@ export class RelayTransport implements Transport {
   private pendingCaffeinate: PendingCaffeinate[] = [];
   private pendingPushKey: PendingPushKey[] = [];
   private pendingAddresses: PendingAddresses[] = [];
+  /** Обмен возможностями этого подключения — идущий или уже завершённый (ADR 0018,
+   *  §10: обмен один на подключение). Повторный вызов переиспользует его, поэтому
+   *  чужого ожидающего у опоздавшего ответа просто нет. */
+  private capsExchange?: Promise<string[]>;
+  private capsPending?: PendingCaps;
+  private pendingFeed?: PendingFeed;
+  /** Запросы ленты, ждущие своей очереди: на проводе их всегда не больше одного. */
+  private feedQueue: Array<() => void> = [];
+  /** Сроки ответов, которые уже никому не предназначены: запрос сдался по таймауту, а
+   *  ответ на него всё ещё может прийти. Такой съедается, иначе достался бы следующему
+   *  ожидающему как его собственный — сопоставить их по кадру нечем. Сроки идут по
+   *  возрастанию, просроченные забываются: долг не переживает своего запроса. */
+  private feedOwed: number[] = [];
   // Сопоставление ответов по id, а НЕ по порядку (FIFO): агент обрабатывает кадры
   // асинхронно, время ответа зависит от размера каталога/файла, а таймаут вырезал
   // ожидающего из середины очереди — дальше все ответы съезжали на один. Для чанков
@@ -451,7 +512,7 @@ export class RelayTransport implements Transport {
   private onStreamReady(): void {
     for (const entry of this.terminals.values()) {
       entry.opened = false;
-      this.sendEncrypted(jsonFrame(FrameType.Open, entry.channel, { session: entry.session }));
+      this.sendEncrypted(jsonFrame(FrameType.Open, entry.channel, openPayload(entry)));
     }
     const queued = this.outbox;
     this.outbox = [];
@@ -530,6 +591,34 @@ export class RelayTransport implements Transport {
           key = '';
         }
         pending.resolve(key);
+        return;
+      }
+      case FrameType.CapabilitiesResult: {
+        const pending = this.capsPending;
+        if (!pending) return; // опоздавший или лишний ответ — обмен уже закрыт
+        this.capsPending = undefined;
+        clearTimeout(pending.timer);
+        let caps: string[] = [];
+        try {
+          caps = parseCaps(frameJson<{ caps?: unknown }>(frame).caps);
+        } catch {
+          caps = [];
+        }
+        pending.resolve(caps);
+        return;
+      }
+      case FrameType.FeedResult: {
+        if (this.takeOwedFeedReply()) return; // ответ тому, кто уже сдался по таймауту
+        const pending = this.pendingFeed;
+        if (!pending) return; // опоздавший ответ: его ожидающего уже нет
+        this.pendingFeed = undefined;
+        clearTimeout(pending.timer);
+        try {
+          pending.resolve(frameJson<FeedResult>(frame));
+        } catch {
+          // Битый payload — это сломанный провод, а не отказ ленты: у отказа есть причина.
+          pending.reject(new Error('bad feed result'));
+        }
         return;
       }
       case FrameType.AddressesResult: {
@@ -699,6 +788,10 @@ export class RelayTransport implements Transport {
         this.terminals.get(frame.channel)?.opts.onBell();
         return;
       }
+      case FrameType.TerminalState: {
+        this.terminals.get(frame.channel)?.opts.onTerminalState?.(parseTerminalState(frame));
+        return;
+      }
       case FrameType.Close: {
         const entry = this.terminals.get(frame.channel);
         if (!entry) return;
@@ -725,6 +818,9 @@ export class RelayTransport implements Transport {
               pending.reject(new Error(err.message ?? 'create failed'));
             }
           }
+          // Отказ ленты сюда не попадает: он приезжает кадром ленты (FeedResult с
+          // причиной `forbidden`). Тем же Error гость получает отказ на девять других
+          // запросов контрольного канала, и принимать его за ответ ленты нельзя.
           return;
         }
         let message: string | undefined;
@@ -769,6 +865,21 @@ export class RelayTransport implements Transport {
     this.pendingCaffeinate = [];
     this.pendingPushKey = [];
     this.pendingAddresses = [];
+    // Обмен возможностями привязан к подключению: следующее объявляется заново —
+    // агент мог обновиться, пока нас не было.
+    if (this.capsPending) {
+      clearTimeout(this.capsPending.timer);
+      this.capsPending.reject(new Error('relay disconnected'));
+      this.capsPending = undefined;
+    }
+    this.capsExchange = undefined;
+    const feedPending = this.pendingFeed;
+    this.pendingFeed = undefined;
+    this.feedOwed = []; // ответы прежнего соединения не придут уже никогда
+    if (feedPending) {
+      clearTimeout(feedPending.timer);
+      feedPending.reject(new Error('relay disconnected'));
+    }
 
     this.pendingShare = [];
     this.pendingDevices = [];
@@ -1152,6 +1263,71 @@ export class RelayTransport implements Transport {
     });
   }
 
+  /** Объявление возможностей (ADR 0018): называем свои имена и ждём ответа агента.
+   *  Агент, который кадра не знает, молчит — через CAPS_TIMEOUT_MS отвечаем пустым
+   *  списком сами: молчание это «не умеет», а не сбой. */
+  capabilities(caps: string[]): Promise<string[]> {
+    if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    if (this.capsExchange) return this.capsExchange;
+    this.capsExchange = new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.capsPending = undefined;
+        resolve([]);
+      }, CAPS_TIMEOUT_MS);
+      this.capsPending = { resolve, reject, timer };
+      this.sendFrame(jsonFrame(FrameType.Capabilities, CONTROL_CHANNEL, { caps }));
+    });
+    return this.capsExchange;
+  }
+
+  /** Страница ленты кадром Feed; ответ — FeedResult тем же телом, что отдаёт
+   *  `GET /api/feed`, поэтому разбирать его нечем: он и есть результат. */
+  feed(session: string, opts: FeedOptions = {}): Promise<FeedResult> {
+    return new Promise<FeedResult>((resolve, reject) => {
+      const send = (): void => {
+        if (!this.isStreaming) {
+          reject(new Error('relay not streaming'));
+          this.startNextFeed();
+          return;
+        }
+        const timer = setTimeout(() => {
+          this.pendingFeed = undefined;
+          this.feedOwed.push(monotonicNow() + FEED_STALE_MS);
+          reject(new Error('feed timeout'));
+          this.startNextFeed();
+        }, LIST_TIMEOUT_MS);
+        this.pendingFeed = {
+          resolve: (result): void => {
+            resolve(result);
+            this.startNextFeed();
+          },
+          reject: (err): void => {
+            reject(err);
+            this.startNextFeed();
+          },
+          timer,
+        };
+        this.sendFrame(jsonFrame(FrameType.Feed, CONTROL_CHANNEL, feedQuery(session, opts)));
+      };
+      // Очередь не обгоняют: пока в полёте запрос или кто-то ждёт в очереди — в хвост.
+      if (this.pendingFeed || this.feedQueue.length > 0) this.feedQueue.push(send);
+      else send();
+    });
+  }
+
+  /** Отпускает следующий запрос ленты: очередь двигает только закрытие предыдущего. */
+  private startNextFeed(): void {
+    this.feedQueue.shift()?.();
+  }
+
+  /** Этот ответ предназначен запросу, который уже сдался по таймауту? Просроченные
+   *  долги по пути забываются: ответ, которого не будет никогда, чужой не съедает. */
+  private takeOwedFeedReply(): boolean {
+    const now = monotonicNow();
+    while (this.feedOwed.length > 0 && this.feedOwed[0]! <= now) this.feedOwed.shift();
+    return this.feedOwed.shift() !== undefined;
+  }
+
   subscribePush(subscription: unknown): Promise<void> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
     // Агент не подтверждает подписку — отправляем и полагаемся на best-effort.
@@ -1165,7 +1341,7 @@ export class RelayTransport implements Transport {
     this.terminals.set(channel, entry);
     // OPEN шлём сразу только если поток уже установлен; иначе терминал откроет
     // onStreamReady — так закрытие до установления потока не оставит «висячий» OPEN.
-    if (this.state === 'streaming') this.sendEncrypted(jsonFrame(FrameType.Open, channel, { session }));
+    if (this.state === 'streaming') this.sendEncrypted(jsonFrame(FrameType.Open, channel, openPayload(entry)));
     return {
       write: (bytes: Uint8Array): void => this.sendFrame(encodeFrame({ type: FrameType.Data, channel, payload: bytes })),
       resize: (cols: number, rows: number): void => this.sendFrame(jsonFrame(FrameType.Resize, channel, { cols, rows })),

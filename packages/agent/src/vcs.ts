@@ -691,17 +691,18 @@ export class VcsService {
     return result;
   }
 
+  // Драйверы diff из .gitattributes/.git/config не должны исполняться при просмотре.
   private async gitDiff(top: string, file: string, rev?: string): Promise<string> {
     if (rev) {
-      return this.runAllowFail(top, 'git', ['show', '--no-color', '--format=', rev, '--', file]);
+      return this.runAllowFail(top, 'git', ['show', '--no-color', '--no-textconv', '--no-ext-diff', '--format=', rev, '--', file]);
     }
-    const tracked = await this.runAllowFail(top, 'git', ['diff', '--no-color', 'HEAD', '--', file]);
+    const tracked = await this.runAllowFail(top, 'git', ['diff', '--no-color', '--no-textconv', '--no-ext-diff', 'HEAD', '--', file]);
     if (tracked.trim()) return tracked;
     // Пусто → возможно, файл новый (untracked): показываем как полное добавление.
     // `--no-index` работает и ВНЕ репозитория, поэтому путь обязан быть внутри `top`
     // (checkFile уже отверг абсолютные и «..», здесь — защита от симлинка наружу).
     await assertInsideRepo(top, file);
-    return this.runAllowFail(top, 'git', ['diff', '--no-color', '--no-index', '--', '/dev/null', file]);
+    return this.runAllowFail(top, 'git', ['diff', '--no-color', '--no-textconv', '--no-ext-diff', '--no-index', '--', '/dev/null', file]);
   }
 
   private async gitCommit(top: string, files: string[], message: string): Promise<void> {

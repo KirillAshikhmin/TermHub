@@ -29,6 +29,9 @@ import {
   jsonFrame,
   frameJson,
   toB64,
+  AGENT_CAPS,
+  intersect,
+  parseCaps,
   FrameType,
   type Identity,
   type Frame,
@@ -38,6 +41,7 @@ import {
   type FileEntry,
   type FileContent,
   type FileInfo,
+  type TerminalMode,
 } from '@termhub/protocol';
 import type { AuthorizedDevice } from './config.js';
 import { saveAuthorized, parseScope } from './config.js';
@@ -79,6 +83,8 @@ import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
 import { runGradleAction } from './gradle-action.js';
 import { buildSessionName } from './gradle.js';
+import { sessionFeed, type FeedResult } from './session-feed.js';
+import { feedPage, feedSession, type FeedReader } from './feed-request.js';
 import { VcsService } from './vcs.js';
 
 /** TTL кода пейринга — 5 минут (совпадает с relay). */
@@ -154,6 +160,10 @@ interface ClientSession {
   decryptor?: Decryptor;
   /** Таймер pre-hello: гасится при переходе в streaming и в disposeClient. */
   helloTimer?: ReturnType<typeof setTimeout>;
+  /** Пересечение возможностей с этим клиентом (ADR 0018) и время обмена: пока он на
+   *  связи, его показывает диагностика агента; ушёл — ушло и пересечение. */
+  caps: string[];
+  capsAt: number;
   /** channel → живой терминал (мультиплекс нескольких pty в одном connId). */
   terminals: Map<number, TerminalHandle>;
 }
@@ -192,6 +202,11 @@ export class RelayLink {
   /** Адреса прямого доступа к агенту (минуя relay); отдаются по кадру Addresses. */
   private readonly localUrls?: () => string[];
   private readonly attach: typeof attachTerminal;
+  /** Настройка агента: способ подключения терминала (`config.terminalMode`). */
+  private readonly configMode?: TerminalMode;
+  /** Лента сессии: имя сессии → страница беседы её агента. Тот же вызов делает LAN,
+   *  поэтому ответ обоих транспортов — один и тот же объект. */
+  private readonly feed: FeedReader;
   private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
@@ -237,8 +252,12 @@ export class RelayLink {
     helloTimeoutMs?: number;
     /** Инжектируется в тестах; по умолчанию — реальный attachTerminal. */
     attach?: typeof attachTerminal;
+    /** Способ подключения терминала из конфига агента; клиентом не перебивается. */
+    configMode?: TerminalMode;
     /** Общий budget живых pty: один на LAN и relay. */
     ptyPool?: PtyPool;
+    /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
+    feed?: FeedReader;
   }) {
     this.url = opts.url;
     this.identity = opts.identity;
@@ -253,7 +272,11 @@ export class RelayLink {
     this.localUrls = opts.localUrls;
     this.helloTimeoutMs = opts.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
     this.attach = opts.attach ?? attachTerminal;
+    this.configMode = opts.configMode;
     this.ptyPool = opts.ptyPool ?? defaultPtyPool;
+    // Сокет передаём явно: по умолчанию лента (как resolve и SessionService) его не
+    // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
+    this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -281,6 +304,17 @@ export class RelayLink {
     this.authorizedAt = 0;
   }
 
+  /** Чья это сессия. Хозяину (scope нет) доступна любая; гостю — только расшаренная.
+   *  `withBuild` — считать ли своей и сборочную сессию расшаренной: терминал вкладки
+   *  Gradle открывается тем же openTerm (doOpen), а вот беседы агента в сборочной
+   *  сессии нет, и лента её не отдаёт. Правило одно на doList/doOpen/doFeed: врозь они
+   *  разошлись бы молча. */
+  private ownsSession(s: ClientSession, session: string, withBuild: boolean): boolean {
+    const scope = s.scope;
+    if (!scope) return true;
+    return session === scope.session || (withBuild && session === buildSessionName(scope.session));
+  }
+
   /** Требует, чтобы запрошенный путь лежал внутри каталога расшаренной сессии.
    *  Для владельца (scope нет) — без ограничений. Для гостя ограничение корнями
    *  недостаточно: «поделиться ОДНОЙ сессией» не должно открывать все sessionRoots,
@@ -289,7 +323,16 @@ export class RelayLink {
     const realDir = await this.scopedDir(s);
     if (!realDir) return;
     const abs = path.resolve(root, subpath);
-    const real = await fsp.realpath(abs).catch(() => abs);
+    let real: string;
+    try {
+      real = await fsp.realpath(abs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // Новым может быть только последний компонент. Родитель обязан существовать
+      // и после realpath лежать в shared-каталоге: иначе symlink обходит scope.
+      const parent = await fsp.realpath(path.dirname(abs));
+      real = path.join(parent, path.basename(abs));
+    }
     if (real !== realDir && !real.startsWith(realDir + path.sep))
       throw new Error('path outside shared session');
   }
@@ -479,8 +522,34 @@ export class RelayLink {
   }
 
   /** Диагностический статус связи с relay (для /api/diag). */
-  status(): { configured: true; connected: boolean; agentId: string; clients: number } {
-    return { configured: true, connected: this.registered, agentId: this.agentId, clients: this.clients.size };
+  status(): {
+    configured: true;
+    connected: boolean;
+    agentId: string;
+    clients: number;
+    caps: string[];
+    capsAt: number;
+  } {
+    // Пересечение — свойство живого клиента, а не моста (ADR 0018): показываем самый
+    // свежий обмен среди подключённых. Клиент ушёл или связь с relay оборвалась — его
+    // сессии уже нет, и /api/diag не покажет пересечение с тем, кого нет: иначе оно
+    // по времени обмена перебивало бы свежий обмен по LAN.
+    let caps: string[] = [];
+    let capsAt = 0;
+    for (const s of this.clients.values()) {
+      if (s.capsAt >= capsAt) {
+        caps = s.caps;
+        capsAt = s.capsAt;
+      }
+    }
+    return {
+      configured: true,
+      connected: this.registered,
+      agentId: this.agentId,
+      clients: this.clients.size,
+      caps,
+      capsAt,
+    };
   }
 
   // ── Пейринг (роль агента) ────────────────────────────────────────────────────
@@ -542,7 +611,7 @@ export class RelayLink {
     // её pty оставались висеть без владельца (утечка процессов), а поток шифрования
     // рассинхронизировался. Старую сессию корректно закрываем.
     if (this.clients.has(connId)) this.disposeClient(connId);
-    const session: ClientSession = { connId, state: 'hello', terminals: new Map() };
+    const session: ClientSession = { connId, state: 'hello', caps: [], capsAt: 0, terminals: new Map() };
     // Cap на pending (не подтвердивших streaming) клиентов. relay видит их как обычных
     // клиентов и держит слот до дисконнекта; отозванное/враждебное устройство знает
     // публичный agentId и могло бы полу-открытыми сессиями исчерпать per-agent cap relay.
@@ -733,6 +802,12 @@ export class RelayLink {
           // дополнительно требуют write (в doRepo/doFileOp).
           if (!scope.files) return;
           break;
+        case FrameType.Feed:
+          // Лента гостю — наравне с хозяином: write она не требует (ничего не меняет),
+          // files тоже (произвольный путь через неё не прочитать — адрес только имя
+          // сессии). Ограничение «только своя сессия» — в doFeed: имя лежит в payload,
+          // а он здесь ещё не разобран.
+          break;
         default:
           break;
       }
@@ -788,6 +863,21 @@ export class RelayLink {
           jsonFrame(FrameType.AddressesResult, 0, { urls: s.scope ? [] : (this.localUrls?.() ?? []) }),
         );
         return;
+      case FrameType.Capabilities: {
+        // Объявление возможностей (ADR 0018): клиент называет свои имена, отвечаем
+        // своими, и дальше обе стороны работают по пересечению. Гостю отвечаем
+        // наравне: это данные о протоколе, а не доступ к сессиям.
+        let announced: unknown;
+        try {
+          announced = frameJson<{ caps?: unknown }>(frame).caps;
+        } catch {
+          announced = undefined; // битый payload — клиент не назвал ничего
+        }
+        s.caps = intersect(AGENT_CAPS, parseCaps(announced));
+        s.capsAt = Date.now();
+        this.sendFrameBytes(s, jsonFrame(FrameType.CapabilitiesResult, 0, { caps: AGENT_CAPS }));
+        return;
+      }
       case FrameType.PushKey:
         this.sendFrameBytes(s, jsonFrame(FrameType.PushKeyResult, 0, { key: this.push?.vapidPublicKey() ?? '' }));
         return;
@@ -818,6 +908,9 @@ export class RelayLink {
       case FrameType.Gradle:
         void this.doGradle(s, frame);
         return;
+      case FrameType.Feed:
+        void this.doFeed(s, frame);
+        return;
       case FrameType.Share:
         void this.doShare(s, frame);
         return;
@@ -842,8 +935,8 @@ export class RelayLink {
     } catch {
       sessions = [];
     }
-    // Гость видит только свою сессию.
-    if (s.scope) sessions = sessions.filter((sess) => sess.name === s.scope!.session);
+    // Гость видит только свою сессию (сборочные в листинге не показываются вовсе).
+    sessions = sessions.filter((sess) => this.ownsSession(s, sess.name, false));
     this.sendFrameBytes(s, jsonFrame(FrameType.ListResult, 0, { sessions, scope: s.scope ?? null }));
   }
 
@@ -954,7 +1047,7 @@ export class RelayLink {
       const opRoot = String(req.root ?? '');
       await this.assertScopedPath(s, opRoot, String(req.path ?? ''));
       // move/copy имеют назначение — его тоже держим внутри расшаренной сессии.
-      if (req.dest !== undefined) {
+      if (req.action === 'copy' || req.action === 'move') {
         await this.assertScopedPath(s, String(req.destRoot ?? opRoot), String(req.dest ?? ''));
       }
       const result = await runFileOp(this.files, req);
@@ -985,6 +1078,30 @@ export class RelayLink {
     } catch (err) {
       this.sendFrameBytes(s, jsonFrame(FrameType.GradleResult, 0, { id, error: (err as Error).message }));
     }
+  }
+
+  /** Лента сессии через relay: тот же ответ, что отдаёт `GET /api/feed`, — запрос
+   *  разбирает общий feed-request, поэтому JSON обоих транспортов совпадает побайтово
+   *  и на отказе, и на сорванном чтении. Гостю доступна только его сессия (тем же
+   *  предикатом, что решает doOpen) — БЕЗ сборочной: беседы агента в ней нет. Чужую
+   *  сессию мост не читает вовсе: причина `forbidden` приезжает телом ответа ленты. */
+  private async doFeed(s: ClientSession, frame: Frame): Promise<void> {
+    let req: Record<string, unknown>;
+    try {
+      req = frameJson<Record<string, unknown>>(frame);
+    } catch {
+      req = {};
+    }
+    if (!this.ownsSession(s, feedSession(req), false)) {
+      // Отказ ленты едет кадром ЛЕНТЫ, а не общим Error: тем же Error гость получает
+      // отказ на девять других запросов контрольного канала (caffeinate он повторяет
+      // раз в три секунды), и клиент, сопоставляющий ответ ленты по типу кадра, принял
+      // бы чужой отказ за свой. Тело — та же форма, что у прочих отказов ленты.
+      const refused: FeedResult = { ok: false, reason: 'forbidden', detail: 'session not shared' };
+      this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, refused));
+      return;
+    }
+    this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req)));
   }
 
   /** Листинг директории файлового браузера через relay. Ошибка (вне корня) —
@@ -1155,29 +1272,48 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'too-many-terminals', message: 'too many terminals' }));
       return;
     }
-    let req: { session?: unknown };
+    let req: { session?: unknown; mode?: unknown };
     try {
-      req = frameJson<{ session?: unknown }>(frame);
+      req = frameJson<{ session?: unknown; mode?: unknown }>(frame);
     } catch {
       return;
     }
     if (typeof req.session !== 'string') return;
     const session = req.session;
+    // Просьба клиента о способе подключения едет в OPEN: терминал relay открывает здесь,
+    // до первого RESIZE, и позже выбор режима уже не пересматривается.
+    const requestedMode = typeof req.mode === 'string' ? req.mode : undefined;
     // Гость может открыть только свою сессию — и сборочную сессию ЕЁ сборки
     // (вкладка Gradle показывает вывод через тот же openTerm), но не чужую.
-    if (s.scope && session !== s.scope.session && session !== buildSessionName(s.scope.session)) {
+    if (!this.ownsSession(s, session, true)) {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'forbidden', message: 'session not shared' }));
       return;
     }
     let handle: TerminalHandle;
+    // Что клиент знает о терминале: способ подключения и альтернативный экран. Кадр
+    // состояния новый — клиент прежней версии его не знает и обязан пропустить.
+    let mode: TerminalMode | undefined;
+    let altScreen = false;
+    const sendState = (): void =>
+      this.sendFrameBytes(s, jsonFrame(FrameType.TerminalState, channel, { mode, altScreen }));
     try {
       handle = this.attach({
         session,
         socketName: this.socketName,
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
+        configMode: this.configMode,
+        requestedMode,
         onData: (b) => this.sendFrameBytes(s, encodeFrame({ type: FrameType.Data, channel, payload: b })),
         onBell: (sess) => this.sendFrameBytes(s, jsonFrame(FrameType.Bell, channel, { session: sess })),
+        onMode: (m) => {
+          mode = m;
+          sendState();
+        },
+        onAltScreen: (active) => {
+          altScreen = active;
+          sendState();
+        },
         onExit: () => {
           this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
           s.terminals.delete(channel);

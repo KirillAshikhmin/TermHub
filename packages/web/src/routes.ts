@@ -32,6 +32,11 @@ export function sgradleHash(session: string): string {
   return `#/sgradle/${encodeURIComponent(session)}`;
 }
 
+/** Вкладка «Лента» сессии: #/sfeed/<session> (подпути нет — лента одна на сессию). */
+export function sfeedHash(session: string): string {
+  return `#/sfeed/${encodeURIComponent(session)}`;
+}
+
 /** Подпуть из session-scoped hash; null — сегмент подпути отсутствует (открыть по
  *  умолчанию — по пути сессии). Имя сессии берётся роутером отдельно. */
 export function parseSessionSub(prefix: 'sfiles' | 'srepo'): string | null {

@@ -1,17 +1,16 @@
 // Обёртка агента над tmux: список/создание/убийство сессий, перечисление
-// каталогов под корнями и поллинг колокольчиков (bell). Все вызовы tmux — через
-// execFile (без shell). В тестах используется изолированный сокет (socketName → -L).
+// каталогов под корнями и поллинг колокольчиков (bell). Все вызовы tmux — через общий
+// runTmux (execFile, без shell). В тестах используется изолированный сокет (socketName → -L).
 
-import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { SessionInfo } from '@termhub/protocol';
 import { sessionWorking, sessionTitleText } from '@termhub/protocol';
 import { findSessionId, isExistingSessionName, literalTmuxName, SESSION_ID_FORMAT } from './tmux-session.js';
 export { isExistingSessionName } from './tmux-session.js';
+import { runTmux, isNoServerError, type TmuxError } from './tmux-run.js';
 
 const POLL_INTERVAL_MS = 2000;
-const EXEC_MAX_BUFFER = 4 * 1024 * 1024;
 
 /** Форматы вывода tmux (поля разделены табом). */
 const SESSION_FORMAT =
@@ -61,18 +60,6 @@ export function pickFreeName(base: string, taken: ReadonlySet<string>): string {
 export const SESSION_PRESETS = ['zsh', 'claude', 'codex'] as const;
 export type SessionPreset = (typeof SESSION_PRESETS)[number];
 const PRESETS = new Set<string>(SESSION_PRESETS);
-
-/** Результат tmux-вызова с exit-кодом и stderr (для распознавания «no server»). */
-interface TmuxError extends Error {
-  code?: number | string;
-  stderr?: string;
-}
-
-function isNoServerError(err: unknown): boolean {
-  const e = err as TmuxError;
-  const stderr = typeof e.stderr === 'string' ? e.stderr : '';
-  return e.code === 1 && /no server running|error connecting|no such file or directory/i.test(stderr);
-}
 
 /** Сырой формат «только имя» — для подбора свободного имени (см. takenNames). */
 const NAME_ONLY_FORMAT = '#{session_name}';
@@ -153,17 +140,7 @@ export class SessionService {
 
   /** Запускает tmux с изолированным сокетом (если задан) и возвращает stdout. */
   private tmux(args: string[]): Promise<string> {
-    const full = this.socketName ? ['-L', this.socketName, ...args] : args;
-    return new Promise((resolve, reject) => {
-      execFile('tmux', full, { encoding: 'utf8', maxBuffer: EXEC_MAX_BUFFER }, (err, stdout, stderr) => {
-        if (err) {
-          (err as TmuxError).stderr = stderr;
-          reject(err);
-          return;
-        }
-        resolve(stdout);
-      });
-    });
+    return runTmux(args, { socketName: this.socketName });
   }
 
   async list(): Promise<SessionInfo[]> {
@@ -237,6 +214,9 @@ export class SessionService {
           'codex',
           '-c', 'tui.animations=false',
           '-c', 'tui.terminal_title=["activity","thread-title"]',
+          // Inline вместо альтернативного экрана: только так у сессии Codex остаётся
+          // история, которую можно листать (иначе её не бывает вовсе).
+          '--no-alt-screen',
         );
       }
       return this.tmux(args);

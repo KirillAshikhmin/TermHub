@@ -5,6 +5,10 @@ interface Entry {
   bell: boolean;
   seen: boolean;
   working: boolean;
+  // Polling can report the same completion after its live BEL was acknowledged.
+  // Consume the title and tmux echoes separately because they may arrive apart.
+  pendingTitle: boolean;
+  pendingTmux: boolean;
 }
 const state = new Map<string, Entry>();
 const listeners = new Set<() => void>();
@@ -18,8 +22,10 @@ export function onBellChange(listener: () => void): () => void {
 
 /** BEL из открытого терминального канала — тот же источник, что и звук. */
 export function recordBell(name: string): void {
-  const entry = state.get(name) ?? { bell: false, seen: true, working: false };
+  const entry = state.get(name) ?? { bell: false, seen: true, working: false, pendingTitle: false, pendingTmux: false };
   entry.seen = false;
+  entry.pendingTitle = entry.working;
+  entry.pendingTmux = !entry.bell;
   state.set(name, entry);
   changed();
 }
@@ -32,10 +38,29 @@ export function observeBells(sessions: { name: string; bell: boolean; title?: st
     const working = sessionWorking(s.title ?? '');
     const e = state.get(s.name);
     if (!e) {
-      state.set(s.name, { bell: s.bell, seen: !s.bell, working });
+      state.set(s.name, { bell: s.bell, seen: !s.bell, working, pendingTitle: s.bell && working, pendingTmux: false });
       continue;
     }
-    if ((s.bell && !e.bell) || (e.working && sessionWaiting(s.title ?? ''))) e.seen = false;
+    // A new observed work cycle rearms both fallback sources. Repeated working
+    // snapshots can still precede the delayed completion title after a live BEL.
+    if (working && !e.working) {
+      e.pendingTitle = false;
+      e.pendingTmux = false;
+    }
+    if (s.bell && !e.bell) {
+      if (!e.pendingTmux) {
+        e.seen = false;
+        e.pendingTitle = e.working || working;
+      }
+      e.pendingTmux = false;
+    }
+    if (e.working && sessionWaiting(s.title ?? '')) {
+      if (!e.pendingTitle) {
+        e.seen = false;
+        e.pendingTmux = !s.bell;
+      }
+      e.pendingTitle = false;
+    }
     e.bell = s.bell;
     e.working = working;
   }

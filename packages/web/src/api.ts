@@ -1,6 +1,7 @@
 // Обёртка над REST агента: cookie-сессия (same-origin), единый разбор ошибок,
 // 401 на защищённых маршрутах → редирект на экран входа.
 
+import { parseCaps } from '@termhub/protocol/capabilities';
 import type { FileContent, FileEntry, SessionInfo } from '@termhub/protocol';
 
 export interface DirGroup {
@@ -67,6 +68,89 @@ export interface FileStat {
   size: number;
   mime: string;
   kind: 'text' | 'image' | 'video' | 'audio' | 'binary';
+}
+
+/** Одна запись ленты. Форма объявлена здесь, а не импортирована из пакета агента:
+ *  типы ленты живут на его стороне вместе с чтением файлов беседы, а веб знает только
+ *  то, что доезжает по проводу. */
+export interface FeedEntry {
+  id: string;
+  /** Момент, epoch ms. Ноль — метки не было. */
+  at: number;
+  kind: 'human' | 'agent' | 'thinking' | 'tool' | 'note';
+  text: string;
+  /** Имя инструмента — только у `kind: 'tool'`. */
+  tool?: string;
+  /** Веха кодом, а не фразой: слова подбирает экран. Только у `kind: 'note'`. */
+  note?: 'compacted' | 'interrupted' | 'error' | 'chain';
+  /** Ветка подагента. На сегодняшних данных пуста всегда — рисовать её нечем. */
+  branch?: string;
+  /** Текст обрезан агентом по пределу записи. */
+  truncated?: true;
+  /** Место записи `<inode>:<offset>` — им же прыгают к ней через `around`. */
+  cursor?: string;
+}
+
+/** Почему ленты нет. Первые пять — слова самой ленты; `forbidden` приходит не от неё,
+ *  а от моста relay, когда гость спросил чужую сессию (LAN гостей не знает). Разница
+ *  транспортов на экран не выходит: причина — всегда значение, а не исключение. */
+export type FeedFailureReason =
+  | 'no-agent'
+  | 'unknown-format'
+  | 'no-transcript'
+  | 'lookup-failed'
+  | 'cursor-stale'
+  | 'forbidden';
+
+/** Страница ленты. Край беседы — `bof`/`eof`, а НЕ пустой список: страница бывает
+ *  пустой на шаге через строку, не влезшую в окно ответа. */
+export interface FeedPage {
+  ok: true;
+  agent: 'claude' | 'codex';
+  entries: FeedEntry[];
+  /** Курсоры краёв отданного куска: `head` — для запроса назад, `tail` — вперёд. */
+  head: string;
+  tail: string;
+  bof: boolean;
+  eof: boolean;
+  /** Начало беседы лежит в этом же файле. */
+  complete: boolean;
+  /** Агент ещё работает — только тогда есть смысл спрашивать продолжение. */
+  live: boolean;
+  /** Сколько строк агент не разобрал. */
+  skipped: number;
+}
+
+export interface FeedFailure {
+  ok: false;
+  reason: FeedFailureReason;
+  detail: string;
+}
+
+/** Ответ на запрос страницы: отказ — такое же значение, как страница. */
+export type FeedResult = FeedPage | FeedFailure;
+
+/** Курсоры взаимоисключающие; при нескольких сразу агент берёт `around`, затем
+ *  `before`, затем `after`. Лимит по умолчанию 200, максимум 1000. */
+export interface FeedOptions {
+  limit?: number;
+  before?: string;
+  after?: string;
+  around?: string;
+}
+
+/** Запрос страницы на проводе: один перечень опций на оба транспорта — LAN раскладывает
+ *  его в строку запроса, relay шлёт тем же набором в теле кадра. Новый параметр
+ *  `FeedOptions` добавляется здесь и доезжает обоими путями, а не теряется молча на
+ *  одном из них. Пустое значение не отправляется вовсе — агент читает его как
+ *  отсутствующее, и слать его значит только путать. */
+export function feedQuery(session: string, opts: FeedOptions): Record<string, string | number> {
+  const query: Record<string, string | number> = { session };
+  if (opts.limit !== undefined) query.limit = opts.limit;
+  if (opts.before) query.before = opts.before;
+  if (opts.after) query.after = opts.after;
+  if (opts.around) query.around = opts.around;
+  return query;
 }
 
 /** Ошибка REST с HTTP-статусом (для локализованной реакции UI). */
@@ -143,8 +227,21 @@ export const api = {
   dirs: () => request<DirGroup[]>('GET', '/api/dirs'),
   diag: () => request<DiagInfo>('GET', '/api/diag'),
   mode: () => request<ModeInfo>('GET', '/api/mode'),
+  /** Объявление возможностей (ADR 0018): свой список в обмен на список агента.
+   *  Старый агент маршрута не знает и отвечает 404 — вызывающая сторона читает
+   *  отказ как «возможностей нет». */
+  capabilities: async (caps: string[]) =>
+    parseCaps((await request<{ caps?: unknown }>('POST', '/api/capabilities', { body: { caps } })).caps),
   vapidKey: async () => (await request<{ key: string }>('GET', '/api/push/vapid-key', { redirectOnAuth: false })).key,
   subscribePush: (subscription: unknown) => request<void>('POST', '/api/push/subscribe', { body: { subscription } }),
+  /** Страница ленты беседы. Отказ агента едет телом (`ok:false`) при HTTP 200, поэтому
+   *  исключением остаётся только сбой связи. Пустое значение параметра агент читает как
+   *  отсутствующее, но мы их и не шлём: в строку идёт только заданное. */
+  feed: (session: string, opts: FeedOptions = {}) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(feedQuery(session, opts))) q.set(key, String(value));
+    return request<FeedResult>('GET', `/api/feed?${q}`);
+  },
   caffeinate: () => request<CaffeinateState>('GET', '/api/caffeinate'),
   setCaffeinate: (active: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { active } }),
   filesList: (root: string, path: string) =>
