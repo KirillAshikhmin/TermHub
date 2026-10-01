@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { describe, it, expect, vi } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  SHELL_FUNCTIONS,
+  upgradeShellRc,
   TMUX_CONF_LINES,
   missingTmuxLines,
   ZSH_MARKER,
@@ -18,6 +22,26 @@ import {
 import { TMUX_SOCKET } from '../src/config.js';
 
 describe('setup pure helpers', () => {
+  it('loads shell commands from the repository instead of embedding them in rc', () => {
+    const block = zshAliasBlock();
+    expect(block).not.toContain('tm() {');
+    expect(block).toContain('termhub.zsh');
+    for (const shell of ['/bin/sh', '/bin/zsh', '/bin/bash'].filter((file) => fs.existsSync(file))) {
+      const result = execFileSync(shell, ['-c', block + '\ntype tm; type tml; type tmc'], { encoding: 'utf8' });
+      expect(result).toContain('tm is a');
+      expect(result).toContain('tml is a');
+      expect(result).toContain('tmc is a');
+    }
+  });
+
+  it('migrates a generated rc block without changing neighbouring user settings', () => {
+    const before = 'export KEEP=1\n' + ZSH_MARKER + '\n' + SHELL_FUNCTIONS + '\n' + 'alias mine=true\n';
+    const after = upgradeShellRc(before)!;
+    expect(after).toBe('export KEEP=1\n' + zshAliasBlock() + 'alias mine=true\n');
+    expect(upgradeShellRc(after)).toBe(after);
+    expect(upgradeShellRc('# termhub\ntm() { echo custom; }\n')).toBe(null);
+  });
+
   it('missingTmuxLines returns all lines for an empty file', () => {
     expect(missingTmuxLines('')).toEqual(TMUX_CONF_LINES);
   });
@@ -64,7 +88,7 @@ describe('setup pure helpers', () => {
   });
 
   it('tml — функция выбора сессии: группировка, нумерация, ввод и переход в каталог', () => {
-    const block = zshAliasBlock();
+    const block = ZSH_MARKER + "\n" + SHELL_FUNCTIONS;
     // Функция, а не алиас: нужен ввод и cd, меняющий каталог вызывающего шелла.
     expect(block).toContain('tml() {');
     // Список запрашивается вместе с рабочим каталогом — по нему и группируем.
@@ -85,7 +109,7 @@ describe('setup pure helpers', () => {
   });
 
   it('tmc — отдельный экран закрытия: рамка, цикл и kill по точному имени', () => {
-    const block = zshAliasBlock();
+    const block = ZSH_MARKER + "\n" + SHELL_FUNCTIONS;
     expect(block).toContain('tmc() {');
     // Список собирается тем же кодом, что и в tml, — экраны не разъедутся.
     expect(block).toContain('_th_rows() {');
@@ -100,7 +124,7 @@ describe('setup pure helpers', () => {
   });
 
   it('tml закрывает по отрицательному номеру и только с подтверждением', () => {
-    const block = zshAliasBlock();
+    const block = ZSH_MARKER + "\n" + SHELL_FUNCTIONS;
     expect(block).toContain('-N closes');
     // Минус снимается, дальше номер разбирается как обычный.
     expect(block).toContain('_th_neg=1');
@@ -119,14 +143,14 @@ describe('setup pure helpers', () => {
   });
 
   it('zshAliasBlock содержит маркер, функцию tm и алиас tml на выделенном сокете', () => {
-    const block = zshAliasBlock();
+    const block = ZSH_MARKER + "\n" + SHELL_FUNCTIONS;
     expect(block.includes(ZSH_MARKER)).toBe(true);
     // Функция, а не alias: явное имя — `new -As "$1"` (присоединиться или создать);
     // без аргумента — свободное имя от basename каталога: занятые берутся из
     // `list-sessions -F '#{session_name}'` и сравниваются дословно (не `has-session -t "=…"`:
     // точка в цели tmux — разделитель), затем `new -s`. Само правило — вживую в tm-shell.test.ts.
     expect(block.includes('tm() {')).toBe(true);
-    expect(block.includes(`tmux -L ${TMUX_SOCKET} new -As "$1"`)).toBe(true);
+    expect(block.includes(`tmux -L ${TMUX_SOCKET} attach -t "=$1:"`)).toBe(true);
     expect(block.includes(`tmux -L ${TMUX_SOCKET} list-sessions -F '#{session_name}'`)).toBe(true);
     expect(block.includes('has-session')).toBe(false);
     expect(block.includes(`tmux -L ${TMUX_SOCKET} new -s "`)).toBe(true);

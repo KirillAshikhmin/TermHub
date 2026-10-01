@@ -27,7 +27,7 @@ case "$1" in
     [ -s "$TH_TAKEN" ] || { echo 'no server running' >&2; exit 1; }
     cat "$TH_TAKEN"
     ;;
-  new) exit 0 ;;
+  new|attach) exit 0 ;;
   *) exit 2 ;;
 esac
 `;
@@ -114,7 +114,11 @@ describe.each(shells)('tm под %s: нумерация имени папки ч
     expect(runTm(shell, '', ['My Project'], { folder: 'My Project' })).toEqual([LIST, NEW('My Project1')]);
   });
 
-  it('tm foo — явное имя: new -As foo без списка, даже если foo занято', () => {
-    expect(runTm(shell, 'foo', ['MyProject', 'foo'])).toEqual([['-L', SOCKET, 'new', '-As', 'foo']]);
+  it('tm foo — создаёт отсутствующую сессию, не подключаясь к foo1', () => {
+    expect(runTm(shell, 'foo', ['foo1'])).toEqual([LIST, NEW('foo')]);
+  });
+
+  it('tm foo.bar — точное подключение к существующей сессии с точкой', () => {
+    expect(runTm(shell, 'foo.bar', ['foo', 'foo.bar'])).toEqual([LIST, ['-L', SOCKET, 'attach', '-t', '=foo.bar:']]);
   });
 });

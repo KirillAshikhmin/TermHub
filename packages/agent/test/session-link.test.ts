@@ -111,7 +111,7 @@ describe('open: выбор режима', () => {
     const link = open('sess', options({ socketName: 'sock1' }));
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockSpawn.mock.calls[0][0]).toBe('tmux');
-    expect(mockSpawn.mock.calls[0][1]).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess']);
+    expect(mockSpawn.mock.calls[0][1]).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess:']);
     expect(link.mode).toBeUndefined(); // решение ещё не принято: протокол не отвечал
     await bringUp(fake, link);
     expect(link.mode).toBe('control');
@@ -128,7 +128,7 @@ describe('open: выбор режима', () => {
       await vi.advanceTimersByTimeAsync(2000);
       expect(await link.ready).toBe('attach');
       expect(mockSpawn).toHaveBeenCalledTimes(2);
-      expect(mockSpawn.mock.calls[1][1]).toEqual(['attach', '-t', '=sess']);
+      expect(mockSpawn.mock.calls[1][1]).toEqual(['attach', '-t', '=sess:']);
       expect(control.isDestroyed()).toBe(true); // control-клиент погашен, а не брошен
       expect(lines.join('\n')).toContain('control mode unavailable');
     } finally {
@@ -200,7 +200,7 @@ describe('open: выбор режима', () => {
       const link = open('sess', options());
       control.feed('%begin 1 0 1\nno server running\n%error 1 0 1\n');
       expect(await link.ready).toBe('attach');
-      expect(mockSpawn.mock.calls[1][1]).toEqual(['attach', '-t', '=sess']);
+      expect(mockSpawn.mock.calls[1][1]).toEqual(['attach', '-t', '=sess:']);
     } finally {
       vi.useRealTimers();
     }
@@ -300,7 +300,7 @@ describe('open: выбор режима', () => {
     expect(link.mode).toBe('attach');
     expect(await link.ready).toBe('attach');
     expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect(mockSpawn.mock.calls[0][1]).toEqual(['attach', '-t', '=sess']);
+    expect(mockSpawn.mock.calls[0][1]).toEqual(['attach', '-t', '=sess:']);
   });
 
   it('просьба клиента attach выполняется без проверки готовности', async () => {
@@ -308,7 +308,7 @@ describe('open: выбор режима', () => {
     stubSpawns(fake);
     const link = open('sess', options({ requestedMode: 'attach' }));
     expect(await link.ready).toBe('attach');
-    expect(mockSpawn.mock.calls[0][1]).toEqual(['attach', '-t', '=sess']);
+    expect(mockSpawn.mock.calls[0][1]).toEqual(['attach', '-t', '=sess:']);
   });
 
   it('незнакомое значение режима от клиента игнорируется — берётся control', async () => {

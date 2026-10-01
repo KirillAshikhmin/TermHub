@@ -140,7 +140,7 @@ const attachOld = (o: Omit<Parameters<typeof attachTerminal>[0], 'configMode'>):
   attachTerminal({ configMode: 'attach', ...o });
 
 describe('attachTerminal', () => {
-  it('передаёт -L <socket>, =session в аргументы и xterm-256color в spawn', () => {
+  it('передаёт -L <socket>, =session: в аргументы и xterm-256color в spawn', () => {
     let file = '';
     let args: string[] = [];
     stubSpawn((f, a) => {
@@ -158,7 +158,7 @@ describe('attachTerminal', () => {
       onBell: () => {},
     });
     expect(file).toBe('tmux');
-    expect(args).toEqual(['-L', 'sock1', 'attach', '-t', '=mysess']);
+    expect(args).toEqual(['-L', 'sock1', 'attach', '-t', '=mysess:']);
   });
 
   it('клампует размеры при спавне: мусор → границы [20..500]×[5..300]', () => {
@@ -501,7 +501,7 @@ describe('attachTerminal в control mode', () => {
       return makeFakePty().pty;
     });
     attachTerminal({ ...base, socketName: 'sock1' });
-    expect(args).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess']);
+    expect(args).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess:']);
   });
 
   it('просьба клиента открывает прежний клиент; настройка агента и мусор в просьбе старше неё', () => {
@@ -513,9 +513,9 @@ describe('attachTerminal в control mode', () => {
     attachTerminal({ ...base, socketName: 'sock1', requestedMode: 'attach' });
     attachTerminal({ ...base, socketName: 'sock1', configMode: 'attach', requestedMode: 'control' });
     attachTerminal({ ...base, socketName: 'sock1', requestedMode: 'telnet' });
-    expect(args[0]).toEqual(['-L', 'sock1', 'attach', '-t', '=sess']);
-    expect(args[1]).toEqual(['-L', 'sock1', 'attach', '-t', '=sess']);
-    expect(args[2]).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess']);
+    expect(args[0]).toEqual(['-L', 'sock1', 'attach', '-t', '=sess:']);
+    expect(args[1]).toEqual(['-L', 'sock1', 'attach', '-t', '=sess:']);
+    expect(args[2]).toEqual(['-L', 'sock1', '-CC', 'attach', '-t', '=sess:']);
   });
 
   it('снимок экрана уходит клиенту раньше живого вывода, пришедшего до него', async () => {

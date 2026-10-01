@@ -1,6 +1,6 @@
 // Интерактивная команда `termhub setup`: собирает конфиг, генерирует секреты,
-// по желанию дописывает ~/.tmux.conf и `tm`/`tml` в rc текущего шелла (~/.zshrc | ~/.bashrc),
-// а в уже прописанном блоке `# termhub` предлагает обновить устаревшую `tm`.
+// по желанию дописывает ~/.tmux.conf и подключение shell/termhub.zsh в rc шелла;
+// распознанный скопированный блок функций заменяет подключением файла проекта.
 // Побочные эффекты вынесены в runSetup; чистая логика (строки конфигов, парсинг)
 // экспортируется отдельно и покрыта тестами.
 
@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import readline from 'node:readline/promises';
 import webpush from 'web-push';
 import { initCrypto, fingerprint } from '@termhub/protocol';
@@ -23,163 +24,16 @@ import type { TermhubConfig } from './config.js';
 const DEFAULT_PORT = 7710;
 const DEFAULT_ROOT = '~/projects';
 const VAPID_SUBJECT = 'mailto:termhub@localhost';
-// `tm` без аргумента — НОВАЯ сессия с именем текущего каталога по тому же правилу,
-// что кнопка «+» в вебе: `MyProject`, а если занято — `MyProject1`, `MyProject2`…
-// (счёт с 1, без разделителя). Правило повторено на POSIX sh, потому что агент в
-// этот момент может быть не запущен, а tmux под рукой всегда. `tm <имя>` — прежнее
-// «присоединиться или создать» (`new -As`): это и путь вернуться в свою сессию
-// после перезапуска IDE (как и `tml`, который зовёт `tm` с явным именем).
-// Занятость — дословное сравнение кандидата с выводом `list-sessions -F
-// '#{session_name}'` (`grep -qxF`: вся строка целиком), а НЕ `has-session -t "=<имя>"`:
-// в цели tmux точка и двоеточие — разделители «сессия:окно.панель», и `=foo.bar`
-// ищет панель `bar` в сессии `foo`, то есть для имени с точкой отвечает «свободно»
-// на занятое имя (проверено на tmux 3.7b). Нет сервера или ошибка — список пуст,
-// имя свободно; `|| _th_taken=''` там обязателен: под `set -e` присваивание
-// наследует код подстановки, и exit 1 от `list-sessions` без сервера завершил бы
-// оболочку до `new -s` (условие `while` от errexit защищено, присваивание — нет).
-// Гонку двух одновременных `tm` не закрываем: tmux ответит «duplicate session»,
-// повторный `tm` возьмёт следующий номер.
-// Это функция, а не alias (аргумент и цикл); без `local`, переменные с префиксом
-// `_th_` — блок обязан работать и в bash, и в zsh. Сокет -L TMUX_SOCKET — тот же,
-// что у агента (config.TMUX_SOCKET); параметр нужен тестам, гоняющим функцию на
-// своём сокете с подложным tmux.
+/** src/ и dist/ разрешают путь к одному файлу в корне репозитория. */
+export const SHELL_FILE = fileURLToPath(new URL('../../../shell/termhub.zsh', import.meta.url));
+export const SHELL_FUNCTIONS = fs.readFileSync(SHELL_FILE, 'utf8').split('\n').slice(1).join('\n').trimEnd();
+
 export function tmFunction(socket: string = TMUX_SOCKET): string {
-  return [
-    'tm() {',
-    `  if [ -n "$1" ]; then tmux -L ${socket} new -As "$1"; return $?; fi`,
-    '  _th_base=$(basename "$PWD")',
-    `  _th_taken=$(tmux -L ${socket} list-sessions -F '#{session_name}' 2>/dev/null) || _th_taken=''`,
-    '  _th_name=$_th_base',
-    '  _th_n=0',
-    `  while printf '%s\\n' "$_th_taken" | grep -qxF -- "$_th_name"; do`,
-    '    _th_n=$((_th_n + 1))',
-    '    _th_name="$_th_base$_th_n"',
-    '  done',
-    `  tmux -L ${socket} new -s "$_th_name"`,
-    '}',
-  ].join('\n');
+  return SHELL_FUNCTIONS.slice(0, SHELL_FUNCTIONS.indexOf('\n}\n') + 2)
+    .replaceAll('tmux -L termhub', `tmux -L ${socket}`);
 }
 export const TM_FUNCTION = tmFunction();
-// `tml` — выбор сессии из списка на выделенном сокете (то же, что видит дашборд),
-// `tmc` — экран закрытия сессий. Общий сбор списка вынесен в `_th_rows`/`_th_show`,
-// чтобы обе команды показывали одно и то же и не разъезжались при правках.
-//
-// Сессии сгруппированы по рабочему каталогу: сначала группа текущего каталога,
-// затем остальные по алфавиту пути. Номер выбирается вводом; при выборе сессии из
-// другого каталога `tml` сперва переходит туда, иначе `tm` без аргументов в
-// следующий раз создал бы сессию с именем не того каталога.
-//
-// Рядом с именем — заголовок панели (#{pane_title}), то же, что стоит в заголовке
-// вкладки веб-интерфейса, вместе с ведущим индикатором Claude Code (брайлевый
-// спиннер = работает, ✳ = ждёт реакции). Индикатор не срезаем: отдельной
-// анимированной точки в статичном списке нет, и сам по себе он несёт смысл.
-// Заголовок, совпавший с именем сессии, не дублируем.
-//
-// Звонок — из #{window_bell_flag} по окнам, тем же источником, что и у агента:
-// #{session_alerts} не подходит, он не отличает звонок от активности и тишины.
-// Строки B/S склеиваются в один поток, чтобы обойтись двумя вызовами tmux.
-//
-// Закрытие: в `tml` — отрицательным номером и только с подтверждением (туда идут
-// подключаться, промах дорог), в `tmc` — просто номером, потому что экран для того
-// и открыт, о чём говорит его рамка. `tmc` перечитывает список на каждом круге:
-// после закрытия нумерация сдвигается, и работа по устаревшим номерам убила бы не
-// ту сессию. Имя всегда с префиксом `=` — иначе tmux матчит по префиксу и `Sprut`
-// попал бы в `Sprut1`.
-//
-// Это функции, а не алиасы: нужен и ввод, и `cd`, меняющий каталог вызывающего
-// шелла (в подоболочке переход бы потерялся). Переменные с префиксом `_th_` — в
-// POSIX sh нет `local`, а блок обязан работать и в bash, и в zsh.
-// Разделитель — табуляция: она не встречается в путях tmux, в отличие от пробела.
-// Рамка и 🔔 записаны октальными кодами UTF-8 — так блок остаётся ASCII-текстом и
-// не страдает при копировании в rc-файл с другой локалью.
-const TML_FUNCTION = [
-  "_th_rows() {",
-  "  _th_tab=$(printf '\\t')",
-  `  _th_w=$(tmux -L ${TMUX_SOCKET} list-windows -a -F "#{session_name}\${_th_tab}#{window_bell_flag}" 2>/dev/null)`,
-  `  _th_s=$(tmux -L ${TMUX_SOCKET} list-sessions -F "#{session_path}\${_th_tab}#{session_name}\${_th_tab}#{pane_title}" 2>/dev/null)`,
-  "  [ -z \"$_th_s\" ] && return 1",
-  "  { printf '%s\\n' \"$_th_w\" | sed 's/^/B/'; printf '%s\\n' \"$_th_s\" | sed 's/^/S/'; } |",
-  "  awk -v tab=\"$_th_tab\" -v cur=\"$PWD\" '",
-  "    BEGIN { FS = tab }",
-  "    /^B/ { n = substr($1, 2); if ($2 == \"1\") bell[n] = 1; next }",
-  "    /^S/ {",
-  "      p = substr($1, 2); name = $2; title = $3;",
-  "      label = sprintf(\"%-16s\", name);",
-  "      rest = title; sub(/^[^ ]+ /, \"\", rest);",
-  "      if (rest == name && title != name) label = label \"  \" substr(title, 1, index(title, \" \") - 1);",
-  "      else if (title != \"\" && title != name) label = label \"  \" title;",
-  "      if (bell[name]) label = label \"  \\360\\237\\224\\224\";",
-  "      printf \"%d%s%s%s%s%s%s\\n\", (p == cur ? 0 : 1), tab, p, tab, name, tab, label;",
-  "    }' |",
-  "  sort -t\"$_th_tab\" -k1,1n -k2,2 -k3,3 | cut -f2-",
-  "}",
-  "_th_show() {",
-  "  _th_i=0",
-  "  _th_prev=",
-  "  while IFS=\"$_th_tab\" read -r _th_dir _th_name _th_label; do",
-  "    [ -z \"$_th_name\" ] && continue",
-  "    if [ \"$_th_dir\" != \"$_th_prev\" ]; then",
-  "      if [ \"$_th_dir\" = \"$PWD\" ]; then printf '\\n%s (current)\\n' \"$_th_dir\"",
-  "      else printf '\\n%s\\n' \"$_th_dir\"; fi",
-  "      _th_prev=$_th_dir",
-  "    fi",
-  "    _th_i=$((_th_i + 1))",
-  "    printf '  %2d) %s\\n' \"$_th_i\" \"$_th_label\"",
-  "  done <<_THEOF",
-  "$1",
-  "_THEOF",
-  "}",
-  "_th_field() { printf '%s\\n' \"$1\" | cut -f\"$2\"; }",
-  "_th_kill() {",
-  `  if tmux -L ${TMUX_SOCKET} kill-session -t "=$1" 2>/dev/null; then printf 'Closed %s\\n' "$1"`,
-  "  else printf 'Could not close %s\\n' \"$1\"; fi",
-  "}",
-  "tml() {",
-  "  _th_tab=$(printf '\\t')",
-  "  _th_all=$(_th_rows) || { printf 'No termhub sessions.\\n'; return 0; }",
-  "  _th_show \"$_th_all\"",
-  "  printf '\\nSession number (-N closes, Enter cancels): '",
-  "  read -r _th_pick",
-  "  [ -z \"$_th_pick\" ] && return 0",
-  "  _th_neg=0",
-  "  case \"$_th_pick\" in -*) _th_neg=1; _th_pick=${_th_pick#-};; esac",
-  "  case \"$_th_pick\" in '' | *[!0-9]*) printf 'Enter a number.\\n'; return 1;; esac",
-  "  _th_sel=$(printf '%s\\n' \"$_th_all\" | sed -n \"${_th_pick}p\")",
-  "  if [ -z \"$_th_sel\" ]; then printf 'No session with that number.\\n'; return 1; fi",
-  "  _th_dir=$(_th_field \"$_th_sel\" 1)",
-  "  _th_name=$(_th_field \"$_th_sel\" 2)",
-  "  if [ \"$_th_neg\" = 1 ]; then",
-  "    printf 'Close session %s? [y/N] ' \"$_th_name\"",
-  "    read -r _th_yes",
-  "    case \"$_th_yes\" in [yY] | [yY][eE][sS]) _th_kill \"$_th_name\";; *) printf 'Cancelled.\\n';; esac",
-  "    return 0",
-  "  fi",
-  "  if [ \"$_th_dir\" != \"$PWD\" ]; then",
-  "    cd \"$_th_dir\" || { printf 'Cannot enter %s\\n' \"$_th_dir\"; return 1; }",
-  "  fi",
-  "  tm \"$_th_name\"",
-  "}",
-  "tmc() {",
-  "  _th_tab=$(printf '\\t')",
-  "  while :; do",
-  "    _th_all=$(_th_rows) || { printf 'No termhub sessions.\\n'; return 0; }",
-  "    printf '\\n\\342\\224\\214\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\220\\n'",
-  "    printf '\\342\\224\\202  Close sessions \\342\\200\\224 enter a number to close    \\342\\224\\202\\n'",
-  "    printf '\\342\\224\\202  Use tml to attach to a session              \\342\\224\\202\\n'",
-  "    printf '\\342\\224\\224\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\200\\342\\224\\230\\n'",
-  "    _th_show \"$_th_all\"",
-  "    printf '\\nNumber to close (Enter exits): '",
-  "    read -r _th_pick || return 0",
-  "    [ -z \"$_th_pick\" ] && return 0",
-  "    case \"$_th_pick\" in *[!0-9]*) printf 'Enter a number.\\n'; continue;; esac",
-  "    _th_sel=$(printf '%s\\n' \"$_th_all\" | sed -n \"${_th_pick}p\")",
-  "    if [ -z \"$_th_sel\" ]; then printf 'No session with that number.\\n'; continue; fi",
-  "    _th_kill \"$(_th_field \"$_th_sel\" 2)\"",
-  "  done",
-  "}",
-].join('\n');
 
-/** Строки, которые setup добавляет в ~/.tmux.conf (только отсутствующие). */
 export const TMUX_CONF_LINES = [
   'set -g mouse on',
   'set -g window-size latest',
@@ -222,9 +76,10 @@ export function missingTmuxLines(existing: string): string[] {
 /** Маркер-комментарий блока termhub в ~/.zshrc. */
 export const ZSH_MARKER = '# termhub';
 
-/** Блок для ~/.zshrc: маркер + функции tm и tml. */
+/** В rc шелла пишется только подключение; определения функций остаются в Git. */
 export function zshAliasBlock(): string {
-  return `${ZSH_MARKER}\n${TM_FUNCTION}\n${TML_FUNCTION}\n`;
+  const quoted = "'" + SHELL_FILE.replaceAll("'", "'\\''") + "'";
+  return `${ZSH_MARKER}\n. ${quoted}\n`;
 }
 
 /** Есть ли уже блок termhub в rc-файле. */
@@ -253,7 +108,7 @@ function afterZshMarker(existing: string): number {
  *  текст без изменений; маркера или старой строки нет → null: setup покажет определение
  *  для ручной вставки. */
 export function upgradeTmFunction(existing: string): string | null {
-  if (existing.includes(TM_FUNCTION)) return existing;
+  if (existing.includes(TM_FUNCTION) || existing.includes(zshAliasBlock())) return existing;
   const from = afterZshMarker(existing);
   if (from < 0) return null;
   const m = OLD_TM_RE.exec(existing.slice(from));
@@ -344,38 +199,31 @@ function indent(block: string): string {
     .join('\n');
 }
 
+/** Заменяем только известный блок, сохраняя пользовательские настройки вокруг. */
+export function upgradeShellRc(existing: string): string | null {
+  const block = zshAliasBlock();
+  if (existing.includes(block)) return existing;
+  const legacy = `${ZSH_MARKER}\n${SHELL_FUNCTIONS}\n`;
+  if (existing.includes(legacy)) return existing.replace(legacy, block);
+  if (hasZshMarker(existing)) return null;
+  return existing + (existing.endsWith('\n') || !existing ? '' : '\n') + '\n' + block;
+}
+
 async function maybePatchShellRc(rl: readline.Interface): Promise<void> {
   const { path: file, label } = shellRcFile(process.env.SHELL, os.homedir());
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  if (hasZshMarker(existing)) {
-    if (existing.includes(TM_FUNCTION)) {
-      console.log(`${label}: tm/tml already configured (marker # termhub).`);
-      return;
-    }
-    // Блок есть, но `tm` прежняя (без нумерации имён): меняем ровно её строку, остальной
-    // файл не трогаем. Не распознали или отказ — печатаем определение для ручной вставки.
-    const upgraded = upgradeTmFunction(existing);
-    if (upgraded !== null) {
-      console.log(
-        `\n${label}: the termhub block has an outdated tm(). The new one starts a fresh session\n` +
-          '  named after the folder (MyProject → MyProject1 → MyProject2) instead of attaching.',
-      );
-      if (await askYesNo(rl, 'Update tm?', true)) {
-        fs.writeFileSync(file, upgraded);
-        console.log(`✓ ${label}: tm updated (restart your shell or run \`source ${label}\`).`);
-        return;
-      }
-    } else {
-      console.log(`\n${label}: the termhub block is present, but its tm() was not recognised.`);
-    }
-    console.log(`Replace tm() in ${label} manually with:\n${indent(TM_FUNCTION)}`);
+  const updated = upgradeShellRc(existing);
+  if (updated === existing) {
+    console.log(`${label}: TermHub shell commands already configured.`);
     return;
   }
-  // Полное тело tml длинное — в предложении показываем только назначение, сам блок
-  // всё равно записывается целиком.
-  console.log(`\nSuggested additions to ${label}:\n${indent(TM_FUNCTION)}\n  tml() { ... }  # pick a session, grouped by directory`);
-  if (!(await askYesNo(rl, 'Add?', true))) return;
-  appendToFile(file, zshAliasBlock());
+  if (updated === null) {
+    console.log(`${label}: custom or older TermHub block found. Replace it manually with:\n${indent(zshAliasBlock())}`);
+    return;
+  }
+  console.log(`\nSuggested TermHub configuration in ${label}:\n${indent(zshAliasBlock())}`);
+  if (!(await askYesNo(rl, 'Install shell commands?', true))) return;
+  fs.writeFileSync(file, updated);
   console.log(`✓ ${label} updated (restart your shell or run \`source ${label}\`).`);
 }
 

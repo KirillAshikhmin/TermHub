@@ -32,7 +32,7 @@ async function waitFor(pred: () => boolean, timeoutMs: number): Promise<boolean>
   return pred();
 }
 
-describe.skipIf(!tmuxAvailable)('SessionLink — настоящий tmux -CC (изолированный сокет)', () => {
+describe.skipIf(!tmuxAvailable).each(['live', 'sprut.app'])('SessionLink — настоящий tmux -CC: %s (изолированный сокет)', (sessionName) => {
   // Свой сокет на прогон: дефолтный tmux-сервер и сессии пользователя не трогаем.
   const socketName = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
   const MARKER = 'live-seam-marker';
@@ -43,12 +43,12 @@ describe.skipIf(!tmuxAvailable)('SessionLink — настоящий tmux -CC (и
   }
 
   function capturePane(): string {
-    return tmux(['capture-pane', '-p', '-t', 'live']);
+    return tmux(['capture-pane', '-p', '-t', `=${sessionName}:`]);
   }
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-link-'));
-    tmux(['new-session', '-d', '-s', 'live', '-c', root]);
+    tmux(['new-session', '-d', '-s', sessionName, '-c', root]);
   });
 
   afterAll(() => {
@@ -62,11 +62,11 @@ describe.skipIf(!tmuxAvailable)('SessionLink — настоящий tmux -CC (и
 
   it('подключение идёт control mode, и снимок экрана непустой', async () => {
     // Метку печатает сама сессия — снимок обязан её увидеть.
-    tmux(['send-keys', '-t', 'live', `echo ${MARKER}`, 'Enter']);
+    tmux(['send-keys', '-t', `=${sessionName}:`, `echo ${MARKER}`, 'Enter']);
     expect(await waitFor(() => capturePane().includes(MARKER), 5000)).toBe(true);
 
     const logs: string[] = [];
-    const link = open('live', {
+    const link = open(sessionName, {
       socketName,
       cols: 80,
       rows: 24,

@@ -111,6 +111,18 @@ On Linux, `npm install` may build node-pty from source — if so, install `build
 be opened from), optionally a relay address for remote access, and offers to create a
 tmux config and the `tm`/`tml` aliases.
 
+The `tm`, `tml`, and `tmc` functions live in `shell/termhub.zsh` in the checkout.
+Setup adds only a source line to `~/.zshrc` (or `~/.bashrc`):
+
+```sh
+. '/absolute/path/to/TermHub/shell/termhub.zsh'
+```
+
+After updating the checkout, open a new shell or source this file again. Update
+the source path if you move the checkout. Setup migrates recognised copied blocks;
+custom or older blocks are left for manual migration.
+
+
 Open it from your phone on the same Wi-Fi network:
 
 ```

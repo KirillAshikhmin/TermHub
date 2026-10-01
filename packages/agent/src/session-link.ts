@@ -196,7 +196,8 @@ class SessionLink implements Link {
   /** Спавнит клиента tmux; аргументы — только массивом, без shell. */
   private spawnClient(control: boolean): PtyClient {
     const socket = this.opts.socketName ? ['-L', this.opts.socketName] : [];
-    const args = [...socket, ...(control ? ['-CC'] : []), 'attach', '-t', `=${this.session}`];
+    // Завершающее ':' отделяет имя сессии: иначе точка в sprut.app трактуется как панель.
+    const args = [...socket, ...(control ? ['-CC'] : []), 'attach', '-t', `=${this.session}:`];
     const generation = this.generation;
     const child = spawnPty('tmux', args, {
       cols: this.cols,

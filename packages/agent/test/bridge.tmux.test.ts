@@ -52,7 +52,7 @@ function fixtureConfig(over: Partial<TermhubConfig> = {}): TermhubConfig {
   };
 }
 
-describe.skipIf(!tmuxAvailable)('TerminalBridge — реальный tmux + WS (изолированный сокет)', () => {
+describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app'])('TerminalBridge — реальный tmux + WS: %s', (sessionName) => {
   const socketName = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
   let root: string;
   let server: AgentServer;
@@ -62,16 +62,15 @@ describe.skipIf(!tmuxAvailable)('TerminalBridge — реальный tmux + WS (
     return execFileSync('tmux', ['-L', socketName, ...args], { encoding: 'utf8' });
   }
 
-  // send-keys/capture-pane принимают target-pane, где префикс «=» (точный матч
-  // сессии) не парсится — цель задаём именем сессии (единственная, коллизий нет).
+  // Явно отделяем точное имя сессии от окна/панели, включая имена с точкой.
   function capturePane(): string {
-    return tmux(['capture-pane', '-p', '-t', 'bridge']);
+    return tmux(['capture-pane', '-p', '-t', `=${sessionName}:`]);
   }
 
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-bridge-'));
     fs.mkdirSync(path.join(root, 'work'));
-    tmux(['new-session', '-d', '-s', 'bridge', '-c', path.join(root, 'work')]);
+    tmux(['new-session', '-d', '-s', sessionName, '-c', path.join(root, 'work')]);
 
     const sessions = new SessionService({ roots: [root], socketName });
     server = new AgentServer({ config: fixtureConfig({ sessionRoots: [root] }), sessions });
@@ -105,7 +104,7 @@ describe.skipIf(!tmuxAvailable)('TerminalBridge — реальный tmux + WS (
 
   it('RESIZE→attach: send-keys виден в WS-DATA, DATA пишется в pty, закрытие WS не убивает сессию', async () => {
     const cookie = await login();
-    const wsUrl = `${base.replace('http', 'ws')}/ws/term/bridge`;
+    const wsUrl = `${base.replace('http', 'ws')}/ws/term/${encodeURIComponent(sessionName)}`;
     const ws = new WebSocket(wsUrl, { headers: { cookie } });
 
     let output = '';
@@ -124,7 +123,7 @@ describe.skipIf(!tmuxAvailable)('TerminalBridge — реальный tmux + WS (
     await delay(600); // дать pty заспавниться и приаттачиться к сессии
 
     // Ввод в сессию извне (tmux send-keys) → должен долететь до WS-клиента как DATA.
-    tmux(['send-keys', '-t', 'bridge', 'echo hello-bridge', 'Enter']);
+    tmux(['send-keys', '-t', `=${sessionName}:`, 'echo hello-bridge', 'Enter']);
     expect(await waitFor(() => output.includes('hello-bridge'), 5000)).toBe(true);
 
     // DATA от WS-клиента → pty.write → команда выполняется в сессии.
@@ -136,7 +135,7 @@ describe.skipIf(!tmuxAvailable)('TerminalBridge — реальный tmux + WS (
     await new Promise<void>((resolve) => ws.once('close', () => resolve()));
     await delay(300);
     const list = tmux(['list-sessions', '-F', '#{session_name}']);
-    expect(list).toContain('bridge');
+    expect(list).toContain(sessionName);
   }, 25000);
 
 });
