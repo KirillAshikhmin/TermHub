@@ -1332,7 +1332,7 @@ export class RelayLink {
   }
 
   private async doCreate(s: ClientSession, frame: Frame): Promise<void> {
-    let req: { name?: unknown; root?: unknown; dir?: unknown; preset?: unknown; autoName?: unknown };
+    let req: { name?: unknown; root?: unknown; dir?: unknown; preset?: unknown; autoName?: unknown; createDir?: unknown };
     try {
       req = frameJson(frame);
     } catch {
@@ -1346,6 +1346,7 @@ export class RelayLink {
         dir: String(req.dir ?? ''),
         preset: req.preset as SessionPreset,
         autoName: req.autoName === true,
+        createDir: req.createDir === true,
       });
       // Подтверждаем создание (сессия уже существует) фактическим именем — с autoName оно
       // может отличаться от запрошенного (MyProject1). Клиент дожидается кадра, чтобы

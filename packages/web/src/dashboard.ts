@@ -699,7 +699,7 @@ export function openCreateModal(transport: Transport): void {
     // Форма из списка каталогов (LAN): селекты корня и подкаталога.
     const buildSelectForm = (groups: DirGroup[]): void => {
       body.replaceChildren();
-      const roots = groups.filter((g) => g.dirs.length > 0);
+      const roots = groups;
       if (roots.length === 0) {
         const empty = document.createElement('p');
         empty.className = 'th-create__empty';
@@ -716,11 +716,13 @@ export function openCreateModal(transport: Transport): void {
       nameInput.autocomplete = 'off';
 
       const syncName = (): void => {
-        nameInput.placeholder = sanitizeSessionName(dirSelect.value);
+        nameInput.placeholder = dirSelect.value ? sanitizeSessionName(dirSelect.value) : t('create.newDirName');
       };
       const syncDirs = (): void => {
         const group = roots.find((g) => g.root === rootSelect.value) ?? roots[0]!;
-        dirSelect.replaceChildren(...group.dirs.map((d) => optionEl(d)));
+        const newDir = optionEl('');
+        newDir.textContent = t('create.newDir');
+        dirSelect.replaceChildren(...group.dirs.map((d) => optionEl(d)), newDir);
         syncName();
       };
       rootSelect.addEventListener('change', syncDirs);
@@ -735,12 +737,21 @@ export function openCreateModal(transport: Transport): void {
       syncDirs();
       collect = () => {
         const typed = nameInput.value.trim();
+        const createDir = dirSelect.value === '';
+        if (createDir && !typed) {
+          nameInput.focus();
+          return null;
+        }
         const input: CreateSessionInput = {
           name: sanitizeSessionName(typed || dirSelect.value),
           root: rootSelect.value,
-          dir: dirSelect.value,
+          dir: createDir ? sanitizeSessionName(typed) : dirSelect.value,
           preset,
         };
+        if (createDir) {
+          input.createDir = true;
+          nameInput.value = input.name;
+        }
         // Имя не вводили — оно из каталога, дубль агент пронумерует (MyProject1).
         // Введённое руками уходит без признака: занято → ошибка, как раньше.
         if (!typed) input.autoName = true;

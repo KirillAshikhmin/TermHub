@@ -158,6 +158,48 @@ describe('SessionService.create — валидация', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('createDir создаёт папку до запуска выбранного пресета', async () => {
+    const svc = new SessionService({ roots: [root] });
+    stubTmux((args) => {
+      expect(fs.statSync(path.join(root, 'new-app')).isDirectory()).toBe(true);
+      expect(args).toContain('codex');
+      expect(args[args.indexOf('-c') + 1]).toBe(path.join(root, 'new-app'));
+      return {};
+    });
+    await svc.create({ name: 'new-app', root, dir: 'new-app', preset: 'codex', createDir: true });
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('createDir не использует существующую папку или ссылку', async () => {
+    const svc = new SessionService({ roots: [root] });
+    fs.symlinkSync(os.tmpdir(), path.join(root, 'link'));
+    for (const dir of ['projectA', 'link']) {
+      await expect(svc.create({ name: 'new', root, dir, preset: 'zsh', createDir: true })).rejects.toThrow();
+    }
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('при ошибке запуска удаляет только созданную пустую папку', async () => {
+    const svc = new SessionService({ roots: [root] });
+    stubTmux(() => ({ err: new Error('cannot start') }));
+    await expect(svc.create({ name: 'new', root, dir: 'new', preset: 'zsh', createDir: true })).rejects.toThrow('cannot start');
+    expect(fs.existsSync(path.join(root, 'new'))).toBe(false);
+    stubTmux(() => {
+      fs.writeFileSync(path.join(root, 'new', 'keep.txt'), 'keep');
+      return { err: new Error('cannot start') };
+    });
+    await expect(svc.create({ name: 'new', root, dir: 'new', preset: 'zsh', createDir: true })).rejects.toThrow('cannot start');
+    expect(fs.readFileSync(path.join(root, 'new', 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('createDir проверяет корень и путь до создания папки', async () => {
+    const svc = new SessionService({ roots: [root] });
+    await expect(svc.create({ name: 'new', root, dir: '../escape', preset: 'zsh', createDir: true })).rejects.toThrow(/directory/i);
+    await expect(svc.create({ name: 'new', root: path.join(root, 'projectA'), dir: 'new', preset: 'zsh', createDir: true })).rejects.toThrow(/root/i);
+    expect(fs.existsSync(path.join(root, 'projectA', 'new'))).toBe(false);
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
   it('отвергает недопустимое имя сессии', async () => {
     const svc = new SessionService({ roots: [root] });
     await expect(svc.create({ name: 'bad name!', root, dir: 'projectA', preset: 'zsh' })).rejects.toThrow(/name/i);

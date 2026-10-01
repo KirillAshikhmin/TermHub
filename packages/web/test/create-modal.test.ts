@@ -234,3 +234,37 @@ describe('openCreateModal — закрытие без создания (R11.2) �
     expect(location.hash).toBe('#/');
   });
 });
+
+
+describe('openCreateModal — новая папка', () => {
+  it('последний пункт создаёт папку из очищенного имени в выбранном корне', async () => {
+    const groups = [...GROUPS, { root: '/srv/empty', dirs: [] }];
+    const { transport, calls } = fakeTransport({ groups, create: async (req) => req.name });
+    openCreateModal(transport);
+    await flush();
+    const root = control<HTMLSelectElement>(t('create.root'));
+    root.value = '/srv/empty';
+    root.dispatchEvent(new Event('change'));
+    const dir = control<HTMLSelectElement>(t('create.directory'));
+    expect(dir.options[dir.options.length - 1]?.textContent).toBe('- Создать папку -');
+    dir.selectedIndex = dir.options.length - 1;
+    dir.dispatchEvent(new Event('change'));
+    control<HTMLInputElement>(t('create.name')).value = '  My app/one:two  ';
+    submit();
+    await flush();
+    expect(calls).toEqual([{ name: 'My_app_one_two', dir: 'My_app_one_two', root: '/srv/empty', preset: 'zsh', createDir: true }]);
+  });
+
+  it('без введённого имени новую папку не создаёт', async () => {
+    const { transport, calls } = fakeTransport({ groups: GROUPS, create: async (req) => req.name });
+    openCreateModal(transport);
+    await flush();
+    const dir = control<HTMLSelectElement>(t('create.directory'));
+    dir.selectedIndex = dir.options.length - 1;
+    dir.dispatchEvent(new Event('change'));
+    submit();
+    await flush();
+    expect(calls).toEqual([]);
+    expect(toastMock).toHaveBeenCalled();
+  });
+});

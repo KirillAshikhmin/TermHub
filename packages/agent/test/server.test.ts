@@ -282,6 +282,23 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     expect(seen).toEqual([{ name: 'MyProject', autoName: true }, { name: 'MyProject', autoName: false }]);
   });
 
+  it('POST /api/sessions передаёт createDir только для булевого true', async () => {
+    const seen: unknown[] = [];
+    s = await start({ sessions: stubSessions({ create: async (req) => {
+      seen.push(req.createDir);
+      return { name: req.name };
+    } }) });
+    for (const createDir of [true, 'true', false]) {
+      const res = await fetch(`${s.base}/api/sessions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: authCookie() },
+        body: JSON.stringify({ name: 'new', root: '/x', dir: 'new', preset: 'zsh', createDir }),
+      });
+      expect(res.status).toBe(200);
+    }
+    expect(seen).toEqual([true, false, false]);
+  });
+
   it('POST /api/sessions/rename → sessions.rename(from, to), 200', async () => {
     let seen = '';
     s = await start({

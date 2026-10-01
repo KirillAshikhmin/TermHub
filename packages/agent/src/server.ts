@@ -377,6 +377,7 @@ export class AgentServer {
         preset: body.preset as SessionPreset,
         // Признак «имя не вводили» — только булев true; старый клиент его не шлёт.
         autoName: body.autoName === true,
+        createDir: body.createDir === true,
       });
       // Фактическое имя: с autoName оно может отличаться от запрошенного (MyProject1).
       this.sendJson(res, 200, { ok: true, session: created.name });

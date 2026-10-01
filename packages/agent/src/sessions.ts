@@ -184,6 +184,7 @@ export class SessionService {
     dir: string;
     preset: SessionPreset;
     autoName?: boolean;
+    createDir?: boolean;
   }): Promise<{ name: string }> {
     if (!NAME_RE.test(req.name))
       throw new Error(`Invalid session name «${req.name}»: letters, digits, «_», «-» allowed, 1–40 characters`);
@@ -195,6 +196,9 @@ export class SessionService {
       throw new Error(`Invalid directory «${req.dir}»: expected a single subdirectory name without «/» or «..»`);
 
     const dirPath = path.join(req.root, req.dir);
+    // Без recursive: существующий каталог, файл или ссылка — ошибка, а не
+    // разрешение запустить процесс в неожиданном месте.
+    if (req.createDir) await fsp.mkdir(dirPath);
     let isDir = false;
     try {
       isDir = (await fsp.stat(dirPath)).isDirectory();
@@ -222,26 +226,32 @@ export class SessionService {
       return this.tmux(args);
     };
 
-    if (!req.autoName) {
-      await newSession(req.name);
-      return { name: req.name };
-    }
-
-    const taken = await this.takenNames();
-    for (let attempt = 0; attempt < DUPLICATE_RETRIES; attempt++) {
-      const candidate = pickFreeName(req.name, taken);
-      try {
-        await newSession(candidate);
-        return { name: candidate };
-      } catch (err) {
-        // Между чтением списка и new-session имя мог занять кто-то ещё (второе устройство,
-        // `tm` в терминале): tmux отвечает «duplicate session» — считаем имя занятым и берём
-        // следующий номер. Любая другая ошибка — не гонка, уходит наружу сразу.
-        if (!isDuplicateSessionError(err)) throw err;
-        taken.add(candidate);
+    try {
+      if (!req.autoName) {
+        await newSession(req.name);
+        return { name: req.name };
       }
+
+      const taken = await this.takenNames();
+      for (let attempt = 0; attempt < DUPLICATE_RETRIES; attempt++) {
+        const candidate = pickFreeName(req.name, taken);
+        try {
+          await newSession(candidate);
+          return { name: candidate };
+        } catch (err) {
+          // Между чтением списка и new-session имя мог занять кто-то ещё (второе устройство,
+          // `tm` в терминале): tmux отвечает «duplicate session» — считаем имя занятым и берём
+          // следующий номер. Любая другая ошибка — не гонка, уходит наружу сразу.
+          if (!isDuplicateSessionError(err)) throw err;
+          taken.add(candidate);
+        }
+      }
+      throw new Error(`Could not create session for «${req.name}»: name kept colliding after ${DUPLICATE_RETRIES} attempts`);
+    } catch (err) {
+      // rmdir удаляет только пустую папку; появившиеся файлы не трогаем.
+      if (req.createDir) await fsp.rmdir(dirPath).catch(() => {});
+      throw err;
     }
-    throw new Error(`Could not create session for «${req.name}»: name kept colliding after ${DUPLICATE_RETRIES} attempts`);
   }
 
   private async sessionId(name: string): Promise<string> {

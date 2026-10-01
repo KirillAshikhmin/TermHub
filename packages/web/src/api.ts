@@ -27,6 +27,8 @@ export interface CreateSessionInput {
   /** Имя не вводили — взято из каталога. Занято → агент подбирает свободное с числовым
    *  суффиксом (MyProject → MyProject1). Без признака дубль — ошибка, как раньше. */
   autoName?: boolean;
+  /** Создать новый подкаталог перед запуском сессии. */
+  createDir?: boolean;
 }
 
 /** Ответ POST /api/sessions: `session` — фактическое имя созданной сессии (при `autoName`

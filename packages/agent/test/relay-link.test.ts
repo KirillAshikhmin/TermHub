@@ -440,6 +440,16 @@ describe('RelayLink — обслуживание клиента', () => {
       // Сессия реально создана на изолированном сокете.
       expect(tmux(['list-sessions', '-F', '#{session_name}'])).toContain('created-x');
 
+      // Создание каталога до старта терминала доходит и через E2E relay.
+      ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, {
+        name: 'created-dir', root, dir: 'created-dir', preset: 'zsh', createDir: true,
+      })), { binary: true });
+      const dirMsg = await col.next();
+      const dirFrame = decodeFrame(clientDec.pull(new Uint8Array(dirMsg.binary as Buffer)));
+      expect(dirFrame.type).toBe(FrameType.CreateOk);
+      expect(fs.statSync(path.join(root, 'created-dir')).isDirectory()).toBe(true);
+      expect(tmux(['display-message', '-p', '-t', '=created-dir:', '#{pane_current_path}']).trim()).toBe(fs.realpathSync(path.join(root, 'created-dir')));
+
       // Второй CREATE того же имени с autoName (имя не вводили) → агент нумерует: created-x1.
       ws.send(clientEnc.push(jsonFrame(FrameType.Create, 0, { name: 'created-x', root, dir: 'work', preset: 'zsh', autoName: true })), {
         binary: true,
