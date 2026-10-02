@@ -115,6 +115,7 @@ export interface TranscriptSources {
   panePids(): Promise<Map<string, number>>;
   /** Пути файлов, открытых этими процессами. */
   openFiles(pids: number[]): Promise<string[]>;
+  processCwd(pid: number): Promise<string | undefined>;
 }
 
 /** Хвост адреса панели: «:@окно.%панель». Имя сессии перед ним проверяет общее с sessions.ts
@@ -234,6 +235,7 @@ function withDefaults(over?: Partial<TranscriptSources>): TranscriptSources {
     processTable: over?.processTable ?? defaultProcessTable,
     panePids: over?.panePids ?? panePidsFor(socketName),
     openFiles: over?.openFiles ?? defaultOpenFiles,
+    processCwd: over?.processCwd ?? defaultProcessCwd,
   };
 }
 
@@ -326,6 +328,13 @@ async function defaultPanePids(socketName?: string): Promise<Map<string, number>
     if (Number.isInteger(pid) && pid > 0) panes.set(line.slice(0, tab), pid);
   }
   return panes;
+}
+
+async function defaultProcessCwd(pid: number): Promise<string | undefined> {
+  const { stdout } = await exec('lsof', ['-w', '-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+    encoding: 'utf8', timeout: LSOF_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER,
+  });
+  return stdout.split('\n').find((line) => line.startsWith('n/'))?.slice(1);
 }
 
 async function defaultOpenFiles(pids: number[]): Promise<string[]> {
@@ -438,7 +447,8 @@ function sameSources(a: TranscriptSources | undefined, b: TranscriptSources): bo
     a.isFile === b.isFile &&
     a.processTable === b.processTable &&
     a.panePids === b.panePids &&
-    a.openFiles === b.openFiles
+    a.openFiles === b.openFiles &&
+    a.processCwd === b.processCwd
   );
 }
 
@@ -710,6 +720,46 @@ function descendants(root: number, processes: Map<number, ProcessRow>): number[]
   return [...seen];
 }
 
+/** Новые TUI передают запись беседы общему daemon. Каталог — только фильтр:
+ *  при неоднозначности не выбираем «самый свежий» журнал чужой панели. */
+async function daemonCodexThread(pid: number, processes: Map<number, ProcessRow>, src: TranscriptSources): Promise<TranscriptResult | undefined> {
+  const isCodex = (args: string): boolean => /^(?:\S*\/)?codex(?:\s|$)/.test(args);
+  const isTui = (args: string): boolean => /^(?:\S*\/)?codex(?:$|\s+(?:-|resume\b|fork\b))/.test(args) && !/\bapp-server\b/.test(args);
+  const clients = descendants(pid, processes).filter((id) => {
+    const args = processes.get(id)?.args ?? '';
+    return isTui(args);
+  });
+  if (clients.length !== 1) return undefined;
+  const daemons = [...processes.values()].filter((row) => isCodex(row.args ?? '') && /\bapp-server\b/.test(row.args ?? ''));
+  if (!daemons.length) return undefined;
+  const cwd = await src.processCwd(clients[0]);
+  if (!cwd) return undefined;
+  // Другой TUI в том же каталоге может ещё не открыть свой rollout. Даже один
+  // подходящий файл daemon тогда не доказывает, что он принадлежит этой панели.
+  for (const row of processes.values()) {
+    if (row.pid === clients[0] || !isTui(row.args ?? '')) continue;
+    if (await src.processCwd(row.pid) === cwd)
+      return fail('lookup-failed', 'Несколько клиентов Codex в одном каталоге: невозможно однозначно выбрать журнал');
+  }
+  const root = path.join(src.home, CODEX_SESSIONS_DIR);
+  const files = new Set(await src.openFiles(daemons.map((row) => row.pid)));
+  const matches: { file: string; meta: CodexMeta }[] = [];
+  for (const file of files) {
+    if (!withinDir(file, root) || !file.endsWith('.jsonl')) continue;
+    let head: string;
+    try { head = await src.readHead(file, HEAD_BYTES); }
+    catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; throw err; }
+    const meta = codexMeta(head);
+    if (!meta?.root) continue;
+    const payload = JSON.parse(head.split('\n')[0]).payload;
+    if (payload.cwd !== cwd || !['codex-tui', 'codex-cli'].includes(payload.originator)) continue;
+    matches.push({ file, meta });
+  }
+  if (matches.length > 1) return fail('lookup-failed', 'Несколько бесед Codex в каталоге панели: невозможно однозначно выбрать журнал');
+  const match = matches[0];
+  return match ? found('codex', match.file, !match.meta.forkedFrom, true) : undefined;
+}
+
 /** Способ второй: открытые файлы процесса панели. undefined — Codex в панели нет. */
 async function codexThread(
   pid: number,
@@ -719,7 +769,7 @@ async function codexThread(
   const root = path.join(src.home, CODEX_SESSIONS_DIR);
   const open = await src.openFiles(descendants(pid, processes));
   const files = open.filter((f) => withinDir(f, root) && f.endsWith('.jsonl')).sort();
-  if (files.length === 0) return undefined;
+  if (files.length === 0) return daemonCodexThread(pid, processes, src);
   let best: { file: string; started: number; forkedFrom: string } | undefined;
   let metaSeen = false;
   for (const file of files) {

@@ -378,6 +378,48 @@ describe('resolve: вся беседа — один файл (D01)', () => {
 });
 
 describe('resolve: панель Codex', () => {
+  it.each([1, 2])('daemon: %i корневых журналов в каталоге панели', async (count) => {
+    const meta = JSON.parse(ROOT_META.split('\n')[0]);
+    meta.payload.cwd = '/project';
+    meta.payload.originator = 'codex-tui';
+    const res = await resolve(PANE, sources({
+      panePids: async () => new Map([[PANE, 900]]),
+      processTable: async () => [
+        { ...row(900, localStart()), args: 'zsh' },
+        { ...row(901, localStart(), 900), args: 'codex' },
+        { ...row(910, localStart()), args: '/bin/codex sandbox -c config' },
+        { ...row(902, localStart()), args: '/bin/codex app-server --managed-daemon' },
+      ],
+      processCwd: async () => '/project',
+      openFiles: async (pids) => pids.includes(902) ? [ROOT_FILE, ...(count === 2 ? [ROOT_FILE.replace('rollout-', 'other-')] : [])] : [],
+      readHead: async () => JSON.stringify(meta),
+    }));
+    if (count === 1) expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE] });
+    else expect(res).toMatchObject({ ok: false, reason: 'lookup-failed' });
+  });
+
+  it('daemon не подставляет журнал другого каталога или другого TUI', async () => {
+    const meta = JSON.parse(ROOT_META.split('\n')[0]);
+    meta.payload.cwd = '/other';
+    meta.payload.originator = 'codex-tui';
+    const base = sources({
+      panePids: async () => new Map([[PANE, 900]]),
+      processTable: async () => [
+        { ...row(900, localStart()), args: 'codex' },
+        { ...row(902, localStart()), args: '/bin/codex app-server --managed-daemon' },
+      ],
+      processCwd: async () => '/project',
+      openFiles: async (pids) => pids.includes(902) ? [ROOT_FILE] : [],
+      readHead: async () => JSON.stringify(meta),
+    });
+    expect(await resolve(PANE, base)).toMatchObject({ ok: false, reason: 'no-agent' });
+    clearCache();
+    meta.payload.cwd = '/project';
+    const processes = await base.processTable!();
+    expect(await resolve(PANE, { ...base, processTable: async () => [...processes, { ...row(903, localStart()), args: 'codex' }] }))
+      .toMatchObject({ ok: false, reason: 'lookup-failed' });
+  });
+
   it('берёт корневой поток среди открытых файлов процесса панели и его потомков', async () => {
     let asked: number[] = [];
     const res = await resolve(

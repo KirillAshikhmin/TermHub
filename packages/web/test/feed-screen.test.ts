@@ -617,3 +617,24 @@ describe('кнопка «вниз»', () => {
     expect(fab().hidden).toBe(true);
   });
 });
+
+
+describe('скрытие действий', () => {
+  it('скрывает инструменты, сохраняет реплики и запоминает выбор', async () => {
+    const { transport } = feedTransport(() => page({ entries: [HUMAN, AGENT, TOOL, THINK] }));
+    let feed = mountFeed(host, 'work', transport);
+    await flush();
+    const toggle = host.querySelector<HTMLInputElement>('.th-feed__hide-actions');
+    expect(toggle).not.toBeNull();
+    toggle!.checked = true;
+    toggle!.dispatchEvent(new Event('change'));
+    expect(entries('tool')[0]?.hidden).toBe(true);
+    expect(entries('human')[0]?.hidden).toBe(false);
+    expect(entries('agent')[0]?.hidden).toBe(false);
+    feed.teardown();
+    feed = mountFeed(host, 'work', transport);
+    await flush();
+    expect(entries('tool')[0]?.hidden).toBe(true);
+    feed.teardown();
+  });
+});

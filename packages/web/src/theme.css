@@ -3394,3 +3394,6 @@ main.th-feed {
   .th-term__keyboard-toggle.is-hidden { display: none; }
   .th-term__keyboard-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 }
+
+.th-feed__head { flex-wrap: wrap; }
+.th-feed__toggle-wrap + .th-feed__toggle-wrap { margin-left: 0; }
