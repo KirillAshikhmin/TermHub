@@ -87,6 +87,7 @@ const ru: Dict = {
     presetZsh: 'Оболочку',
     presetClaude: 'Claude',
     presetCodex: 'Codex',
+    presetOpenCode: 'OpenCode',
     submit: 'Создать',
     noDirs: 'Нет доступных каталогов',
     needDir: 'Укажите корень, каталог и имя новой папки',
@@ -169,6 +170,7 @@ const ru: Dict = {
   quickkeys: {
     title: 'Быстрые клавиши',
     left: 'Влево',
+    shiftLeft: 'Shift + влево',
     up: 'Вверх',
     down: 'Вниз',
     right: 'Вправо',
@@ -358,6 +360,7 @@ const ru: Dict = {
   feed: {
     claude: 'Claude',
     codex: 'Codex',
+    opencode: 'OpenCode',
     you: 'Вы',
     thinking: 'Мышление',
     showThinking: 'Показать рассуждения',
@@ -518,6 +521,7 @@ const en: Dict = {
     presetZsh: 'Shell',
     presetClaude: 'Claude',
     presetCodex: 'Codex',
+    presetOpenCode: 'OpenCode',
     submit: 'Create',
     noDirs: 'No directories available',
     needDir: 'Enter a root, directory and new folder name',
@@ -600,6 +604,7 @@ const en: Dict = {
   quickkeys: {
     title: 'Quick keys',
     left: 'Left',
+    shiftLeft: 'Shift + Left',
     up: 'Up',
     down: 'Down',
     right: 'Right',
@@ -789,6 +794,7 @@ const en: Dict = {
   feed: {
     claude: 'Claude',
     codex: 'Codex',
+    opencode: 'OpenCode',
     you: 'You',
     thinking: 'Thinking',
     showThinking: 'Show reasoning',

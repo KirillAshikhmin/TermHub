@@ -21,6 +21,8 @@ export const SEND_KEYS: readonly QuickKey[] = [
   { id: 'esc', glyph: 'Esc', send: '\x1b' },
   { id: 'tab', glyph: 'Tab', send: '\t' },
   { id: 'shiftTab', glyph: '⇧Tab', send: '\x1b[Z' },
+  // Shift+← — «назад» в вопросах Codex (xterm-форма стрелки с модификатором Shift).
+  { id: 'shiftLeft', glyph: '⇧←', send: '\x1b[1;2D', ariaKey: 'quickkeys.shiftLeft' },
   { id: 'left', glyph: '←', send: '\x1b[D', ariaKey: 'quickkeys.left' },
   { id: 'up', glyph: '↑', send: '\x1b[A', ariaKey: 'quickkeys.up' },
   { id: 'down', glyph: '↓', send: '\x1b[B', ariaKey: 'quickkeys.down' },

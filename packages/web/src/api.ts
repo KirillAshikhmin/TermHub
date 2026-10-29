@@ -17,7 +17,7 @@ export interface ModeInfo {
 /** Пресет создаваемой сессии. «zsh» — оболочка, остальные запускают одноимённую
  *  команду поверх неё. Зеркалит SESSION_PRESETS агента (packages/agent/src/sessions.ts):
  *  добавляешь пресет — правь обе стороны и словари i18n. */
-export type SessionPreset = 'zsh' | 'claude' | 'codex';
+export type SessionPreset = 'zsh' | 'claude' | 'codex' | 'opencode';
 
 export interface CreateSessionInput {
   name: string;

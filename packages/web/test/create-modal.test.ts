@@ -236,6 +236,25 @@ describe('openCreateModal — закрытие без создания (R11.2) �
 });
 
 
+describe('openCreateModal — выбор пресета', () => {
+  it('сегмент предлагает OpenCode как отдельный пресет и create передаёт его', async () => {
+    const { transport, calls } = fakeTransport({ groups: GROUPS, create: (req) => Promise.resolve(req.name) });
+    openCreateModal(transport);
+    await flush();
+
+    const opencodeBtn = [...form().querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.classList.contains('th-segment__btn') && b.textContent === 'OpenCode',
+    );
+    expect(opencodeBtn).toBeTruthy();
+    opencodeBtn!.click();
+    submit();
+    await flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ preset: 'opencode' });
+  });
+});
+
 describe('openCreateModal — новая папка', () => {
   it('последний пункт создаёт папку из очищенного имени в выбранном корне', async () => {
     const groups = [...GROUPS, { root: '/srv/empty', dirs: [] }];

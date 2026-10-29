@@ -936,7 +936,7 @@ function optionEl(value: string): HTMLOptionElement {
   return opt;
 }
 
-/** Сегмент-контрол выбора пресета (оболочка / claude / codex). */
+/** Сегмент-контрол выбора пресета (оболочка / claude / codex / opencode). */
 function buildSegment(onChange: (value: SessionPreset) => void): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'th-field';
@@ -951,6 +951,7 @@ function buildSegment(onChange: (value: SessionPreset) => void): HTMLElement {
     { value: 'zsh', label: t('create.presetZsh') },
     { value: 'claude', label: t('create.presetClaude') },
     { value: 'codex', label: t('create.presetCodex') },
+    { value: 'opencode', label: t('create.presetOpenCode') },
   ];
   const buttons: HTMLButtonElement[] = [];
   for (const opt of options) {
@@ -963,6 +964,7 @@ function buildSegment(onChange: (value: SessionPreset) => void): HTMLElement {
     if (opt.value === 'zsh') btn.classList.add('is-active');
     if (opt.value === 'claude') btn.classList.add('th-segment__btn--claude');
     if (opt.value === 'codex') btn.classList.add('th-segment__btn--codex');
+    if (opt.value === 'opencode') btn.classList.add('th-segment__btn--opencode');
     btn.addEventListener('click', () => {
       onChange(opt.value);
       for (const b of buttons) {
