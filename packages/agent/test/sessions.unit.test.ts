@@ -246,24 +246,44 @@ describe('SessionService.create — валидация', () => {
     ]);
   });
 
-  it('preset claude → команда claude в конце', async () => {
-    const svc = new SessionService({ roots: [root] });
+  /** Пресет агента запускается через login-интерактивную оболочку: PATH из ~/.zshrc. */
+  const viaZsh = ['/bin/zsh', '-lic', 'exec "$@"', 'zsh'];
+
+  it('preset claude → claude через login-оболочку', async () => {
+    const svc = new SessionService({ roots: [root], shell: '/bin/zsh' });
     await svc.create({ name: 'main', root, dir: 'projectA', preset: 'claude' });
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
-    expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'claude']);
+    expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), ...viaZsh, 'claude']);
   });
 
   it('preset codex → process-local overrides и inline-режим без альтернативного экрана', async () => {
-    const svc = new SessionService({ roots: [root] });
+    const svc = new SessionService({ roots: [root], shell: '/bin/zsh' });
     await svc.create({ name: 'main', root, dir: 'projectA', preset: 'codex' });
     const args = mockExecFile.mock.calls.at(-1)![1] as string[];
     expect(args).toEqual([
       'new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'),
+      ...viaZsh,
       'codex',
       '-c', 'tui.animations=false',
       '-c', 'tui.terminal_title=["activity","thread-title"]',
       '--no-alt-screen',
     ]);
+  });
+
+  it('preset opencode → opencode через login-оболочку', async () => {
+    const svc = new SessionService({ roots: [root], shell: '/bin/zsh' });
+    await svc.create({ name: 'main', root, dir: 'projectA', preset: 'opencode' });
+    const args = mockExecFile.mock.calls.at(-1)![1] as string[];
+    expect(args).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), ...viaZsh, 'opencode']);
+  });
+
+  it('незнакомая или неизвестная оболочка → команда пресета как есть', async () => {
+    for (const shell of ['/opt/homebrew/bin/fish', 'zsh', undefined]) {
+      const svc = new SessionService({ roots: [root], shell });
+      await svc.create({ name: 'main', root, dir: 'projectA', preset: 'claude' });
+      const args = mockExecFile.mock.calls.at(-1)![1] as string[];
+      expect(args, String(shell)).toEqual(['new-session', '-d', '-s', 'main', '-c', path.join(root, 'projectA'), 'claude']);
+    }
   });
 
   it('отвергает недопустимый preset', async () => {

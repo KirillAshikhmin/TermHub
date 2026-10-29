@@ -1321,9 +1321,13 @@ export class RelayLink {
         ptyPool: this.ptyPool,
       });
     } catch (err) {
+      console.error(`[relay-link] open failed for session ${session}:`, err);
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, {
         code: err instanceof PtyUnavailableError ? 'pty-unavailable' : 'terminal-attach-failed',
-        message: 'Could not create a pseudo-terminal. Restart the TermHub agent if the problem persists.',
+        message:
+          err instanceof PtyUnavailableError
+            ? 'Too many terminal connections are open. Close unused terminal tabs and try again.'
+            : `Could not create a pseudo-terminal: ${err instanceof Error ? err.message : String(err)}. Restart the TermHub agent if the problem persists.`,
       }));
       return;
     }

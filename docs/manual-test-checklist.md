@@ -23,7 +23,7 @@ real mobile keyboard are required).
       (`zsh`/`claude`/…), "active N min ago", a count of connected clients
 - [ ] 🔔 indicator on a session with a bell (see the "Push notifications"
       section below)
-- [ ] Create a session (name + directory from the list + `zsh`/`claude`/`codex`
+- [ ] Create a session (name + directory from the list + `zsh`/`claude`/`codex`/`opencode`
       preset) — it appears in the list and is confirmed by `tmux ls` on the Mac
 - [ ] Terminate a session (with confirmation) — it disappears from the list
       and from `tmux ls`

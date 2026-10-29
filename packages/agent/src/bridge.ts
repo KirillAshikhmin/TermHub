@@ -325,7 +325,7 @@ export function wireTerminalWs(opts: {
               message:
                 err instanceof PtyUnavailableError
                   ? 'Too many terminal connections are open. Close unused terminal tabs and try again.'
-                  : 'Could not create a pseudo-terminal. Restart the TermHub agent if the problem persists.',
+                  : `Could not create a pseudo-terminal: ${err instanceof Error ? err.message : String(err)}. Restart the TermHub agent if the problem persists.`,
             }),
           );
           if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) ws.close(1011);

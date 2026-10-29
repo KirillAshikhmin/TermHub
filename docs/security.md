@@ -115,8 +115,8 @@ The agent's API does not run just anything:
 
 - the directory for a new session comes only from a predefined list
   (`sessionRoots` in the config, `~/projects` by default), no arbitrary path;
-- the command for a new session is only one of the presets (`zsh` or
-  `claude`), not free-form input;
+- the command for a new session is only one of the presets (`zsh`, `claude`,
+  `codex` or `opencode`), not free-form input;
 - all calls to `tmux` go through `execFile` without a shell — injection via
   special characters in the session name or directory is ruled out.
 

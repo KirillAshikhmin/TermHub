@@ -3,6 +3,7 @@
 // runTmux (execFile, без shell). В тестах используется изолированный сокет (socketName → -L).
 
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { SessionInfo } from '@termhub/protocol';
 import { sessionWorking, sessionTitleText } from '@termhub/protocol';
@@ -57,9 +58,34 @@ export function pickFreeName(base: string, taken: ReadonlySet<string>): string {
 
 /** Допустимые пресеты создаваемой сессии. «zsh» — просто оболочка, остальные
  *  запускают одноимённую команду поверх неё (см. create). */
-export const SESSION_PRESETS = ['zsh', 'claude', 'codex'] as const;
+export const SESSION_PRESETS = ['zsh', 'claude', 'codex', 'opencode'] as const;
 export type SessionPreset = (typeof SESSION_PRESETS)[number];
 const PRESETS = new Set<string>(SESSION_PRESETS);
+
+/** Оболочки, которые понимают `-lic 'exec "$@"' <arg0> <argv…>`. */
+const ARGV_SHELLS = new Set(['zsh', 'bash']);
+
+/** argv пресета — через login-интерактивную оболочку пользователя. Агент под launchd/systemd
+ *  живёт с PATH, снятым при установке службы, а `claude`/`opencode` часто лежат в каталогах,
+ *  которые добавляет только ~/.zshrc (~/.local/bin, ~/.opencode/bin): `zsh -c claude` его не
+ *  читает, команда не находится, и сессия гаснет сразу (последняя — вместе с сервером tmux).
+ *  Строка оболочки постоянная, argv едет позиционными параметрами — подстановки нет; `exec`
+ *  оставляет в панели сам процесс агента. Незнакомая оболочка — argv как есть. */
+export function presetCommand(shell: string | undefined, argv: string[]): string[] {
+  if (!shell || !path.isAbsolute(shell)) return argv;
+  const name = path.basename(shell);
+  if (!ARGV_SHELLS.has(name)) return argv;
+  return [shell, '-lic', 'exec "$@"', name, ...argv];
+}
+
+/** Login-оболочка пользователя из passwd: $SHELL у службы бывает не задан. */
+function loginShell(): string | undefined {
+  try {
+    return os.userInfo().shell ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Сырой формат «только имя» — для подбора свободного имени (см. takenNames). */
 const NAME_ONLY_FORMAT = '#{session_name}';
@@ -127,15 +153,18 @@ export function parseListOutput(sessionsOut: string, panesOut: string): SessionI
 export class SessionService {
   private readonly roots: string[];
   private readonly socketName?: string;
+  /** Оболочка, через которую запускаются пресеты агентов (см. presetCommand). */
+  private readonly shell?: string;
   private readonly bellCallbacks: Array<(session: string, task: string) => void> = [];
   private readonly prevBell = new Map<string, boolean>();
   /** Последняя задача сессии (текст из брайлевого заголовка) — для тела пуша. */
   private readonly lastTask = new Map<string, string>();
   private timer?: ReturnType<typeof setInterval>;
 
-  constructor(opts: { roots: string[]; socketName?: string }) {
+  constructor(opts: { roots: string[]; socketName?: string; shell?: string }) {
     this.roots = opts.roots;
     this.socketName = opts.socketName;
+    this.shell = 'shell' in opts ? opts.shell : loginShell();
   }
 
   /** Запускает tmux с изолированным сокетом (если задан) и возвращает stdout. */
@@ -210,21 +239,23 @@ export class SessionService {
     // Пресет уже сверен с whitelist выше, поэтому произвольная команда сюда не пройдёт.
     // Codex overrides передаются как argv конкретного процесса: shell нет,
     // глобальный ~/.codex/config.toml не читается и не изменяется.
-    const newSession = (name: string) => {
-      const args = ['new-session', '-d', '-s', name, '-c', dirPath];
-      if (req.preset === 'claude') args.push('claude');
-      if (req.preset === 'codex') {
-        args.push(
-          'codex',
-          '-c', 'tui.animations=false',
-          '-c', 'tui.terminal_title=["activity","thread-title"]',
-          // Inline вместо альтернативного экрана: только так у сессии Codex остаётся
-          // история, которую можно листать (иначе её не бывает вовсе).
-          '--no-alt-screen',
-        );
-      }
-      return this.tmux(args);
-    };
+    const command: string[] = [];
+    if (req.preset === 'claude') command.push('claude');
+    if (req.preset === 'codex') {
+      command.push(
+        'codex',
+        '-c', 'tui.animations=false',
+        '-c', 'tui.terminal_title=["activity","thread-title"]',
+        // Inline вместо альтернативного экрана: только так у сессии Codex остаётся
+        // история, которую можно листать (иначе её не бывает вовсе).
+        '--no-alt-screen',
+      );
+    }
+    if (req.preset === 'opencode') command.push('opencode');
+    // zsh — просто оболочка tmux по умолчанию, она и так login-интерактивная.
+    const tail = command.length > 0 ? presetCommand(this.shell, command) : [];
+    const newSession = (name: string) =>
+      this.tmux(['new-session', '-d', '-s', name, '-c', dirPath, ...tail]);
 
     try {
       if (!req.autoName) {
