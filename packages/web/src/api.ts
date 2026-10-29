@@ -108,7 +108,7 @@ export type FeedFailureReason =
  *  пустой на шаге через строку, не влезшую в окно ответа. */
 export interface FeedPage {
   ok: true;
-  agent: 'claude' | 'codex';
+  agent: 'claude' | 'codex' | 'opencode';
   entries: FeedEntry[];
   /** Курсоры краёв отданного куска: `head` — для запроса назад, `tail` — вперёд. */
   head: string;

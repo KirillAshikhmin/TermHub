@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { resolve, clearCache, type TranscriptSources, type ProcessRow } from '../src/agent-transcript.js';
+import { opencodeDbPath } from '../src/opencode-db.js';
 
 const HOME = '/home/u';
 const PANE = 'SprutApp:@6.%6';
@@ -103,6 +104,7 @@ function sources(over: Partial<TranscriptSources> = {}): Partial<TranscriptSourc
     // и делать его фоном всех остальных проверок значило бы проверять не то.
     panePids: async () => new Map([[PANE, 900]]),
     openFiles: async () => [],
+    opencodeSessions: async () => [],
     ...over,
   };
 }
@@ -783,5 +785,123 @@ describe('resolve: различимый отказ', () => {
       }),
     );
     expect(res).toMatchObject({ ok: false, reason: 'lookup-failed' });
+  });
+});
+
+describe('resolve: панель opencode', () => {
+  const OC_CWD = '/Users/u/projects/LocalLLM';
+  // Клиент запущен в 17:24:49 по местным часам; беседы считаются от этого момента.
+  const ocStart = localStart();
+  const after = (ms: number): number => ocStart.getTime() + ms;
+  /** Панель с клиентом opencode: сам процесс панели (exec из пресета) или потомок оболочки. */
+  const ocPane = (over: Partial<TranscriptSources> = {}, rows: ProcessRow[] = [row(900, ocStart, 1, 'opencode')]) =>
+    sources({
+      processTable: async () => rows,
+      processCwd: async (pid) => (pid === 900 || pid === 901 ? OC_CWD : '/elsewhere'),
+      ...over,
+    });
+
+  it('берёт беседу каталога панели, тронутую последней', async () => {
+    const asked: string[][] = [];
+    const res = await resolve(
+      PANE,
+      ocPane({
+        opencodeSessions: async (db, dir) => {
+          asked.push([db, dir]);
+          return [
+            { id: 'ses_old', active: after(60_000), forked: false },
+            { id: 'ses_new', active: after(120_000), forked: false },
+          ];
+        },
+      }),
+    );
+    expect(res).toEqual({
+      ok: true,
+      agent: 'opencode',
+      files: [opencodeDbPath(HOME)],
+      session: 'ses_new',
+      complete: true,
+      live: true,
+    });
+    expect(asked).toEqual([[opencodeDbPath(HOME), OC_CWD]]);
+  });
+
+  it('клиент — потомок оболочки панели (запущен руками из zsh)', async () => {
+    const res = await resolve(
+      PANE,
+      ocPane(
+        { opencodeSessions: async () => [{ id: 'ses_a', active: after(5_000), forked: false }] },
+        [row(900, ocStart, 1, '-zsh'), row(901, ocStart, 900, '/Users/u/.opencode/bin/opencode')],
+      ),
+    );
+    expect(res).toMatchObject({ ok: true, agent: 'opencode', session: 'ses_a' });
+  });
+
+  it('отпочкованная беседа помечается неполной', async () => {
+    const res = await resolve(
+      PANE,
+      ocPane({ opencodeSessions: async () => [{ id: 'ses_f', active: after(5_000), forked: true }] }),
+    );
+    expect(res).toMatchObject({ ok: true, session: 'ses_f', complete: false });
+  });
+
+  it('второй клиент в том же каталоге — отказ, а не беседа соседа', async () => {
+    const res = await resolve(
+      PANE,
+      ocPane(
+        { processCwd: async () => OC_CWD, opencodeSessions: async () => [{ id: 'ses_a', active: after(5_000), forked: false }] },
+        [row(900, ocStart, 1, 'opencode'), row(950, ocStart, 1, 'opencode')],
+      ),
+    );
+    expect(res).toMatchObject({ ok: false, reason: 'lookup-failed', detail: expect.stringContaining(OC_CWD) });
+  });
+
+  it('клиент в другом каталоге и фоновый сервер не мешают', async () => {
+    const res = await resolve(
+      PANE,
+      ocPane(
+        { opencodeSessions: async () => [{ id: 'ses_a', active: after(5_000), forked: false }] },
+        [
+          row(900, ocStart, 1, 'opencode'),
+          row(950, ocStart, 1, 'opencode'),
+          row(960, ocStart, 1, '/Users/u/.opencode/bin/opencode serve --service'),
+        ],
+      ),
+    );
+    expect(res).toMatchObject({ ok: true, session: 'ses_a' });
+  });
+
+  it('с запуска клиента беседу не трогали — «беседы ещё нет», а не вчерашняя', async () => {
+    const res = await resolve(
+      PANE,
+      ocPane({ opencodeSessions: async () => [{ id: 'ses_old', active: after(-3_600_000), forked: false }] }),
+    );
+    expect(res).toMatchObject({ ok: false, reason: 'no-transcript' });
+  });
+
+  it('бесед в каталоге нет вовсе — «беседы ещё нет»', async () => {
+    expect(await resolve(PANE, ocPane())).toMatchObject({ ok: false, reason: 'no-transcript' });
+  });
+
+  it('база незнакомой схемы — unknown-format', async () => {
+    const res = await resolve(PANE, ocPane({ opencodeSessions: async () => null }));
+    expect(res).toMatchObject({ ok: false, reason: 'unknown-format' });
+  });
+
+  it('сам фоновый сервер в панели — не клиент: «агента нет»', async () => {
+    const res = await resolve(PANE, ocPane({}, [row(900, ocStart, 1, 'opencode serve --service')]));
+    expect(res).toMatchObject({ ok: false, reason: 'no-agent' });
+  });
+
+  it('сбой базы — lookup-failed, а не «агента нет»', async () => {
+    const res = await resolve(
+      PANE,
+      ocPane({
+        opencodeSessions: async () => {
+          throw new Error('database is locked');
+        },
+      }),
+    );
+    expect(res).toMatchObject({ ok: false, reason: 'lookup-failed', detail: expect.stringContaining('locked') });
   });
 });

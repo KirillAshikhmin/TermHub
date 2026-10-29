@@ -1,6 +1,8 @@
 // Лента из транскрипта: файл беседы (Claude `.jsonl` или rollout Codex) превращается в
 // страницу записей от старых к новым. Снаружи форматы неразличимы — на выходе одна и та
-// же `FeedEntry`, различие остаётся полем `agent` страницы.
+// же `FeedEntry`, различие остаётся полем `agent` страницы. Беседа opencode — не файл, а
+// строки общей базы: страницу по ней собирает `opencode-feed`, а запись разбирает
+// `fromOpencode` отсюда же, теми же правилами, что и два других формата.
 //
 // Файл живой сессии весит мегабайты (замер 14.09.2026: 27 МБ у идущей сессии Claude),
 // поэтому целиком он не читается никогда: страница берётся окном от известного места, а
@@ -21,6 +23,9 @@
 
 import { open, type FileHandle } from 'node:fs/promises';
 import type { AgentKind, FailureReason } from './agent-transcript.js';
+
+/** Агенты, чья беседа — файл строк JSON: его и читает `readFeed`. */
+export type FileAgent = Exclude<AgentKind, 'opencode'>;
 
 /** Одна запись ленты — общая форма для обоих агентов. */
 export interface FeedEntry {
@@ -115,14 +120,14 @@ const WINDOW_MAX = 4 * 1024 * 1024;
 
 /** Разбирает одну строку файла. Возвращает первую запись строки или `null`, если строки
  *  в ленте нет вовсе (служебная запись, вывод инструмента, неразобранная строка). */
-export function parseLine(line: string, agent: AgentKind, offset = 0): FeedEntry | null {
+export function parseLine(line: string, agent: FileAgent, offset = 0): FeedEntry | null {
   return classify(line, agent, offset).entries[0] ?? null;
 }
 
 /** Страница ленты по файлу и курсору. */
 export async function readFeed(
   file: string,
-  agent: AgentKind,
+  agent: FileAgent,
   opts: FeedOptions = {},
 ): Promise<FeedPage | FeedFailure> {
   let fh: FileHandle;
@@ -224,7 +229,7 @@ interface Slice {
  *  94 МБ хвост так стоил 29 мс вместо 9 мс (замер 14.09.2026). */
 async function backSlice(
   fh: FileHandle,
-  agent: AgentKind,
+  agent: FileAgent,
   size: number,
   end: number,
   limit: number,
@@ -258,7 +263,7 @@ async function backSlice(
 /** Окно вперёд от `start` тем же размером: курсор всегда указывает на начало строки. */
 async function fwdSlice(
   fh: FileHandle,
-  agent: AgentKind,
+  agent: FileAgent,
   size: number,
   start: number,
   limit: number,
@@ -329,7 +334,7 @@ async function window(fh: FileHandle, from: number, to: number): Promise<Buffer>
 function linesOf(
   buf: Buffer,
   from: number,
-  agent: AgentKind,
+  agent: FileAgent,
   dropFirst: boolean,
 ): { rows: Row[]; lastEnd: number } {
   const rows: Row[] = [];
@@ -356,7 +361,7 @@ function linesOf(
  *  Записи одной строки не делятся между страницами — курсор всегда стоит на границе
  *  строки, поэтому строка с несколькими записями целиком либо входит, либо нет. */
 function assemble(
-  agent: AgentKind,
+  agent: FileAgent,
   ino: number,
   slice: Slice,
   limit: number,
@@ -443,7 +448,7 @@ interface Base {
   branch?: string;
 }
 
-function classify(line: string, agent: AgentKind, offset: number): Parsed {
+function classify(line: string, agent: FileAgent, offset: number): Parsed {
   const trimmed = line.trim();
   if (trimmed.length === 0) return { entries: [], broken: false };
   let raw: unknown;
@@ -591,6 +596,68 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
   return [];
 }
 
+/** Запись базы opencode (`session_message`): тип лежит столбцом рядом с телом JSON.
+ *  Мышление, текст и вызовы — части одного ответа, как блоки строки Claude, поэтому и
+ *  идентификаторы у них те же: строка, затем `#<номер>`. `pending` — ответ ещё пишется:
+ *  его строка в базе уже есть и будет расти, и читатель держит курсор перед ней, как перед
+ *  недописанной строкой файла. Служебные типы (`system`, `synthetic`, `model-switched`) в
+ *  ленту не идут: их пишет сам opencode, а не человек и не модель. */
+export function fromOpencode(type: string, data: string, id: string): Parsed & { pending: boolean } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(data);
+  } catch {
+    return { entries: [], broken: true, pending: false };
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+    return { entries: [], broken: true, pending: false };
+  const rec = raw as Record<string, unknown>;
+  const time = (rec.time ?? undefined) as Record<string, unknown> | undefined;
+  const base: Base = { id, at: stamp(time?.created) };
+  const done = (entries: FeedEntry[], pending = false) => ({ entries, broken: false, pending });
+  if (type === 'user') {
+    const words = humanWords(str(rec.text));
+    return done(words ? [make(base, 0, 'human', words)] : []);
+  }
+  if (type === 'assistant') {
+    const out: FeedEntry[] = [];
+    for (const item of Array.isArray(rec.content) ? rec.content : []) {
+      if (item === null || typeof item !== 'object') continue;
+      const part = item as Record<string, unknown>;
+      const text = str(part.text);
+      if (part.type === 'text' && text.trim()) out.push(make(base, out.length, 'agent', text));
+      else if (part.type === 'reasoning' && text.trim()) out.push(make(base, out.length, 'thinking', text));
+      else if (part.type === 'tool' && str(part.name)) {
+        const state = (part.state ?? undefined) as Record<string, unknown> | undefined;
+        out.push(tool(base, out.length, str(part.name), argOf(state?.input)));
+      }
+    }
+    const error = errorText(rec.error);
+    if (error) out.push(note(base, 'error', error, out.length));
+    return done(out, time?.completed === undefined && rec.error === undefined);
+  }
+  if (type === 'compaction') {
+    // Сбой сжатия здесь молчит: ход, который он оборвал, следом закрывает запись `idle` с той
+    // же ошибкой, и второй строки об одном и том же лента не показывает.
+    if (rec.status === 'completed') return done([note(base, 'compacted', str(rec.summary))]);
+    return done([], rec.status !== 'failed');
+  }
+  if (type === 'idle') {
+    const outcome = str(rec.outcome);
+    if (outcome === 'failed') return done([note(base, 'error', errorText(rec.error))]);
+    if (/abort|interrupt|cancel/i.test(outcome)) return done([note(base, 'interrupted', '')]);
+  }
+  return done([]);
+}
+
+/** Текст ошибки opencode: `{type, message}` либо строка. */
+function errorText(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (raw === null || typeof raw !== 'object') return '';
+  const err = raw as Record<string, unknown>;
+  return str(err.message) || str(err.type);
+}
+
 // --- сборка записей ------------------------------------------------------------------
 
 function make(base: Base, index: number, kind: FeedEntry['kind'], text: string): FeedEntry {
@@ -635,8 +702,8 @@ export function weigh(entry: FeedEntry): number {
  *  вехой, и поле `note` не повторяется словами. Прерыванию после этого остаётся пустой текст —
  *  замер 14.09.2026: у всех 20 вех прерывания владельца текст состоял только из маркера
  *  `[Request interrupted by user]`, своей подробности не было ни у одной. */
-function note(base: Base, what: NonNullable<FeedEntry['note']>, text: string): FeedEntry {
-  const entry = make(base, 0, 'note', humanWords(text));
+function note(base: Base, what: NonNullable<FeedEntry['note']>, text: string, index = 0): FeedEntry {
+  const entry = make(base, index, 'note', humanWords(text));
   entry.note = what;
   return entry;
 }

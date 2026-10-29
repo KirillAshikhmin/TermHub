@@ -216,7 +216,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   // ── Состояние окна ленты ─────────────────────────────────────────────
   let items: FeedEntry[] = [];
   let seen = new Set<string>();
-  let agent: 'claude' | 'codex' = 'claude';
+  let agent: 'claude' | 'codex' | 'opencode' = 'claude';
   // До первой страницы чья это беседа неизвестно — значка нет, а не «Claude» наугад.
   let agentKnown = false;
   let headCursor = '';

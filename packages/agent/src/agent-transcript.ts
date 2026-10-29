@@ -3,14 +3,15 @@
 // читается — только первая строка rollout'а Codex, в которой лежит признак корневого
 // потока. Ни ленты, ни интерфейса здесь нет: это первый из трёх шагов.
 //
-// Способа три, общего у них — только форма ответа:
+// Способа четыре, общего у них — только форма ответа:
 //   Claude — реестр ~/.claude/sessions/<pid>.json, поле `tmux` = адрес панели;
 //   Codex  — файлы, которые процесс панели и его потомки держат открытыми;
+//   opencode — беседа каталога панели в общей базе (`opencodeThread`);
 //   Claude, подключённый клиентом, — идентификатор сессии в аргументах этого клиента.
-// Ни заголовок панели, ни рабочий каталог, ни время файла в привязке не участвуют: на
-// живых данных они сессии не различают (заголовок пуст у двух панелей из семи, каталог
-// общий у восьми сессий, пишутся все одновременно). Единственный различающий признак —
-// адрес панели.
+// Ни заголовок панели, ни время файла в привязке не участвуют: на живых данных они сессии
+// не различают (заголовок пуст у двух панелей из семи, пишутся все одновременно). Рабочий
+// каталог тоже не различает (общий у восьми сессий) — поэтому у opencode, где другого
+// признака нет, привязка по каталогу честно отказывает, как только в нём два клиента.
 //
 // Цепочки файлов здесь нет намеренно (D01). На живых данных 13.09.2026 проверено, что
 // продолжение и форк сессии Claude КОПИРУЮТ прежнюю беседу в новый файл: у пары
@@ -20,10 +21,11 @@
 // дубль истории, который читателю пришлось бы разбирать. Поэтому `files` — список из
 // одного файла текущей сессии.
 //
-// Аргументы процесса читаются ровно в одном месте (`claudeAttached`) и ровно для одного
-// случая: в панели сидит клиент `claude attach <id>`, а сам агент работает фоновым
+// Беседу по аргументам процесса выбирают ровно в одном месте (`claudeAttached`) и ровно для
+// одного случая: в панели сидит клиент `claude attach <id>`, а сам агент работает фоновым
 // процессом, у записи которого поля `tmux` нет вовсе. Связывает их только идентификатор
-// сессии в аргументах клиента; больше ни на что аргументы в модуле не влияют.
+// сессии в аргументах клиента. В остальных местах аргументы говорят лишь, ЧТО за программа
+// запущена (daemon Codex, клиент opencode), но не какую беседу она ведёт.
 //
 // Дюжина панелей опрашивается подряд, поэтому общие источники берутся снимком на секунду:
 // один обход реестра, один вызов ps и один list-panes на весь обход, а не на панель.
@@ -34,12 +36,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { isSchemaError, opencodeDbExists, opencodeDbPath, openOpencodeDb } from './opencode-db.js';
 import { isExistingSessionName } from './sessions.js';
 import { runTmux, isNoServerError } from './tmux-run.js';
 
 const exec = promisify(execFile);
 
-export type AgentKind = 'claude' | 'codex';
+export type AgentKind = 'claude' | 'codex' | 'opencode';
 
 /** Причина отказа. Пустой результат вместо причины не отдаётся никогда. */
 export type FailureReason =
@@ -61,6 +64,9 @@ export interface TranscriptChain {
   agent: AgentKind;
   /** Файлы беседы от самого раннего к текущему; сейчас — ровно один, текущий. */
   files: string[];
+  /** Беседа внутри файла — только у opencode: его база держит все беседы разом, и файл
+   *  без идентификатора беседы ничего не называет. */
+  session?: string;
   /** Содержит ли файл беседу целиком. У Claude — всегда да: продолжение и форк копируют
    *  прежнюю беседу в новый файл (D01). У Codex — да, если у корневого потока нет
    *  `forked_from_id`: поле в формате есть (в живых данных владельца оно у 51 вложенного
@@ -116,6 +122,18 @@ export interface TranscriptSources {
   /** Пути файлов, открытых этими процессами. */
   openFiles(pids: number[]): Promise<string[]>;
   processCwd(pid: number): Promise<string | undefined>;
+  /** Корневые неархивные беседы opencode с этим рабочим каталогом. Базы нет — пустой
+   *  список, схема незнакома — null. */
+  opencodeSessions(db: string, directory: string): Promise<OpencodeSession[] | null>;
+}
+
+/** Беседа opencode глазами определителя: когда её трогали последней и отпочкована ли она. */
+export interface OpencodeSession {
+  id: string;
+  /** Последняя активность, epoch ms: позднейшее из «обновлена» и «открыта». */
+  active: number;
+  /** Отпочкована от другой беседы (`fork_session_id`): начало могло остаться там. */
+  forked: boolean;
 }
 
 /** Хвост адреса панели: «:@окно.%панель». Имя сессии перед ним проверяет общее с sessions.ts
@@ -236,6 +254,7 @@ function withDefaults(over?: Partial<TranscriptSources>): TranscriptSources {
     panePids: over?.panePids ?? panePidsFor(socketName),
     openFiles: over?.openFiles ?? defaultOpenFiles,
     processCwd: over?.processCwd ?? defaultProcessCwd,
+    opencodeSessions: over?.opencodeSessions ?? defaultOpencodeSessions,
   };
 }
 
@@ -358,6 +377,33 @@ async function defaultOpenFiles(pids: number[]): Promise<string[]> {
     .map((l) => l.slice(1));
 }
 
+const OPENCODE_SESSIONS_SQL =
+  'SELECT id, time_updated AS updated, time_viewed AS viewed, fork_session_id AS fork FROM session_v2 ' +
+  'WHERE directory = ? AND parent_id IS NULL AND time_archived IS NULL';
+
+/** Беседы подагентов (`parent_id`) и архивные в ленту панели не годятся: панель показывает
+ *  беседу, которую ведёт человек. */
+async function defaultOpencodeSessions(db: string, directory: string): Promise<OpencodeSession[] | null> {
+  if (!(await opencodeDbExists(db))) return [];
+  const conn = await openOpencodeDb(db);
+  try {
+    const rows = conn.prepare(OPENCODE_SESSIONS_SQL).all(directory);
+    const out: OpencodeSession[] = [];
+    for (const r of rows) {
+      if (typeof r.id !== 'string') continue;
+      const updated = typeof r.updated === 'number' ? r.updated : 0;
+      const viewed = typeof r.viewed === 'number' ? r.viewed : 0;
+      out.push({ id: r.id, active: Math.max(updated, viewed), forked: typeof r.fork === 'string' && r.fork.length > 0 });
+    }
+    return out;
+  } catch (err) {
+    if (isSchemaError(err)) return null;
+    throw err;
+  } finally {
+    conn.close();
+  }
+}
+
 interface Stamp {
   year: number;
   month: number;
@@ -448,7 +494,8 @@ function sameSources(a: TranscriptSources | undefined, b: TranscriptSources): bo
     a.processTable === b.processTable &&
     a.panePids === b.panePids &&
     a.openFiles === b.openFiles &&
-    a.processCwd === b.processCwd
+    a.processCwd === b.processCwd &&
+    a.opencodeSessions === b.opencodeSessions
   );
 }
 
@@ -799,6 +846,56 @@ async function codexThread(
   return found('codex', best.file, !best.forkedFrom, true);
 }
 
+/** Клиент opencode — TUI или разовый `opencode run`, но не сам фоновый сервер. */
+function isOpencodeClient(args: string): boolean {
+  const words = args.split(/\s+/);
+  return path.basename(words[0] ?? '') === 'opencode' && words[1] !== 'serve';
+}
+
+/** Каталог чужого процесса: он мог завершиться между ps и lsof — тогда он никому не мешает. */
+async function cwdOrNone(pid: number, src: TranscriptSources): Promise<string | undefined> {
+  try {
+    return await src.processCwd(pid);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Способ четвёртый: opencode. Его беседы — строки общей базы фонового сервера, а сам TUI
+ *  ни файла беседы, ни базы открытыми не держит, поэтому привязка — по рабочему каталогу:
+ *  беседа каталога панели, тронутая последней. Каталог не различает два клиента в нём, и
+ *  тогда ответ — отказ, а не догадка: отдать панели беседу соседа хуже, чем не отдать
+ *  ничего. Беседа, которую не трогали с запуска клиента, — прошлая: свежий TUI беседы ещё
+ *  не начал, и показывать вместо неё вчерашнюю значит врать. */
+async function opencodeThread(pane: string, snap: Snapshot, src: TranscriptSources): Promise<TranscriptResult | undefined> {
+  const pid = (await panesOf(snap, src)).get(pane);
+  if (pid === undefined) return undefined;
+  const processes = await processesOf(snap, src);
+  const mine = descendants(pid, processes);
+  const clients = mine.filter((id) => isOpencodeClient(processes.get(id)?.args ?? ''));
+  if (clients.length === 0) return undefined;
+  if (clients.length > 1)
+    return fail('lookup-failed', `В панели ${pane} несколько клиентов opencode: беседу панели не выбрать однозначно`);
+  const client = clients[0];
+  const cwd = await src.processCwd(client);
+  if (!cwd) return fail('lookup-failed', `Рабочий каталог клиента opencode ${client} не определён`);
+  const own = new Set(mine);
+  for (const row of processes.values()) {
+    if (own.has(row.pid) || !isOpencodeClient(row.args ?? '')) continue;
+    if ((await cwdOrNone(row.pid, src)) === cwd)
+      return fail('lookup-failed', `Несколько клиентов opencode в каталоге ${cwd}: беседу панели не выбрать однозначно`);
+  }
+  const db = opencodeDbPath(src.home);
+  const sessions = await src.opencodeSessions(db, cwd);
+  if (sessions === null) return fail('unknown-format', `База opencode ${db} незнакомой схемы: таблицы бесед не те`);
+  let best: OpencodeSession | undefined;
+  for (const s of sessions) if (!best || s.active > best.active) best = s;
+  const started = processes.get(client)?.startedAt.getTime() ?? 0;
+  if (!best || best.active + START_TOLERANCE_MS < started)
+    return fail('no-transcript', `Клиент opencode в ${cwd} с запуска беседы ещё не вёл`);
+  return { ok: true, agent: 'opencode', files: [db], session: best.id, complete: !best.forked, live: true };
+}
+
 /** Обход открытых файлов стоит от 0,05 до 1,5 с на панель, а панелей дюжина: держим результат
  *  на панель с ключом из pid и времени его старта — сменился процесс, запись недействительна.
  *  Сбой обхода сюда не попадает: он летит исключением и кэш не трогает. */
@@ -841,7 +938,14 @@ export async function resolve(pane: string, sources?: Partial<TranscriptSources>
     blind ??= describe(err);
   }
   if (codex) return codex;
-  // Клиент `claude attach` идёт после обоих живых способов: он говорит про сессию, которая
+  let opencode: TranscriptResult | undefined;
+  try {
+    opencode = await opencodeThread(pane, snap, src);
+  } catch (err) {
+    blind ??= describe(err);
+  }
+  if (opencode) return opencode;
+  // Клиент `claude attach` идёт после живых способов: он говорит про сессию, которая
   // работает не здесь, и своего агента панели перебивать не должен.
   try {
     const attached = await claudeAttached(pane, snap, src);

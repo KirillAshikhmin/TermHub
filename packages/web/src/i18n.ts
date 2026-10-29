@@ -398,7 +398,7 @@ const ru: Dict = {
       chain: 'Продолжение беседы',
     },
     fail: {
-      noAgent: 'В этой панели не работает ни Claude, ни Codex',
+      noAgent: 'В этой панели не работает ни Claude, ни Codex, ни OpenCode',
       noTranscript: 'Беседу ещё не начинали',
       unknownFormat: 'Не разобрать запись беседы',
       lookupFailed: 'Не удалось посмотреть',
@@ -832,7 +832,7 @@ const en: Dict = {
       chain: 'Conversation continued',
     },
     fail: {
-      noAgent: 'Neither Claude nor Codex is running in this pane',
+      noAgent: 'Neither Claude, Codex nor OpenCode is running in this pane',
       noTranscript: 'This conversation has not started yet',
       unknownFormat: 'Cannot read this conversation record',
       lookupFailed: 'Could not look it up',

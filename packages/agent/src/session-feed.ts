@@ -16,7 +16,8 @@
 //
 // Своё здесь одно — цепочка файлов Codex: корневой поток мог быть отпочкован от другого
 // (`forked_from_id`), и тогда начало беседы лежит в файле-родителе. Дойдя до начала файла,
-// лента продолжается в родителе, а место склейки помечается вехой `chain`.
+// лента продолжается в родителе, а место склейки помечается вехой `chain`. Беседа opencode
+// — не файл, а строки общей базы: её страницу собирает `readOpencodeFeed`, цепочки у неё нет.
 
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -27,10 +28,10 @@ import {
   resolve as resolvePane,
   CODEX_SESSIONS_DIR,
   HEAD_BYTES,
-  type AgentKind,
   type CodexMeta,
   type TranscriptResult,
 } from './agent-transcript.js';
+import { readOpencodeFeed } from './opencode-feed.js';
 import { findSessionId, isExistingSessionName, SESSION_ID_FORMAT } from './tmux-session.js';
 import { runTmux, isNoServerError } from './tmux-run.js';
 import {
@@ -39,6 +40,7 @@ import {
   weigh,
   RESPONSE_LIMIT,
   type FeedEntry,
+  type FileAgent,
   type FeedFailure,
   type FeedOptions,
   type FeedPage,
@@ -100,6 +102,11 @@ export async function sessionFeed(
   const file = found.files.at(-1);
   if (!file) return fail('no-transcript', `resolver named no transcript file for pane ${pane}`);
   try {
+    if (found.agent === 'opencode') {
+      if (!found.session) return fail('no-transcript', `resolver named no opencode session for pane ${pane}`);
+      const page = await readOpencodeFeed(file, found.session, opts);
+      return page.ok ? { ...page, complete: found.complete, live: found.live } : page;
+    }
     return await pageOf(file, found.agent, opts, src, found.complete, found.live);
   } catch (err) {
     return fail('lookup-failed', `cannot read the feed of pane ${pane}: ${describe(err)}`);
@@ -110,7 +117,7 @@ export async function sessionFeed(
  *  сама. Цепочка считается лениво — она нужна только на границе. */
 async function pageOf(
   file: string,
-  agent: AgentKind,
+  agent: FileAgent,
   opts: FeedOptions,
   src: SessionFeedSources,
   complete: boolean,
@@ -274,7 +281,7 @@ interface Chain {
 
 /** Цепочка файлов от текущего к корню, считается один раз за запрос и только по нужде:
  *  на обычной странице внутри файла она не нужна вовсе. */
-function chainOf(file: string, agent: AgentKind, src: SessionFeedSources): () => Promise<Chain> {
+function chainOf(file: string, agent: FileAgent, src: SessionFeedSources): () => Promise<Chain> {
   let pending: Promise<Chain> | undefined;
   return () => (pending ??= walkChain(file, agent, src));
 }
@@ -283,7 +290,7 @@ function chainOf(file: string, agent: AgentKind, src: SessionFeedSources): () =>
  *  других связей у форка нет (поля «продолжает вон ту беседу» нет ни в одном файле).
  *  Глубже MAX_CHAIN не идём — это защита от цикла в чужих данных, а не предел длины
  *  беседы. У Claude цепочки нет вовсе: продолжение и форк копируют беседу целиком (D01). */
-async function walkChain(file: string, agent: AgentKind, src: SessionFeedSources): Promise<Chain> {
+async function walkChain(file: string, agent: FileAgent, src: SessionFeedSources): Promise<Chain> {
   const meta = agent === 'codex' ? await metaOf(file) : undefined;
   const links: ChainLink[] = [{ file, thread: meta?.thread ?? '' }];
   let forked = meta?.forkedFrom ?? '';

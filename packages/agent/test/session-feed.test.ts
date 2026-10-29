@@ -10,6 +10,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { sessionFeed, type SessionFeedSources } from '../src/session-feed.js';
 import type { TranscriptResult } from '../src/agent-transcript.js';
+import { DatabaseSync } from 'node:sqlite';
 
 const SESSION = 'work';
 const PANE = 'work:@1.%3';
@@ -398,5 +399,40 @@ describe('sessionFeed: пределы и обход каталога', () => {
     if (!r.ok) return;
     expect(r.entries.filter((e) => e.kind !== 'note').length).toBe(10);
     expect(walks).toBe(1);
+  });
+});
+
+describe('sessionFeed: opencode', () => {
+  const SES = 'ses_e7c66b880ffeW0WgHzxxkjpRh7';
+  /** База opencode с одной репликой человека в беседе SES. */
+  const ocDb = (): string => {
+    const file = path.join(home, 'opencode.db');
+    const conn = new DatabaseSync(file);
+    conn.exec(
+      'CREATE TABLE IF NOT EXISTS session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, ' +
+        'seq integer NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)',
+    );
+    conn.prepare('INSERT OR REPLACE INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      'msg_1', SES, 'user', 4, 1, 1, JSON.stringify({ time: { created: 1793209223087 }, text: 'привет', files: [] }),
+    );
+    conn.close();
+    return file;
+  };
+
+  it('читает беседу из базы и приклеивает complete и live определителя', async () => {
+    const file = ocDb();
+    const r = await sessionFeed(
+      SESSION,
+      {},
+      sources({ ok: true, agent: 'opencode', files: [file], session: SES, complete: false, live: true }),
+    );
+    expect(r).toMatchObject({ ok: true, agent: 'opencode', complete: false, live: true, bof: true, eof: true });
+    if (r.ok) expect(r.entries.map((e) => [e.text, e.cursor])).toEqual([['привет', `${SES}:4`]]);
+  });
+
+  it('без беседы в ответе определителя — no-transcript', async () => {
+    const file = ocDb();
+    const r = await sessionFeed(SESSION, {}, sources({ ok: true, agent: 'opencode', files: [file], complete: true, live: true }));
+    expect(r).toMatchObject({ ok: false, reason: 'no-transcript' });
   });
 });
