@@ -165,6 +165,9 @@ const EXEC_TIMEOUT_MS = 3000;
  *  0,05 до 0,18 с. Срок взят примерно втрое от худшей измеренной панели. */
 const LSOF_TIMEOUT_MS = 5000;
 const EXEC_MAX_BUFFER = 4 * 1024 * 1024;
+/** На Linux открытые файлы и каталог процесса читаются из /proc, а не через lsof: в зависимостях
+ *  агента lsof нет, на минимальном сервере его не ставят, и без него определитель слеп целиком. */
+const ON_LINUX = process.platform === 'linux';
 /** Допуск при сверке времён старта: обе стороны округляют до секунды. */
 const START_TOLERANCE_MS = 2000;
 /** Сколько живёт снимок общих источников: обход дюжины панелей укладывается в него целиком,
@@ -240,7 +243,7 @@ function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Стандартные источники: настоящие файловая система, ps, tmux и lsof. */
+/** Стандартные источники: настоящие файловая система, ps, tmux и lsof (на Linux — /proc). */
 function withDefaults(over?: Partial<TranscriptSources>): TranscriptSources {
   const home = over?.home ?? os.homedir();
   const socketName = over?.socketName;
@@ -252,8 +255,8 @@ function withDefaults(over?: Partial<TranscriptSources>): TranscriptSources {
     isFile: over?.isFile ?? defaultIsFile,
     processTable: over?.processTable ?? defaultProcessTable,
     panePids: over?.panePids ?? panePidsFor(socketName),
-    openFiles: over?.openFiles ?? defaultOpenFiles,
-    processCwd: over?.processCwd ?? defaultProcessCwd,
+    openFiles: over?.openFiles ?? (ON_LINUX ? procOpenFiles : defaultOpenFiles),
+    processCwd: over?.processCwd ?? (ON_LINUX ? procCwd : defaultProcessCwd),
     opencodeSessions: over?.opencodeSessions ?? defaultOpencodeSessions,
   };
 }
@@ -297,6 +300,9 @@ async function defaultProcessTable(): Promise<ProcessRow[]> {
     encoding: 'utf8',
     timeout: EXEC_TIMEOUT_MS,
     maxBuffer: EXEC_MAX_BUFFER,
+    // Время старта ps macOS печатает по локали: под русской это «четверг, 29 октября 2026 г.»,
+    // и разбор терял бы каждую строку. Агент, запущенный из терминала, локаль наследует.
+    env: { ...process.env, LC_ALL: 'C' },
   });
   const rows: ProcessRow[] = [];
   for (const line of stdout.split('\n')) {
@@ -354,6 +360,47 @@ async function defaultProcessCwd(pid: number): Promise<string | undefined> {
     encoding: 'utf8', timeout: LSOF_TIMEOUT_MS, maxBuffer: EXEC_MAX_BUFFER,
   });
   return stdout.split('\n').find((line) => line.startsWith('n/'))?.slice(1);
+}
+
+/** Процесса нет или он чужой: смотреть нечего, и это не сбой обхода. */
+function goneOrForeign(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ESRCH' || code === 'EACCES' || code === 'EPERM';
+}
+
+/** Linux: открытые файлы — ссылки `/proc/<pid>/fd/*`. Своих процессов хватает: чужие пропускаются
+ *  так же, как их молча пропускает lsof. */
+export async function procOpenFiles(pids: number[], root = '/proc'): Promise<string[]> {
+  const out: string[] = [];
+  for (const pid of pids) {
+    const dir = path.join(root, String(pid), 'fd');
+    let fds: string[];
+    try {
+      fds = await fsp.readdir(dir);
+    } catch (err) {
+      if (goneOrForeign(err)) continue;
+      throw err;
+    }
+    for (const fd of fds) {
+      try {
+        out.push(await fsp.readlink(path.join(dir, fd)));
+      } catch (err) {
+        // Дескриптор закрылся между чтением каталога и ссылки.
+        if (!goneOrForeign(err)) throw err;
+      }
+    }
+  }
+  return out;
+}
+
+/** Linux: рабочий каталог — ссылка `/proc/<pid>/cwd`. */
+export async function procCwd(pid: number, root = '/proc'): Promise<string | undefined> {
+  try {
+    return await fsp.readlink(path.join(root, String(pid), 'cwd'));
+  } catch (err) {
+    if (goneOrForeign(err)) return undefined;
+    throw err;
+  }
 }
 
 async function defaultOpenFiles(pids: number[]): Promise<string[]> {
@@ -785,7 +832,7 @@ async function daemonCodexThread(pid: number, processes: Map<number, ProcessRow>
   // подходящий файл daemon тогда не доказывает, что он принадлежит этой панели.
   for (const row of processes.values()) {
     if (row.pid === clients[0] || !isTui(row.args ?? '')) continue;
-    if (await src.processCwd(row.pid) === cwd)
+    if ((await cwdOrNone(row.pid, src)) === cwd)
       return fail('lookup-failed', 'Несколько клиентов Codex в одном каталоге: невозможно однозначно выбрать журнал');
   }
   const root = path.join(src.home, CODEX_SESSIONS_DIR);

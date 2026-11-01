@@ -3,7 +3,17 @@
 // здесь не участвуют. Формы записей и путей взяты с живых данных владельца 13.09.2026.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { resolve, clearCache, type TranscriptSources, type ProcessRow } from '../src/agent-transcript.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  resolve,
+  clearCache,
+  procCwd,
+  procOpenFiles,
+  type TranscriptSources,
+  type ProcessRow,
+} from '../src/agent-transcript.js';
 import { opencodeDbPath } from '../src/opencode-db.js';
 
 const HOME = '/home/u';
@@ -398,6 +408,26 @@ describe('resolve: панель Codex', () => {
     }));
     if (count === 1) expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE] });
     else expect(res).toMatchObject({ ok: false, reason: 'lookup-failed' });
+  });
+
+  it('daemon: соседний клиент, умерший между ps и обходом, панель не слепит', async () => {
+    const meta = JSON.parse(ROOT_META.split('\n')[0]);
+    meta.payload.cwd = '/project';
+    const res = await resolve(PANE, sources({
+      processTable: async () => [
+        { ...row(900, localStart()), args: 'bash' },
+        { ...row(901, localStart(), 900), args: 'codex --yolo' },
+        { ...row(903, localStart()), args: 'codex' },
+        { ...row(902, localStart()), args: '/bin/codex app-server --managed-daemon' },
+      ],
+      processCwd: async (pid) => {
+        if (pid === 903) throw new Error('Command failed: lsof -w -a -p 903 -d cwd -Fn');
+        return '/project';
+      },
+      openFiles: async (pids) => (pids.includes(902) ? [ROOT_FILE] : []),
+      readHead: async () => JSON.stringify(meta),
+    }));
+    expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE] });
   });
 
   it('daemon не подставляет журнал другого каталога или другого TUI', async () => {
@@ -903,5 +933,43 @@ describe('resolve: панель opencode', () => {
       }),
     );
     expect(res).toMatchObject({ ok: false, reason: 'lookup-failed', detail: expect.stringContaining('locked') });
+  });
+});
+
+// Linux: открытые файлы и каталог процесса — ссылки в /proc. Проверяется на подложенном каталоге
+// той же формы, поэтому тест идёт и на macOS, а не пропускается молча.
+describe('источники Linux: /proc', () => {
+  let proc: string;
+
+  beforeEach(() => {
+    proc = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-proc-'));
+    fs.mkdirSync(path.join(proc, '900', 'fd'), { recursive: true });
+    fs.symlinkSync('/dev/pts/3', path.join(proc, '900', 'fd', '0'));
+    fs.symlinkSync(ROOT_FILE, path.join(proc, '900', 'fd', '27'));
+    fs.symlinkSync('socket:[48211]', path.join(proc, '900', 'fd', '28'));
+    fs.symlinkSync('/project', path.join(proc, '900', 'cwd'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(proc, { recursive: true, force: true });
+  });
+
+  it('открытые файлы — цели ссылок fd; процесса, которого нет, просто не видно', async () => {
+    const files = await procOpenFiles([900, 901], proc);
+    expect(files.sort()).toEqual(['/dev/pts/3', ROOT_FILE, 'socket:[48211]'].sort());
+  });
+
+  it('рабочий каталог — цель ссылки cwd; процесса нет — каталога нет', async () => {
+    expect(await procCwd(900, proc)).toBe('/project');
+    expect(await procCwd(901, proc)).toBeUndefined();
+  });
+
+  it('с ними определитель находит Codex панели без lsof', async () => {
+    const res = await resolve(PANE, sources({
+      processTable: async () => [{ ...row(900, localStart()), args: 'codex' }],
+      openFiles: (pids) => procOpenFiles(pids, proc),
+      readHead: async () => ROOT_META,
+    }));
+    expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE] });
   });
 });

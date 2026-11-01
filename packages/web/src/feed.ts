@@ -43,6 +43,8 @@ const SNIPPET = 120;
 const SEARCH_IDLE_MS = 300;
 /** Показывать ли мышление (выбор держится между открытиями). */
 const THINKING_KEY = 'termhub.feedThinking';
+/** Скрыты ли действия: ключ старше тумблера «Показать действия» и хранит прежний смысл —
+ *  выбор, сделанный до переворота, не теряется. */
 const HIDE_ACTIONS_KEY = 'termhub.feedHideActions';
 
 /** Экран ленты для роутера и для поиска (таск поиска дописывает свой вид в searchSlot). */
@@ -170,9 +172,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   actionsWrap.className = 'th-feed__toggle-wrap';
   const actionsToggle = document.createElement('input');
   actionsToggle.type = 'checkbox';
-  actionsToggle.className = 'th-feed__hide-actions';
-  try { actionsToggle.checked = localStorage.getItem(HIDE_ACTIONS_KEY) === '1'; } catch { /* необязательная настройка */ }
-  actionsWrap.append(actionsToggle, document.createTextNode(t('feed.hideActions')));
+  actionsToggle.className = 'th-feed__show-actions';
+  actionsToggle.checked = true;
+  try { actionsToggle.checked = localStorage.getItem(HIDE_ACTIONS_KEY) !== '1'; } catch { /* необязательная настройка */ }
+  actionsWrap.append(actionsToggle, document.createTextNode(t('feed.showActions')));
   head.append(agentEl, liveEl, toggleWrap, actionsWrap);
 
   // Полоса поиска — над списком и под шапкой (наполняется ниже, когда есть чем
@@ -228,7 +231,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   let live = false;
   let skipped = 0;
   let showThinking = toggle.checked;
-  let hideActions = actionsToggle.checked;
+  let showActions = actionsToggle.checked;
   // Устаревший курсор лечится молча — но ровно один раз на действие.
   let staleRetried = false;
   let disposed = false;
@@ -297,7 +300,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     if (entry.cursor) box.dataset.cursor = entry.cursor;
 
     if (entry.kind === 'tool') {
-      box.hidden = hideActions;
+      box.hidden = !showActions;
       // Подряд идущие вызовы читаются одним столбиком — соседа помечаем, чтобы CSS
       // убрал зазор между ними.
       if (prev?.kind === 'tool') box.classList.add('is-cont');
@@ -370,9 +373,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   };
 
   actionsToggle.addEventListener('change', () => {
-    hideActions = actionsToggle.checked;
-    try { localStorage.setItem(HIDE_ACTIONS_KEY, hideActions ? '1' : '0'); } catch { /* необязательная настройка */ }
-    for (const el of itemsEl.querySelectorAll<HTMLElement>('[data-kind="tool"]')) el.hidden = hideActions;
+    showActions = actionsToggle.checked;
+    try { localStorage.setItem(HIDE_ACTIONS_KEY, showActions ? '0' : '1'); } catch { /* необязательная настройка */ }
+    for (const el of itemsEl.querySelectorAll<HTMLElement>('[data-kind="tool"]')) el.hidden = !showActions;
     paintHits(lastHits);
   });
 
@@ -662,7 +665,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   /** Находку можно открыть, только если у неё есть точка прыжка и её запись не
    *  спрятана тумблером мышления — иначе клик либо не имеет цели вовсе (веха
    *  склейки без курсора), либо вёл бы к записи, которой сейчас не видно в ленте. */
-  const jumpable = (hit: FeedHit): boolean => Boolean(hit.cursor) && (hit.entry.kind !== 'thinking' || showThinking) && (hit.entry.kind !== 'tool' || !hideActions);
+  const jumpable = (hit: FeedHit): boolean => Boolean(hit.cursor) && (hit.entry.kind !== 'thinking' || showThinking) && (hit.entry.kind !== 'tool' || showActions);
 
   const paintHits = (found: FeedHit[]): void => {
     lastHits = found;

@@ -619,14 +619,16 @@ describe('кнопка «вниз»', () => {
 });
 
 
-describe('скрытие действий', () => {
-  it('скрывает инструменты, сохраняет реплики и запоминает выбор', async () => {
+describe('показ действий', () => {
+  it('по умолчанию показывает инструменты, а снятая галочка их прячет и запоминается', async () => {
     const { transport } = feedTransport(() => page({ entries: [HUMAN, AGENT, TOOL, THINK] }));
     let feed = mountFeed(host, 'work', transport);
     await flush();
-    const toggle = host.querySelector<HTMLInputElement>('.th-feed__hide-actions');
+    const toggle = host.querySelector<HTMLInputElement>('.th-feed__show-actions');
     expect(toggle).not.toBeNull();
-    toggle!.checked = true;
+    expect(toggle!.checked).toBe(true);
+    expect(entries('tool')[0]?.hidden).toBe(false);
+    toggle!.checked = false;
     toggle!.dispatchEvent(new Event('change'));
     expect(entries('tool')[0]?.hidden).toBe(true);
     expect(entries('human')[0]?.hidden).toBe(false);
