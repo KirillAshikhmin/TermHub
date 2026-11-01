@@ -141,6 +141,32 @@ describe('лента при открытии', () => {
   });
 });
 
+describe('сводка сжатия', () => {
+  it('рисуется карточкой с разметкой, а не строкой по центру вехи', async () => {
+    const summary = '## Цель\n\nПочинить ленту.\n\n- первое\n- второе';
+    const { transport } = feedTransport(() =>
+      page({
+        entries: [
+          { id: 's1', at: 1, kind: 'note', note: 'compacted', text: summary, cursor: '7:0' },
+          { id: 'i1', at: 2, kind: 'note', note: 'interrupted', text: '' },
+        ],
+      }),
+    );
+    const feed = mountFeed(host, 'work', transport);
+    await flush();
+
+    const [card, mark] = entries('note');
+    expect(card.classList.contains('th-feed__entry--summary')).toBe(true);
+    expect(card.querySelector('.th-feed__notelabel')?.textContent).toBe(t('feed.note.compacted'));
+    expect(card.querySelector('.th-feed__md h2')?.textContent).toBe('Цель');
+    expect(card.querySelectorAll('.th-feed__md li')).toHaveLength(2);
+    expect(card.querySelector('.th-feed__notetext')).toBeNull();
+    // Прочие вехи остаются линией с подписью.
+    expect(mark.classList.contains('th-feed__entry--summary')).toBe(false);
+    feed.teardown();
+  });
+});
+
 describe('листание вверх', () => {
   it('шагает через пустую страницу и останавливается по bof, а не по пустому списку', async () => {
     const older: FeedEntry = { id: 'old', at: 5, kind: 'human', text: 'самое начало' };

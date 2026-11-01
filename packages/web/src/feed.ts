@@ -325,6 +325,22 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       label.className = 'th-feed__notelabel';
       label.textContent = entry.note ? t(`feed.note.${entry.note}`) : '';
       box.append(label);
+      // Сводка сжатия — не подпись к вехе, а целый markdown-документ: агент дальше
+      // работает по нему, а не по беседе. Рисуется карточкой своего цвета, как ответ.
+      if (entry.note === 'compacted' && entry.text) {
+        box.classList.add('th-feed__entry--summary');
+        const text = document.createElement('div');
+        text.className = 'th-feed__text th-feed__md';
+        text.append(renderMarkdown(entry.text));
+        box.append(text);
+        if (entry.truncated) {
+          const cut = document.createElement('div');
+          cut.className = 'th-feed__cut';
+          cut.textContent = t('feed.truncated');
+          box.append(cut);
+        }
+        return box;
+      }
       if (entry.text) {
         const text = document.createElement('div');
         text.className = 'th-feed__notetext';

@@ -20,6 +20,8 @@
   --claude-tint: rgba(224, 138, 95, 0.16);
   --opencode: #6ea8fe;
   --opencode-tint: rgba(110, 168, 254, 0.16);
+  --summary: #b392f0;
+  --summary-tint: rgba(179, 146, 240, 0.12);
   --danger: #f0665b;
   --danger-tint: rgba(240, 102, 91, 0.14);
 
@@ -58,6 +60,8 @@
     --claude-tint: rgba(191, 92, 55, 0.12);
     --opencode: #3b7dd8;
     --opencode-tint: rgba(59, 125, 216, 0.12);
+    --summary: #8250df;
+    --summary-tint: rgba(130, 80, 223, 0.08);
     --danger: #d1382e;
     --danger-tint: rgba(209, 56, 46, 0.1);
     --shadow: 0 1px 2px rgba(140, 149, 159, 0.2), 0 12px 28px rgba(140, 149, 159, 0.18);
@@ -83,6 +87,8 @@
   --claude-tint: rgba(191, 92, 55, 0.12);
   --opencode: #3b7dd8;
   --opencode-tint: rgba(59, 125, 216, 0.12);
+  --summary: #8250df;
+  --summary-tint: rgba(130, 80, 223, 0.08);
   --danger: #d1382e;
   --danger-tint: rgba(209, 56, 46, 0.1);
   --shadow: 0 1px 2px rgba(140, 149, 159, 0.2), 0 12px 28px rgba(140, 149, 159, 0.18);
@@ -3197,6 +3203,27 @@ main.th-feed {
 }
 .th-feed__notetext {
   text-align: center;
+}
+/* Сводка сжатия — карточка своего цвета: по ширине и разметке как ответ агента, а
+   полоса слева и подпись цветом сводки отличают её и от реплик, и от ответов. */
+.th-feed__entry--summary {
+  display: block;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid transparent;
+  border-left: 3px solid var(--summary);
+  border-radius: var(--r-sm);
+  background: var(--summary-tint);
+  font-size: inherit;
+  color: var(--text);
+}
+.th-feed__entry--summary .th-feed__notelabel {
+  display: block;
+  margin: 0 0 4px;
+  padding: 0;
+  background: none;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--summary);
 }
 /* Запись, к которой перенесли ленту по находке. Одной рамки мало: на записи
    человека она сливается с уже акцентным фоном пузыря, а глазами замечено, что
