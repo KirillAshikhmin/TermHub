@@ -1286,9 +1286,10 @@ select.th-input {
   background: none;
   box-shadow: none;
 }
+/* Вторая иконка пункта (галка «включено») в ряду не нужна: состояние видно цветом. */
 .th-menu--inline .th-menu__label,
 .th-menu--inline .th-menu__sep,
-.th-menu--inline .th-menu__item .th-icon + .th-icon {
+.th-menu--inline .th-menu__item .th-menu__label ~ .th-icon {
   display: none;
 }
 .th-menu--inline .th-menu__item {
@@ -1778,26 +1779,35 @@ select.th-input {
   margin-bottom: calc(8px + env(safe-area-inset-bottom));
 }
 
+/* Состояние связи — глобус, окрашенный состоянием (он же открывает выбор сервера). */
 .th-conn-dot {
   flex: none;
-  width: 10px;
-  height: 10px;
-  margin-right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
   border-radius: var(--r-full);
-  background: var(--text-faint);
-  transition: background var(--t), box-shadow var(--t);
+  color: var(--text-faint);
+  transition: color var(--t), background var(--t);
+}
+.th-conn-dot .th-icon {
+  width: 17px;
+  height: 17px;
 }
 .th-conn-dot.is-connected {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-tint);
+  color: var(--accent);
 }
 .th-conn-dot.is-reconnecting {
-  background: #d7a63a;
-  box-shadow: 0 0 0 3px rgba(215, 166, 58, 0.18);
+  color: #d7a63a;
   animation: th-pulse 1.2s ease-in-out infinite;
 }
 .th-conn-dot.is-closed {
-  background: var(--text-faint);
+  color: var(--text-faint);
+}
+.th-conn-dot.is-clickable:hover {
+  background: var(--bg-hover);
 }
 
 /* Баннер переподключения */

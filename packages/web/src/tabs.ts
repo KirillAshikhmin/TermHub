@@ -8,7 +8,7 @@ import type { TFn } from './i18n';
 import { t } from './i18n';
 import { setSessionDocumentTitle } from './document-title';
 import type { Transport } from './transport';
-import { hasServerPicker, iconButton, openServerPicker, renderMenu, sortSelect, svgIcon, toast } from './ui';
+import { iconButton, renderMenu, sortSelect, svgIcon, toast } from './ui';
 import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { makeActivityDot } from './activity-dot';
@@ -530,7 +530,9 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     // Меню строится только в боковом режиме: в обычном оно скрыто, а его пункты
     // спрашивают агента (caffeinate) — впустую это делать незачем.
     if (side && !sideMenu) {
-      sideMenu = renderMenu(opts.transport, hasServerPicker() ? openServerPicker : undefined);
+      // Без пункта выбора сервера: на терминале его открывает глобус состояния связи,
+      // второй глобус рядом был бы дублем.
+      sideMenu = renderMenu(opts.transport);
       sideMenu.el.classList.add('th-menu--inline');
       wrap.append(sideMenu.el);
     } else if (!side && sideMenu) {

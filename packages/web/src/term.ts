@@ -272,6 +272,8 @@ export function mountTerminal(
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
   dot.setAttribute('role', 'status');
+  // Глобус, окрашенный состоянием связи: он же открывает выбор сервера, когда тот есть.
+  dot.append(svgIcon('globe'));
   // «⋮» (показать свёрнутые панели) и ползунки (вид терминала) живут в шапке, а не поверх
   // вывода: плавающая кнопка в углу закрывала текст.
   const toggleSlot = document.createElement('span');
