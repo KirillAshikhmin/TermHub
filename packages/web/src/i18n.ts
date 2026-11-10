@@ -51,6 +51,8 @@ const ru: Dict = {
     emptyHint: 'Запустите команду tm в терминале IDEA — сессия появится здесь.',
   },
   card: {
+    statusWorking: 'работает',
+    statusWaiting: 'ждёт вас',
     open: 'Открыть сессию',
     menu: 'Действия',
     kill: 'Завершить',
@@ -512,6 +514,8 @@ const en: Dict = {
     emptyHint: 'Run the tm command in the IDEA terminal — the session will show up here.',
   },
   card: {
+    statusWorking: 'working',
+    statusWaiting: 'needs you',
     open: 'Open session',
     menu: 'Actions',
     kill: 'Kill',

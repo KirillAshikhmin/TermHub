@@ -17,6 +17,7 @@ import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from '
 import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { hasCap } from './capabilities';
+import { previewOf, refreshPreviews } from './session-preview';
 import { openPalette, type PaletteItem } from './palette';
 import { sfeedHash, sfilesHash, srepoHash, termHash } from './routes';
 import { openTermSettings } from './term-settings';
@@ -375,6 +376,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       const card = renderSessionCard(info, t, {
         now,
         showActivity: hot,
+        preview: previewOf(opts.transport, s.name),
         onOpen: () => {
           closePanel();
           opts.onSwitch(s.name);
@@ -405,6 +407,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   function openPanel(): void {
     panelOpen = true;
     buildPanelRows();
+    // Превью бесед читаем, только пока панель открыта: закрытой они не нужны.
+    void refreshPreviews(opts.transport, latest, () => {
+      if (panelOpen) buildPanelRows();
+    });
     panel.inert = false;
     panel.classList.add('is-open');
     expandBtn.classList.add('is-open');
@@ -465,7 +471,12 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       const c = el.querySelector<HTMLElement>('.th-tab__close');
       if (c) c.style.display = guest ? 'none' : '';
     }
-    if (panelOpen) buildPanelRows(); // панель открыта во время поллинга — держим свежей
+    if (panelOpen) {
+      buildPanelRows(); // панель открыта во время поллинга — держим свежей
+      void refreshPreviews(opts.transport, input, () => {
+        if (panelOpen) buildPanelRows();
+      });
+    }
     const wanted = new Set(sessions.map((s) => s.name));
     wanted.add(opts.current);
     for (const [name, el] of [...tabs]) {

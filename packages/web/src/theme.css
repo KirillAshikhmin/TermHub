@@ -1271,6 +1271,33 @@ select.th-input {
 .th-tabs-queue:hover {
   background: var(--bg-hover);
 }
+/* Обзор: последняя реплика беседы и состояние словом на карточке сессии. */
+.th-card__preview {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.th-card__status {
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.th-card__status[data-state='working'] {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.th-card__status[data-state='waiting'] {
+  color: var(--claude);
+  background: var(--claude-tint);
+}
 /* Командная палитра */
 .th-palette {
   display: flex;

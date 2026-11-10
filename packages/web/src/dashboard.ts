@@ -14,6 +14,7 @@ import type { Transport } from './transport';
 import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
 import { termHash } from './routes';
+import { previewOf, refreshPreviews } from './session-preview';
 import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
@@ -50,6 +51,43 @@ export interface CardOptions {
    *  режиме сортировки «вручную» — в остальных пункты меню не имели бы смысла. */
   onMoveUp?: () => void;
   onMoveDown?: () => void;
+  /** Последняя реплика беседы (session-preview): строка под каталогом. */
+  preview?: string;
+}
+
+/** Превью беседы под каталогом: появляется и исчезает на месте. */
+function setCardPreview(card: HTMLElement, preview: string | undefined): void {
+  if (preview === undefined) return;
+  let el = card.querySelector<HTMLElement>('.th-card__preview');
+  if (!preview) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('p');
+    el.className = 'th-card__preview';
+    card.querySelector('.th-card__dir')?.after(el);
+  }
+  el.textContent = preview;
+}
+
+/** Состояние словом: «работает» или «ждёт вас» (непрочитанный звонок). Простой — без пометки. */
+function setCardStatus(card: HTMLElement, translate: TFn, working: boolean, waiting: boolean): void {
+  const foot = card.querySelector<HTMLElement>('.th-card__foot');
+  if (!foot) return;
+  let el = foot.querySelector<HTMLElement>('.th-card__status');
+  const state = waiting ? 'waiting' : working ? 'working' : '';
+  if (!state) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'th-card__status';
+    foot.querySelector('.th-badge')?.after(el);
+  }
+  el.dataset.state = state;
+  el.textContent = translate(state === 'waiting' ? 'card.statusWaiting' : 'card.statusWorking');
 }
 
 /** Точка активности — первый элемент в .th-card__name (перед текстом имени). */
@@ -195,6 +233,8 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   }
 
   card.append(foot);
+  setCardPreview(card, opts.preview);
+  setCardStatus(card, translate, opts.showActivity ?? false, session.bell);
 
   const activate = (): void => {
     if (closeOpenMenu?.()) return;
@@ -222,7 +262,10 @@ export function updateSessionCard(
   translate: TFn,
   now: number = Date.now(),
   showActivity = false,
+  preview?: string,
 ): void {
+  setCardPreview(card, preview);
+  setCardStatus(card, translate, showActivity, session.bell);
   setCardActivityDot(card.querySelector<HTMLElement>('.th-card__name'), translate, showActivity);
 
   // Имя-текст меняется вслед за заголовком терминала (Claude его правит).
@@ -438,6 +481,7 @@ export function mountDashboard(
     renderSessionCard(session, t, {
       now,
       showActivity: hot,
+      preview: previewOf(transport, session.name),
       onOpen: () => {
         location.hash = termHash(session.name);
       },
@@ -495,7 +539,7 @@ export function mountDashboard(
         cards.set(session.name, card);
         grid.append(card);
       } else if (!isCardBusy(existing)) {
-        updateSessionCard(existing, s, t, now, hot);
+        updateSessionCard(existing, s, t, now, hot, previewOf(transport, session.name));
       }
     }
     // Порядок сетки приводим к списку сессий, только если ни одна карточка не
@@ -533,6 +577,9 @@ export function mountDashboard(
       reactToBells(sessions);
       render(ordered(sessions));
       sessionCache.set(transport, sessions); // кэш для мгновенного показа при возврате
+      void refreshPreviews(transport, sessions, () => {
+        if (!stopped) render(ordered(lastSessions));
+      });
       loadedOnce = true;
     } catch (err) {
       if (stopped || (err instanceof ApiError && err.status === 401)) return;
