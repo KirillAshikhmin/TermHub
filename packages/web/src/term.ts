@@ -43,7 +43,9 @@ import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderH
 
 const FONT_MIN = 10;
 const FONT_MAX = 22;
-const FONT_DEFAULT = 14;
+// На десктопе плотнее (как системный терминал), на тач-экране — крупнее под палец и глаз.
+const FONT_DEFAULT_TOUCH = 14;
+const FONT_DEFAULT_DESKTOP = 12;
 const FONT_LS_KEY = 'termhub.fontSize';
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
@@ -79,7 +81,7 @@ function cssVar(name: string, fallback: string): string {
 /** Тема xterm из палитры приложения (совпадает с чромом в light/dark). */
 function xtermTheme(): ITheme {
   const light = currentTheme() === 'light';
-  const background = cssVar('--bg', light ? '#f6f8fa' : '#0d1117');
+  const background = cssVar('--term-bg', light ? '#f6f8fa' : '#1a2029');
   const accent = cssVar('--accent', light ? '#16b790' : '#38d3a8');
   return {
     background,
@@ -99,7 +101,12 @@ function readFontSize(): number {
   } catch {
     // localStorage недоступен — размер по умолчанию.
   }
-  return FONT_DEFAULT;
+  try {
+    if (window.matchMedia('(pointer: coarse)').matches) return FONT_DEFAULT_TOUCH;
+  } catch {
+    // matchMedia недоступен — считаем десктопом.
+  }
+  return FONT_DEFAULT_DESKTOP;
 }
 
 /** Состояние экранной клавиатуры из localStorage (по умолчанию включена). */

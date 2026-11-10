@@ -5,6 +5,8 @@
 :root {
   --bg: #0d1117;
   --bg-elev: #161b22;
+  /* Фон области терминала: чуть светлее чрома, как в системном терминале. */
+  --term-bg: #1a2029;
   --bg-elev-2: #1b2230;
   --bg-hover: #212a3a;
   --border: #29313d;
@@ -45,6 +47,7 @@
   :root:not([data-theme]) {
     --bg: #f6f8fa;
     --bg-elev: #ffffff;
+    --term-bg: #f6f8fa;
     --bg-elev-2: #eef1f5;
     --bg-hover: #e6eaf0;
     --border: #d5dbe2;
@@ -72,6 +75,7 @@
 :root[data-theme='light'] {
   --bg: #f6f8fa;
   --bg-elev: #ffffff;
+  --term-bg: #f6f8fa;
   --bg-elev-2: #eef1f5;
   --bg-hover: #e6eaf0;
   --border: #d5dbe2;
@@ -1338,8 +1342,15 @@ select.th-input {
   position: relative;
   flex: 1;
   min-height: 0;
-  padding: 6px 8px 0;
+  padding: 10px 16px 0;
+  background: var(--term-bg);
   overflow: hidden;
+}
+/* На телефоне ширина дороже воздуха: каждая колонка на счету. */
+@media (max-width: 600px) {
+  .th-term__body {
+    padding: 6px 8px 0;
+  }
 }
 .th-term__host {
   width: 100%;
@@ -1710,6 +1721,7 @@ main.th-gradle {
   min-height: 0;
   overflow: hidden;
   padding: 4px 0 0 8px;
+  background: var(--term-bg);
 }
 .th-qk.is-hidden {
   display: none;
