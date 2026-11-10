@@ -94,6 +94,7 @@ export class RtcSocket {
   private queued = 0;
   private opened = false;
   private openTimer?: ReturnType<typeof setTimeout>;
+  private pumpTimer?: ReturnType<typeof setTimeout>;
 
   constructor(url: string, opts: RtcSocketOpts = {}) {
     this.base = pollBase(url);
@@ -214,6 +215,14 @@ export class RtcSocket {
         return;
       }
     }
+    // Событие «буфер опустел» — основной сигнал продолжать, но полагаться только на него
+    // нельзя: не каждая реализация канала его шлёт, и очередь тогда встала бы навсегда.
+    if (this.queue.length > 0 && !this.pumpTimer) {
+      this.pumpTimer = setTimeout(() => {
+        this.pumpTimer = undefined;
+        this.pump();
+      }, 50);
+    }
   }
 
   private fail(): void {
@@ -226,6 +235,7 @@ export class RtcSocket {
     if (this.readyState === RtcSocket.CLOSED) return;
     this.readyState = RtcSocket.CLOSED;
     clearTimeout(this.openTimer);
+    clearTimeout(this.pumpTimer);
     this.queue = [];
     this.queued = 0;
     try {
