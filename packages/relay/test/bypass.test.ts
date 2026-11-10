@@ -219,7 +219,7 @@ describe('раздача бандла кусками', () => {
     const html = await (await fetch(`http://127.0.0.1:${handle.port}/`)).text();
     expect(html).not.toContain('type="module"');
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('<script src="./boot.js" data-js="./assets/main-abc.js" data-css="./assets/main-x.css"></script>');
+    expect(html).toMatch(/<script src="\.\/boot\.js\?v=[0-9a-f]{8}" data-js="\.\/assets\/main-abc\.js" data-css="\.\/assets\/main-x\.css"><\/script>/);
     const boot = await fetch(`http://127.0.0.1:${handle.port}/boot.js`);
     expect(boot.headers.get('content-type')).toContain('javascript');
     expect(await boot.text()).toContain('__sw-chunked');

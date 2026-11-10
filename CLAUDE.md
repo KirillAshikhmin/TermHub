@@ -268,6 +268,20 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - Превью на карточках — `session-preview.ts`: последняя реплика из ленты, не чаще раза в 10 с на сессию и только при возможности `feed`.
 - Поиск по всем лентам — `feed-search-all.ts`, на клиенте: до 5 страниц по 200 записей с хвоста каждой беседы; прыжок к находке передаётся через `setFeedJump`/`takeFeedJump`, адрес ленты курсора не несёт.
 
+## Обход удушения потока (ADR 0034)
+
+Фильтр на пути к relay пропускает ~25 пакетов сервера на соединение и дальше молчит; лимит — на поток, судьбу потока решает первый пакет клиента. Три обхода, все настройкой, по умолчанию выключены.
+
+- `packages/protocol/src/pollsock.ts` — «сокет поверх коротких запросов»: `PollSocket` (клиент, интерфейс WebSocket, только `fetch` — годится браузеру и Node), кодек потока (`encodePollMessage`, `PollDecoder`), пределы `POLL_DOWN_CHUNK` 8 КБ / `POLL_UP_CHUNK` 16 КБ. Веб тянет его из `@termhub/protocol/pollsock` — корневой экспорт несёт libsodium.
+- `packages/relay/src/poll.ts` — `PollHub`/`PollConn`: серверная сторона на том же пути `/relay` (`/relay/open|down|up`). `PollConn` повторяет интерфейс `ws`, и `RelayServer.onConnection` принимает его как сокет — регистрация, комнаты и форвардинг второй ветки не имеют и иметь не должны.
+- `packages/relay/src/static.ts` — режим кусков (`RELAY_CHUNKED=1`): `serveChunk` (`/_c/<i>/<путь>` — кусок 8 КБ сжатого файла), `bootIndex` (переписывает `index.html` на загрузчик), `BOOT_JS`, проба `/__sw-chunked`. Собирает куски `packages/web/src/sw-chunks.ts` в `sw.ts`; режим SW узнаёт из `/api/mode` (`chunked`), LAN-агент этого поля не отдаёт.
+- `packages/protocol/src/disguise.ts` — преамбулы `ssh`/`rdp`/`dns` и `prefaceLength`; `packages/relay/src/disguise-port.ts` — порт, срезающий преамбулу (`DISGUISE_PORT`, `DISGUISE_UPSTREAM`).
+- `packages/agent/src/relay-dial.ts` — единственное место, где агент и CLI открывают соединение с relay: `readRelayDial` (config.json: `relayConnect`, `relayDisguise`, `relayTransport`; окружение `TERMHUB_RELAY_*` старше) и `openRelaySocket`. Своего `new WebSocket(relayUrl)` не заводить.
+- `packages/web/src/relay-socket.ts` — то же для браузера: подсказка relay (`/api/mode`, `transport`) и выбор устройства `localStorage['termhub.relayTransport']`.
+- Каждый ответ коротких запросов и кусков обязан закрывать соединение; перед relay для этого нужен HTTP/1.1 без h2 и `Connection: close` (Caddy снимает hop-by-hop заголовок relay, поэтому ставит свой). В HTTP/2 всё едет одним соединением и умирает.
+- Пути `/relay/*` service worker пропускает мимо кэша (`sw-strategy.ts`): это живой поток, а стратегия по умолчанию — cache-first.
+- Тесты: `packages/relay/test/bypass.test.ts` (живой relay: оба транспорта в обе стороны, куски, порт маскировки), `packages/agent/test/relay-dial.test.ts`, `packages/web/test/sw-chunks.test.ts`, `packages/protocol/test/{pollsock,disguise}.test.ts`.
+
 ## Объявление возможностей (ADR 0018)
 
 - `packages/protocol/src/capabilities.ts` — `CAP_FEED = 'feed'`, `AGENT_CAPS`, `CLIENT_CAPS`, `parseCaps(value)`, `intersect(a, b)`. Список — данные: новое имя добавляется строкой, разбор кадров и маршрутов не меняется.
@@ -299,7 +313,7 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 ## Решения и дорожная карта
 
 - `docs/terminal-and-agents.ru.md` — разбор задачи «свой терминал и работа с агентами»: что измерено, шесть вердиктов и дорожная карта из девяти этапов (control mode → история → возобновление → эхо → одна полоса ввода → ответы кнопками → редактор промпта → дашборд → жесты).
-- `docs/adr/` (записи 0013–0033) — принятые решения и отвергнутые варианты: ядро xterm остаётся, `tmux -CC` вместо `attach`, mosh как транспорт отвергнут (взяты три идеи его протокола), история на устройстве с лимитом и без шифрования, рамка агента скрывается обратимо, совместимость агента и PWA — через объявление возможностей, запрет alt-screen на сокете агента принят (0019) и в тот же день отменён (0020).
+- `docs/adr/` (записи 0013–0034) — принятые решения и отвергнутые варианты: ядро xterm остаётся, `tmux -CC` вместо `attach`, mosh как транспорт отвергнут (взяты три идеи его протокола), история на устройстве с лимитом и без шифрования, рамка агента скрывается обратимо, совместимость агента и PWA — через объявление возможностей, запрет alt-screen на сокете агента принят (0019) и в тот же день отменён (0020).
 - Лента — записи 0021–0030: нормализация на агенте (0021), диалог со свёрнутыми инструментами (0022), курсор = смещение с меткой файла (0023), цепочка форков Codex до корня (0024), адрес ленты — имя сессии (0025), предел записи 64 КиБ (0026), пятая вкладка показом, а не пере-монтированием (0027), приращение опросом раз в 3 с (0028), поиск на клиенте (0029), отказ ленты своим кадром (0030), лента opencode из общей базы с привязкой по каталогу (0032).
 
 ## Подводные камни

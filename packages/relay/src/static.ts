@@ -2,6 +2,7 @@
 // immutable, SPA-fallback на index.html, заглушка если бандл не собран. Локальная
 // реализация relay — агентский server.ts не импортируется.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import path from 'node:path';
@@ -161,8 +162,16 @@ export function bootIndex(html: string): string {
   });
   out = out.replace(/<link\b[^>]*\brel="modulepreload"[^>]*>\s*/g, '');
   if (js.length === 0) return html;
-  const tag = `<script src="./boot.js" data-js="${js.join(' ')}" data-css="${css.join(' ')}"></script>`;
+  // Версия в адресе: service worker кэширует статику «навсегда» по адресу, и без неё
+  // исправленный загрузчик до уже побывавших здесь браузеров не доехал бы.
+  const tag = `<script src="./boot.js?v=${bootVersion()}" data-js="${js.join(' ')}" data-css="${css.join(' ')}"></script>`;
   return out.includes('</body>') ? out.replace('</body>', `${tag}\n  </body>`) : out + tag;
+}
+
+let bootVersionCache: string | undefined;
+function bootVersion(): string {
+  bootVersionCache ??= crypto.createHash('sha256').update(BOOT_JS).digest('hex').slice(0, 8);
+  return bootVersionCache;
 }
 
 /** Загрузчик: ждёт service worker, умеющий куски (проба), и только тогда подключает

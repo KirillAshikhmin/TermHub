@@ -17,6 +17,11 @@ services:
       # X-Forwarded-For — иначе rate-limit увидит один IP прокси для всех клиентов.
       # Раскомментируйте ТОЛЬКО когда relay действительно за прокси (иначе спуфинг XFF):
       # RELAY_TRUST_PROXY: "1"
+      # Обходы для сетей, где провайдер душит соединение (docs/remote.ru.md):
+      # RELAY_CHUNKED: "1"              # бандл кусками через service worker
+      # RELAY_CLIENT_TRANSPORT: "poll"  # браузеру — короткие запросы вместо WebSocket
+      # DISGUISE_PORT: "9444"           # порт маскировки для агента и CLI (+ проброс порта)
+      # DISGUISE_UPSTREAM: "caddy:443"
     # При работе за Caddy (профиль tls) этот проброс можно убрать — наружу
     # смотрит только Caddy на 80/443.
     ports:

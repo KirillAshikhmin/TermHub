@@ -9,3 +9,21 @@ relay.example.com {
 	encode zstd gzip
 	reverse_proxy relay:9720
 }
+
+# Сеть, где провайдер душит каждое соединение после пары десятков пакетов (см.
+# docs/remote.ru.md, раздел «Сети, где провайдер душит соединение»): только HTTP/1.1 и
+# закрытие соединения после каждого ответа, кроме WebSocket. Замените блок выше на этот
+# и добавьте глобальный блок в самое начало файла.
+#
+# {
+# 	servers {
+# 		protocols h1
+# 	}
+# }
+#
+# relay.example.com {
+# 	encode zstd gzip
+# 	@plain not header Connection *pgrade*
+# 	header @plain Connection close
+# 	reverse_proxy relay:9720
+# }
