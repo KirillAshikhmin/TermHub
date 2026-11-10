@@ -1303,8 +1303,9 @@ export class RelayLink {
     // состояния новый — клиент прежней версии его не знает и обязан пропустить.
     let mode: TerminalMode | undefined;
     let altScreen = false;
+    let paneSize: { cols: number; rows: number } | undefined;
     const sendState = (): void =>
-      this.sendFrameBytes(s, jsonFrame(FrameType.TerminalState, channel, { mode, altScreen }));
+      this.sendFrameBytes(s, jsonFrame(FrameType.TerminalState, channel, { mode, altScreen, ...paneSize }));
     try {
       handle = this.attach({
         session,
@@ -1323,6 +1324,12 @@ export class RelayLink {
           altScreen = active;
           sendState();
         },
+        onPaneSize: (cols, rows) => {
+          paneSize = { cols, rows };
+          sendState();
+        },
+        // Терминал создаётся на OPEN с размером по умолчанию: снимок ждёт RESIZE клиента.
+        awaitFirstResize: true,
         onExit: () => {
           this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
           s.terminals.delete(channel);

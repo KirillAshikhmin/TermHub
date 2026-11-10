@@ -8,7 +8,7 @@ import type { TFn } from './i18n';
 import { t } from './i18n';
 import { setSessionDocumentTitle } from './document-title';
 import type { Transport } from './transport';
-import { iconButton, sortSelect, svgIcon, toast } from './ui';
+import { hasServerPicker, iconButton, openServerPicker, renderMenu, sortSelect, svgIcon, toast } from './ui';
 import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { makeActivityDot } from './activity-dot';
@@ -490,7 +490,57 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     queueBtn.setAttribute('aria-label', label);
   };
 
-  wrap.append(strip, queueBtn, expandBtn, panel);
+  // Общая шапка бокового режима: вкладки ушли в столбец слева, а в шапке слева стоит
+  // текущая сессия (название и состояние, как на вкладке), справа — действия меню главной
+  // иконками. В обычном режиме обоих нет: текущую сессию показывает её вкладка.
+  const currentEl = document.createElement('div');
+  currentEl.className = 'th-tabs-current';
+  // Свои классы, не вкладочные: `.th-tab__name` в полосе ищут и стили, и код вкладок.
+  const currentLabel = document.createElement('span');
+  currentLabel.className = 'th-tabs-current__label';
+  const currentName = document.createElement('span');
+  currentName.className = 'th-tabs-current__name';
+  currentName.textContent = opts.current;
+  const currentSub = document.createElement('span');
+  currentSub.className = 'th-tabs-current__sub';
+  currentLabel.append(currentName, currentSub);
+  currentEl.append(currentLabel);
+  let sideMenu: { el: HTMLElement; teardown: () => void } | null = null;
+  const syncSideHeader = (side: boolean, info: TabInfo, working: boolean): void => {
+    setTabActivityDot(currentEl, t, working);
+    const title = sessionTitleText(info.title);
+    const hasTitle = title !== '' && title !== info.name;
+    currentName.textContent = hasTitle ? title : info.name;
+    currentSub.textContent = hasTitle ? info.name : '';
+    const agent = sessionAgent(info.command ?? '');
+    let mark = currentEl.querySelector<HTMLElement>('.th-tab__agent');
+    if (agent) {
+      currentEl.dataset.agent = agent;
+      if (!mark) {
+        mark = document.createElement('span');
+        mark.className = 'th-tab__agent';
+        currentEl.prepend(mark);
+      }
+      mark.textContent = AGENT_MARK[agent].letter;
+      mark.title = AGENT_MARK[agent].name;
+    } else {
+      delete currentEl.dataset.agent;
+      mark?.remove();
+    }
+    // Меню строится только в боковом режиме: в обычном оно скрыто, а его пункты
+    // спрашивают агента (caffeinate) — впустую это делать незачем.
+    if (side && !sideMenu) {
+      sideMenu = renderMenu(opts.transport, hasServerPicker() ? openServerPicker : undefined);
+      sideMenu.el.classList.add('th-menu--inline');
+      wrap.append(sideMenu.el);
+    } else if (!side && sideMenu) {
+      sideMenu.teardown();
+      sideMenu.el.remove();
+      sideMenu = null;
+    }
+  };
+
+  wrap.append(currentEl, strip, queueBtn, expandBtn, panel);
 
   const tabs = new Map<string, HTMLElement>();
   const currentTab = renderSessionTab(
@@ -567,6 +617,12 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     // пропускаем, пока фокус внутри полосы. Узлы вне списка (текущая пропавшая
     // сессия) дрейфуют в конец.
     syncQueue();
+    const cur = currentInfo ?? { name: opts.current, bell: false, title: '' };
+    syncSideHeader(
+      side,
+      { ...cur, bell: false },
+      sessionWorking(cur.title) || (!sessionManaged(cur.title) && activity.isHot(cur.name)),
+    );
     const focusInside = document.activeElement instanceof Node && strip.contains(document.activeElement);
     if (!focusInside) {
       // Заголовки групп — не вкладки: снимаем перед перестановкой и ставим заново.
@@ -639,6 +695,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       stopped = true;
       unsubscribeBell();
       unsubscribePrefs();
+      sideMenu?.teardown();
       window.clearInterval(timer);
       document.removeEventListener('keydown', onKeyDown, true);
     },

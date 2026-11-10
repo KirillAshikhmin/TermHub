@@ -546,6 +546,12 @@ export function wireToolbar(opts: {
   return { hide: () => set(false) };
 }
 
+/** То же меню «⋯», что в шапке главной, — для шапки сессии: класс `th-menu--inline`
+ *  раскладывает его пункты в ряд иконок. Снимать через teardown. */
+export function renderMenu(transport?: Transport, onPickAgent?: () => void): { el: HTMLElement; teardown: () => void } {
+  return buildMenu(transport, onPickAgent);
+}
+
 /** Текстовая метка пункта меню. */
 function menuLabel(text: string): HTMLSpanElement {
   const span = document.createElement('span');
@@ -596,6 +602,8 @@ function buildMenu(
     item.className = 'th-menu__item';
     item.setAttribute('role', 'menuitem');
     item.append(svgIcon(iconName), menuLabel(label));
+    // Подсказка нужна там, где меню показано одними иконками (шапка сессии).
+    item.title = label;
     item.addEventListener('click', () => {
       if (!opts.keepOpen) closeMenu();
       onClick(item);

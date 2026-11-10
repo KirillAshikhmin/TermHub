@@ -29,6 +29,8 @@ const SNAPSHOT_BACKLOG_LIMIT = 1 << 20;
  *  только по сроку команды (10 с) — столько пользователь смотрел бы в пустой экран.
  *  Поток без снимка лучше: снимок всего лишь дорисовывает то, что было до подключения. */
 const SNAPSHOT_HOLD_MS = 3000;
+/** Сколько снимок ждёт первого размера клиента (relay): кадр RESIZE идёт сразу за OPEN. */
+const FIRST_RESIZE_WAIT_MS = 700;
 
 const EMPTY = new Uint8Array(0);
 
@@ -71,6 +73,12 @@ export function attachTerminal(opts: {
   onMode?: (mode: TerminalMode) => void;
   /** Приложение в активной панели вошло в альтернативный экран или вышло из него. */
   onAltScreen?: (active: boolean) => void;
+  /** Размер активной панели (control mode): клиент обязан держать экран этого размера. */
+  onPaneSize?: (cols: number, rows: number) => void;
+  /** Снимок экрана ждёт первого resize() (не дольше FIRST_RESIZE_WAIT_MS). Через relay
+   *  терминал создаётся на OPEN с размером по умолчанию, а настоящий размер клиента
+   *  приезжает следующим кадром: снимок, снятый раньше, был бы разложен под 80×24. */
+  awaitFirstResize?: boolean;
   /** Общий budget назначается bridge-обвязкой; прямой вызов остаётся тестируемым без него. */
   ptyPool?: PtyPool;
 }): TerminalHandle {
@@ -157,7 +165,19 @@ export function attachTerminal(opts: {
       opts.onExit();
     },
     onAltScreen: opts.onAltScreen,
+    onPaneSize: opts.onPaneSize,
     ptyPool: opts.ptyPool,
+  });
+
+  // Первый resize() клиента: снимок, если его просили подождать, берётся после него.
+  let firstResize: (() => void) | undefined;
+  const resized = new Promise<void>((resolve) => {
+    if (!opts.awaitFirstResize) return resolve();
+    const timer = setTimeout(resolve, FIRST_RESIZE_WAIT_MS);
+    firstResize = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
   });
 
   // В режиме attach решение принято синхронно и снимка не будет: tmux сам перерисует
@@ -178,6 +198,8 @@ export function attachTerminal(opts: {
       opts.onMode?.(mode);
       // Снимок берётся сразу после готовности: пока capture-pane в полёте, session-link
       // держит вывод панели, поэтому дважды на экран он не попадёт.
+      if (mode === 'control') await resized;
+      if (disposed) return;
       const shot = mode === 'control' ? await link.snapshot() : EMPTY;
       if (disposed) return;
       // Звонок по снимку не бьём: в истории он уже отзвонил, когда случился.
@@ -204,6 +226,8 @@ export function attachTerminal(opts: {
     },
     resize(c: number, r: number): void {
       link.resize(c, r);
+      firstResize?.();
+      firstResize = undefined;
     },
     snapshot(lines?: number): Promise<Uint8Array> {
       return disposed ? Promise.resolve(EMPTY) : link.snapshot(lines);
@@ -248,6 +272,7 @@ export function wireTerminalWs(opts: {
     // Что клиент знает о терминале: способ подключения и альтернативный экран.
     let mode: TerminalMode | undefined;
     let altScreen = false;
+    let paneSize: { cols: number; rows: number } | undefined;
 
     const send = (bytes: Uint8Array): void => {
       if (ws.readyState !== ws.OPEN) return;
@@ -267,7 +292,8 @@ export function wireTerminalWs(opts: {
     };
 
     /** Кадр состояния терминала. Клиент старой версии его не знает и пропускает. */
-    const sendState = (): void => send(jsonFrame(FrameType.TerminalState, LAN_CHANNEL, { mode, altScreen }));
+    const sendState = (): void =>
+      send(jsonFrame(FrameType.TerminalState, LAN_CHANNEL, { mode, altScreen, ...paneSize }));
 
     ws.on('message', (data: RawData, isBinary: boolean): void => {
       if (!isBinary) return; // текстовые фреймы протоколом не используются — явный отказ
@@ -305,6 +331,10 @@ export function wireTerminalWs(opts: {
             onBell: (s) => send(jsonFrame(FrameType.Bell, LAN_CHANNEL, { session: s })),
             onMode: (m) => {
               mode = m;
+              sendState();
+            },
+            onPaneSize: (cols, rows) => {
+              paneSize = { cols, rows };
               sendState();
             },
             onAltScreen: (active) => {

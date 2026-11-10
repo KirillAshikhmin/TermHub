@@ -86,4 +86,33 @@ describe.skipIf(!tmuxAvailable).each(['live', 'sprut.app'])('SessionLink — н�
       link.dispose();
     }
   }, 30000);
+
+  it('снимок возвращает курсор и режимы панели: приложение их включило до подключения', async () => {
+    // Приложение ставит курсор в (6, 1), включает клавиши курсора и ждёт.
+    tmux(['send-keys', '-t', `=${sessionName}:`, "clear; printf '\\033[?1h\\033[2;7H'; sleep 30", 'Enter']);
+    const cursor = (): string => tmux(['display-message', '-p', '-t', `=${sessionName}:`, '#{cursor_x},#{cursor_y},#{keypad_cursor_flag}']).trim();
+    expect(await waitFor(() => cursor() === '6,1,1', 5000), `курсор панели: ${cursor()}`).toBe(true);
+
+    const sizes: string[] = [];
+    const link = open(sessionName, {
+      socketName,
+      cols: 80,
+      rows: 24,
+      onData: () => {},
+      onExit: () => {},
+      onPaneSize: (cols, rows) => sizes.push(`${cols}x${rows}`),
+      log: () => {},
+    });
+    try {
+      expect(await link.ready).toBe('control');
+      const text = new TextDecoder().decode(await link.snapshot(50));
+      const rows = Number(tmux(['display-message', '-p', '-t', `=${sessionName}:`, '#{pane_height}']).trim());
+      // Курсор — относительно конца снимка: вверх до строки 1, вправо на 6 столбцов.
+      expect(text).toContain(`\x1b[0m\r\x1b[${rows - 2}A\x1b[6C`);
+      expect(text).toContain('\x1b[?1h');
+      expect(sizes.at(-1)).toBe(`80x${rows}`);
+    } finally {
+      link.dispose();
+    }
+  }, 30000);
 });

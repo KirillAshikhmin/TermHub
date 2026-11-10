@@ -1177,14 +1177,17 @@ select.th-input {
   opacity: 0.85;
 }
 .th-tab[data-agent='claude'],
+.th-tabs-current[data-agent='claude'],
 .th-split__pane[data-agent='claude'] {
   --tab-agent: var(--claude);
 }
 .th-tab[data-agent='codex'],
+.th-tabs-current[data-agent='codex'],
 .th-split__pane[data-agent='codex'] {
   --tab-agent: var(--accent);
 }
 .th-tab[data-agent='opencode'],
+.th-tabs-current[data-agent='opencode'],
 .th-split__pane[data-agent='opencode'] {
   --tab-agent: var(--opencode);
 }
@@ -1218,7 +1221,8 @@ select.th-input {
   :root[data-holo-auto] .th-term > .th-slide--top {
     position: absolute;
     top: calc(var(--termbar-h) + env(safe-area-inset-top));
-    left: 0;
+    /* При боковой панели сессий полоса начинается правее неё, а не под ней. */
+    left: var(--side-w, 0px);
     right: 0;
     z-index: 7;
     opacity: 0;
@@ -1261,9 +1265,45 @@ select.th-input {
   background: var(--bg-hover);
 }
 
-/* Заголовок группы вкладок: виден только в боковой панели. */
-.th-tabs__group {
+/* Заголовок группы вкладок и текущая сессия в шапке: видны только в боковом режиме. */
+.th-tabs__group,
+.th-tabs-current {
   display: none;
+}
+/* Меню главной, разложенное в ряд иконок (шапка сессии в боковом режиме). */
+.th-menu--inline > .th-iconbtn {
+  display: none;
+}
+.th-menu--inline .th-menu__pop {
+  position: static;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+.th-menu--inline .th-menu__label,
+.th-menu--inline .th-menu__sep,
+.th-menu--inline .th-menu__item .th-icon + .th-icon {
+  display: none;
+}
+.th-menu--inline .th-menu__item {
+  justify-content: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  color: var(--text-dim);
+}
+.th-menu--inline .th-menu__item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.th-menu--inline .th-menu__item.is-on {
+  color: var(--accent);
 }
 /* Боковая панель сессий (выбор в окне «Вид терминала», только десктоп): полоса вкладок
    становится столбцом слева, а экраны сессии сдвигаются вправо. Полоса остаётся тем же
@@ -1277,10 +1317,15 @@ select.th-input {
   :root[data-side-tabs] .th-ws-view > .th-term {
     padding-left: var(--side-w);
   }
+  /* Шапка общая: идёт на всю ширину над боковой панелью, а разделы сессии (терминал,
+     проводник, …) и её содержимое — правее панели. */
+  :root[data-side-tabs] .th-ws-view .th-termbar {
+    margin-left: calc(-1 * var(--side-w));
+  }
   :root[data-side-tabs] .th-ws-view .th-tabs {
     position: fixed;
     left: 0;
-    top: 0;
+    top: calc(var(--termbar-h) + env(safe-area-inset-top));
     bottom: 0;
     width: var(--side-w);
     flex-direction: column;
@@ -1315,9 +1360,40 @@ select.th-input {
   :root[data-side-tabs] .th-ws-view .th-tabs__group:first-child {
     margin-top: 0;
   }
-  /* Шапка без вкладок: кнопки прижаты вправо. */
-  :root[data-side-tabs] .th-ws-view .th-tabs-wrap {
-    justify-content: flex-end;
+  /* Шапка без вкладок: слева текущая сессия, справа кнопки. */
+  :root[data-side-tabs] .th-ws-view .th-tabs-current {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    padding-left: 6px;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  :root[data-side-tabs] .th-ws-view .th-tabs-current .th-tab__agent {
+    margin-left: 0;
+  }
+  .th-tabs-current__label {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.15;
+  }
+  .th-tabs-current__name,
+  .th-tabs-current__sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .th-tabs-current__sub {
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--text-faint);
+  }
+  .th-tabs-current__sub:empty {
+    display: none;
   }
 }
 /* Счётчик сессий, ждущих внимания: клик — к следующей. */
@@ -1829,6 +1905,21 @@ select.th-input {
   display: none;
 }
 
+/* Пометка: окно сессии держит другой клиент tmux, экран принял его размер. */
+.th-term__foreign {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  z-index: 6;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  pointer-events: none;
+  opacity: 0.9;
+}
 /* Круглая кнопка-переключатель панели инструментов, поверх терминала справа-сверху. */
 .th-term__toolbar-toggle {
   position: absolute;

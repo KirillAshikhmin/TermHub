@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnPty } from '../src/pty-spawn.js';
-import { open, type Link, type SessionLinkOptions } from '../src/session-link.js';
+import { open, type Link, type SessionLinkOptions, parsePaneState, renderSnapshot } from '../src/session-link.js';
 import { PtyPool } from '../src/pty-pool.js';
 
 // Шов pty мокаем целиком, как в bridge.unit.test.ts: настоящий tmux здесь
@@ -356,6 +356,7 @@ describe('сопоставление ответов', () => {
     const pending = link.snapshot();
     await tick();
     fake.feed(reply(51, 'screen'));
+    fake.feed(reply(52)); // запрос состояния панели: пусто — снимок как есть
     expect(dec.decode(await pending)).toBe('screen');
     expect(link.mode).toBe('control'); // терминал жив: чужой блок — не повод для отката
   });
@@ -398,7 +399,9 @@ describe('активная панель', () => {
     stubSpawns(fake);
     const link = open('sess', options());
     await bringUp(fake, link);
-    expect(fake.commands()).toContain('display-message -p "#{pane_id} #{window_id} #{alternate_on}"');
+    expect(fake.commands()).toContain(
+      'display-message -p "#{pane_id} #{window_id} #{alternate_on} #{pane_width} #{pane_height}"',
+    );
   });
 
   it('вывод активной панели доходит до onData, вывод соседней отбрасывается', async () => {
@@ -519,7 +522,69 @@ describe('снимок экрана', () => {
     await tick();
     expect(fake.commands()).toContain('capture-pane -t %0 -p -e -S -200');
     fake.feed(reply(3, 'line one', 'line two'));
+    fake.feed(reply(4)); // состояние панели не названо — снимок как есть
     expect(dec.decode(await pending)).toBe('line one\r\nline two');
+  });
+
+  it('следом за снимком спрашивает состояние панели и ставит курсор относительно конца снимка', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const link = open('sess', options());
+    await bringUp(fake, link, '%0');
+    const pending = link.snapshot();
+    await tick();
+    expect(fake.commands().at(-1)).toContain('display-message -p -t %0 "TH-STATE,#{cursor_x},#{cursor_y},');
+    fake.feed(reply(3, 'history', 'row0', 'row1', 'row2'));
+    // Курсор в столбце 5 строки 0 панели высотой 3; включены клавиши курсора и вставка в скобках.
+    fake.feed(reply(4, 'TH-STATE,5,0,3,0,0,2,1,1,0,0,0,0,0,1,1,0'));
+    expect(dec.decode(await pending)).toBe(
+      'history\r\nrow0\r\nrow1\r\nrow2\x1b[0m\r\x1b[2A\x1b[5C\x1b[?1h\x1b[?2004h',
+    );
+  });
+
+  it('полноэкранное приложение: клиент сам уходит в альтернативный экран, позиции абсолютные', () => {
+    const state = parsePaneState('TH-STATE,7,2,6,1,1,4,0,0,0,1,0,0,1,,1,0');
+    expect(state?.bracket_paste_flag).toBeUndefined(); // поле, которого старый tmux не знает
+    expect(renderSnapshot(['a', 'b'], state)).toBe(
+      '\x1b[?1049h\x1b[Ha\r\nb\x1b[0m\x1b[2;5r\x1b[3;8H\x1b[?1000h\x1b[?1006h\x1b[?25l',
+    );
+    expect(parsePaneState('pane is gone')).toBeUndefined();
+    expect(renderSnapshot(['a'], undefined)).toBe('a');
+  });
+
+  it('вывод между концом снимка и ответом о состоянии не теряется: в снимок он уже не попал', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const chunks: string[] = [];
+    const link = open('sess', options({ onData: (b) => chunks.push(dec.decode(b)) }));
+    await bringUp(fake, link, '%0');
+    const pending = link.snapshot();
+    await tick();
+    fake.feed(reply(3, 'screen'));
+    fake.feed('%output %0 between\n');
+    fake.feed(reply(4));
+    await pending;
+    expect(chunks).toEqual(['between']);
+  });
+
+  it('размер панели сообщается при подключении и при смене раскладки окна', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const sizes: string[] = [];
+    const link = open('sess', options({ onPaneSize: (c, r) => sizes.push(`${c}x${r}`) }));
+    fake.feed(GREETING);
+    fake.feed(reply(1));
+    fake.feed(reply(2, '%0 @0 0 244 63'));
+    expect(await link.ready).toBe('control');
+    // Окно подогнали под другого клиента: размер переспрашивается.
+    fake.feed('%layout-change @0 b25d,80x24,0,0,0 b25d,80x24,0,0,0 *\n');
+    await tick();
+    fake.feed(reply(3, '%0 @0 0 80 24'));
+    fake.feed('%layout-change @0 b25d,80x24,0,0,0 b25d,80x24,0,0,0 *\n');
+    await tick();
+    fake.feed(reply(4, '%0 @0 0 80 24')); // тот же размер — повторно не сообщается
+    await tick();
+    expect(sizes).toEqual(['244x63', '80x24']);
   });
 
   it('глубину снимка задаёт вызывающий', async () => {
@@ -531,6 +596,7 @@ describe('снимок экрана', () => {
     await tick();
     expect(fake.commands()).toContain('capture-pane -t %0 -p -e -S -50');
     fake.feed(reply(3, 'x'));
+    fake.feed(reply(4));
     await pending;
   });
 
@@ -544,6 +610,7 @@ describe('снимок экрана', () => {
     await tick();
     fake.feed('%output %0 inside the capture\n');
     fake.feed(reply(3, 'screen'));
+    fake.feed(reply(4));
     await pending;
     fake.feed('%output %0 after\n');
     expect(chunks).toEqual(['after']);
@@ -559,6 +626,7 @@ describe('снимок экрана', () => {
     await tick();
     // Один кусок чтения: конец снимка и следом живой вывод — он уже вне снимка.
     fake.feed(`${reply(3, 'screen')}%output %0 after\n`);
+    fake.feed(reply(4));
     await pending;
     expect(chunks).toEqual(['after']);
   });

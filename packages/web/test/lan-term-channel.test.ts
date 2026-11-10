@@ -147,6 +147,11 @@ describe('LAN-канал: кадр состояния терминала', () =>
     ws.deliver(jsonFrame(FrameType.TerminalState, 0, { mode: 'turbo', altScreen: 'yes' }));
 
     expect(states).toEqual([{}]); // чужие значения отброшены, поля не появились
+    // Размер панели принимается только парой и только правдоподобный.
+    ws.deliver(jsonFrame(FrameType.TerminalState, 0, { cols: 244, rows: 63 }));
+    ws.deliver(jsonFrame(FrameType.TerminalState, 0, { cols: 244 }));
+    ws.deliver(jsonFrame(FrameType.TerminalState, 0, { cols: -1, rows: 'x' }));
+    expect(states.slice(1)).toEqual([{ cols: 244, rows: 63 }, {}, {}]);
     channel.close();
   });
 });

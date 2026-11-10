@@ -38,6 +38,11 @@ export class FakeTerminal {
     host.append(this.element);
   }
   write(): void {}
+  /** Как у xterm: меняет размер экрана. */
+  resize(cols: number, rows: number): void {
+    this.cols = cols;
+    this.rows = rows;
+  }
   focus(): void {
     this.focusCalls += 1;
   }

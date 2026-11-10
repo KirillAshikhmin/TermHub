@@ -34,6 +34,7 @@ function stubTransport(snapshots: SessionInfo[][]): { transport: Transport; list
     kill: async () => {},
     rename: async () => {},
     dirs: async () => [],
+    caffeinate: async () => ({ supported: false, active: false }),
     openTerm: () => ({ write() {}, resize() {}, close() {} }),
     close() {},
   } as unknown as Transport;
@@ -266,6 +267,14 @@ describe('mountSessionTabs', () => {
     tabs.teardown();
   });
 
+  it('в обычном режиме меню главной в шапке сессии не строится', async () => {
+    const { transport } = stubTransport([[sessionFixture('a')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tabs.el.querySelector('.th-menu--inline')).toBeNull();
+    tabs.teardown();
+  });
+
   it('очередь пуста — счётчика нет', async () => {
     const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);
     const tabs = mountSessionTabs({ ...baseOpts, transport });
@@ -305,9 +314,13 @@ describe('mountSessionTabs', () => {
       n.classList.contains('th-tabs__group') ? `[${n.textContent}]` : n.querySelector('.th-tab__name')!.textContent,
     );
     expect(seq).toEqual(['[app]', 'app1', 'app2', '[zed]', 'zed']);
+    // Общая шапка: слева текущая сессия, справа меню главной в ряд иконок.
+    expect(tabs.el.querySelector('.th-tabs-current__name')!.textContent).toBe('zed');
+    expect(tabs.el.querySelector('.th-menu--inline .th-menu__item')).not.toBeNull();
     tabs.teardown();
     localStorage.removeItem('termhub.sideTabs');
     window.matchMedia = real;
+    document.body.replaceChildren();
   });
 
   it('вкладка получает метку агента по команде панели', async () => {

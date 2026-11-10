@@ -25,6 +25,11 @@ export interface SessionLinkOptions {
   onExit: () => void;
   /** Активная панель вошла в альтернативный экран или вышла из него (только control mode). */
   onAltScreen?: (active: boolean) => void;
+  /** Размер активной панели (только control mode). В control mode tmux НЕ подгоняет вывод
+   *  под размер клиента: если окно сессии держит другой клиент (системный терминал, второй
+   *  браузер), панель остаётся его размера — и терминал клиента обязан принять этот размер,
+   *  иначе вывод ложится на экран со сдвигом. Сообщается при подключении и на каждую смену. */
+  onPaneSize?: (cols: number, rows: number) => void;
   /** Общий budget живых терминалов; один Link держит ровно один слот. */
   ptyPool?: PtyPool;
   /** Причина отката и отказы команд; по умолчанию — console.warn. */
@@ -67,11 +72,108 @@ const MAX_SNAPSHOT_LINES = 50_000;
  *  и тогда ждать нечего. Отказ лучше вечного ожидания у того, кто ждёт снимок. */
 const COMMAND_TIMEOUT_MS = 10_000;
 
-/** Одна команда отдаёт активную панель, её окно и признак альтернативного экрана. */
-const PANE_QUERY = 'display-message -p "#{pane_id} #{window_id} #{alternate_on}"';
+/** Одна команда отдаёт активную панель, её окно, признак альтернативного экрана и размер. */
+const PANE_QUERY = 'display-message -p "#{pane_id} #{window_id} #{alternate_on} #{pane_width} #{pane_height}"';
 
-/** Уведомления, после которых активная панель могла смениться. */
-const PANE_NOTIFICATIONS = new Set(['session-changed', 'session-window-changed', 'window-pane-changed']);
+/** Уведомления, после которых активная панель могла смениться — или сменить размер
+ *  (`layout-change`: окно подогнали под другого клиента). */
+const PANE_NOTIFICATIONS = new Set([
+  'session-changed',
+  'session-window-changed',
+  'window-pane-changed',
+  'layout-change',
+]);
+
+/** Состояние панели для снимка: без него экран клиента расходится с панелью. Control mode
+ *  отдаёт только текст экрана — где стоит курсор и какие режимы включило приложение
+ *  (мышь, вставка в скобках, клавиши курсора), терминал клиента иначе не узнаёт: они
+ *  были включены до его подключения. Поля через запятую: незнакомое старому tmux поле
+ *  приходит пустым и остальные не сдвигает. */
+const STATE_MARK = 'TH-STATE';
+const STATE_FIELDS = [
+  'cursor_x',
+  'cursor_y',
+  'pane_height',
+  'alternate_on',
+  'scroll_region_upper',
+  'scroll_region_lower',
+  'cursor_flag',
+  'keypad_cursor_flag',
+  'keypad_flag',
+  'mouse_standard_flag',
+  'mouse_button_flag',
+  'mouse_any_flag',
+  'mouse_sgr_flag',
+  'bracket_paste_flag',
+  'wrap_flag',
+  'insert_flag',
+] as const;
+type StateField = (typeof STATE_FIELDS)[number];
+
+function stateQuery(pane: string): string {
+  return `display-message -p -t ${pane} "${STATE_MARK},${STATE_FIELDS.map((f) => `#{${f}}`).join(',')}"`;
+}
+
+/** Разбор ответа `TH-STATE,…`; undefined — ответ не тот, состояние восстанавливать не из чего. */
+export function parsePaneState(line: string | undefined): Record<StateField, number | undefined> | undefined {
+  const parts = (line ?? '').split(',');
+  if (parts[0] !== STATE_MARK) return undefined;
+  const state = {} as Record<StateField, number | undefined>;
+  STATE_FIELDS.forEach((field, i) => {
+    const raw = parts[i + 1];
+    const value = raw === undefined || raw === '' ? NaN : Number(raw);
+    state[field] = Number.isInteger(value) && value >= 0 ? value : undefined;
+  });
+  return state;
+}
+
+/** Снимок экрана вместе с состоянием панели — байтами, готовыми к записи в терминал.
+ *
+ *  Обычный экран: строки истории и экрана, затем курсор ставится ОТНОСИТЕЛЬНО — вверх от
+ *  последней строки снимка и вправо. Абсолютной позицией нельзя: терминал клиента бывает
+ *  выше панели (размер ещё не доехал, окно держит другой клиент), и строка экрана панели
+ *  тогда не совпадает со строкой экрана клиента. Без этого шага курсор остаётся в конце
+ *  последней строки, и приложение, которое перерисовывает себя относительными сдвигами
+ *  (рамка ввода Claude Code), рисует со смещением — та самая «кривая отрисовка».
+ *
+ *  Альтернативный экран: клиент сначала сам уходит в него (`?1049h`), иначе полноэкранное
+ *  приложение рисуется в обычный буфер и засоряет историю; там позиции абсолютные. */
+export function renderSnapshot(lines: string[], state: Record<StateField, number | undefined> | undefined): string {
+  const body = lines.join('\r\n');
+  if (!state) return body;
+  const flag = (field: StateField): boolean => state[field] === 1;
+  const x = state.cursor_x ?? 0;
+  const y = state.cursor_y ?? 0;
+  const rows = state.pane_height ?? 0;
+  const alt = flag('alternate_on');
+  let out = alt ? `\x1b[?1049h\x1b[H${body}` : body;
+  out += '\x1b[0m'; // цвет последней строки снимка не должен протечь в живой вывод
+  if (alt) {
+    const top = state.scroll_region_upper;
+    const bottom = state.scroll_region_lower;
+    // Область прокрутки ставится до курсора: её установка уводит курсор в начало экрана.
+    if (top !== undefined && bottom !== undefined && rows > 0 && (top > 0 || bottom < rows - 1))
+      out += `\x1b[${top + 1};${bottom + 1}r`;
+    out += `\x1b[${y + 1};${x + 1}H`;
+  } else {
+    const up = rows > 0 ? Math.max(0, rows - 1 - y) : 0;
+    out += '\r';
+    if (up > 0) out += `\x1b[${up}A`;
+    if (x > 0) out += `\x1b[${x}C`;
+  }
+  // Режимы, включённые приложением до подключения клиента.
+  if (flag('keypad_cursor_flag')) out += '\x1b[?1h';
+  if (flag('keypad_flag')) out += '\x1b=';
+  if (flag('mouse_standard_flag')) out += '\x1b[?1000h';
+  if (flag('mouse_button_flag')) out += '\x1b[?1002h';
+  if (flag('mouse_any_flag')) out += '\x1b[?1003h';
+  if (flag('mouse_sgr_flag')) out += '\x1b[?1006h';
+  if (flag('bracket_paste_flag')) out += '\x1b[?2004h';
+  if (state.wrap_flag === 0) out += '\x1b[?7l';
+  if (flag('insert_flag')) out += '\x1b[4h';
+  if (state.cursor_flag === 0) out += '\x1b[?25l';
+  return out;
+}
 
 /** Вход в альтернативный экран — `ESC [ ? 1 0 4 9 h`, выход — тот же префикс и `l`. */
 const ALT_PREFIX = [0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39];
@@ -135,6 +237,8 @@ class SessionLink implements Link {
   private cols: number;
   private rows: number;
   private activePane: string | undefined;
+  private paneCols = 0;
+  private paneRows = 0;
   private altScreen = false;
   private altKnown = false;
   /** Сколько байт префикса alt-screen уже совпало: последовательность рвётся между кусками. */
@@ -358,9 +462,18 @@ class SessionLink implements Link {
   private applyPaneInfo(lines: string[]): boolean {
     const parts = (lines[0] ?? '').split(' ');
     if (parts.length < 3 || !parts[0].startsWith('%') || !parts[1].startsWith('@')) return false;
+    if (this.activePane !== parts[0]) this.altMatch = 0; // недобранный префикс относился к прежней панели
     this.activePane = parts[0];
-    this.altMatch = 0; // недобранный префикс относился к прежней панели
     this.setAlt(parts[2] === '1');
+    const cols = Number(parts[3]);
+    const rows = Number(parts[4]);
+    if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
+      if (cols !== this.paneCols || rows !== this.paneRows) {
+        this.paneCols = cols;
+        this.paneRows = rows;
+        this.opts.onPaneSize?.(cols, rows);
+      }
+    }
     return true;
   }
 
@@ -547,7 +660,20 @@ class SessionLink implements Link {
     // и второй раз на экран не идёт; глушение отпускает settle на `%end`.
     const command = `capture-pane -t ${this.activePane} -p -e -S -${snapshotDepth(lines)}`;
     try {
-      return encoder.encode((await this.command(command, true)).join('\r\n'));
+      // Обе команды уходят подряд, до первого ответа: сервер tmux исполняет их одну за
+      // другой, и состояние (курсор, режимы) относится к тому же мигу, что и текст экрана.
+      // Вывод глушит только сам снимок: то, что пришло после его конца, в снимок уже не
+      // попало и обязано дойти до экрана, даже если ответ о состоянии ещё в пути.
+      const shot = this.command(command, true);
+      const state = this.command(stateQuery(this.activePane)).then(
+        (answer) => parsePaneState(answer[0]),
+        (err: Error) => {
+          // Без состояния снимок всё равно полезен: экран заполнится, курсор догонит вывод.
+          this.log(`session ${this.session}: pane state query failed (${err.message})`);
+          return undefined;
+        },
+      );
+      return encoder.encode(renderSnapshot(await shot, await state));
     } catch (err) {
       // Пустой снимок честнее выдуманного: экран заполнится первым же выводом.
       this.log(`session ${this.session}: capture-pane failed (${String(err)})`);

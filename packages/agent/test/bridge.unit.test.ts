@@ -529,8 +529,9 @@ describe('attachTerminal в control mode', () => {
     // Вывод пришёл после готовности, но до ответа на capture-pane: на экране он должен
     // оказаться ПОСЛЕ снимка, поверх которого его и напечатали.
     fake.emitData(Buffer.from('%output %0 live\r\n'));
-    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
     fake.emitData(blockFor(3, ['screen']));
+    fake.emitData(blockFor(4)); // ответ на запрос состояния панели: пусто — снимок как есть
     await vi.waitFor(() => expect(chunks.length).toBe(2));
     expect(chunks[0]).toBe('screen');
     expect(chunks[1]).toBe('live');
@@ -560,8 +561,9 @@ describe('attachTerminal в control mode', () => {
     // tmux экранирует управляющие байты восьмерично: \007 — это BEL.
     fake.emitData(Buffer.from('%output %0 ding\\007\r\n'));
     expect(bells).toEqual(['sess']);
-    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
     fake.emitData(blockFor(3, []));
+    fake.emitData(blockFor(4)); // ответ на запрос состояния панели: пусто — снимок как есть
     await vi.waitFor(() => expect(chunks.length).toBe(1));
     expect(Array.from(chunks[0])).toContain(0x07);
   });
@@ -574,8 +576,9 @@ describe('attachTerminal в control mode', () => {
     const dec = new TextDecoder();
     attachTerminal({ ...base, onBell: (x) => bells.push(x), onData: (b) => chunks.push(dec.decode(b)) });
     await handshake(fake);
-    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
     fake.emitData(blockFor(3, ['bell\u0007 in history']));
+    fake.emitData(blockFor(4)); // ответ на запрос состояния панели: пусто — снимок как есть
     // Ждём именно доставки снимка в onData: до неё звонить было бы нечему.
     await vi.waitFor(() => expect(chunks).toEqual(['bell\u0007 in history']));
     expect(bells).toEqual([]);
@@ -593,8 +596,9 @@ describe('attachTerminal в control mode', () => {
     for (let i = 0; i < 3; i += 1) fake.emitData(Buffer.from(`%output %0 ${big}\r\n`));
     expect(chunks.map((c) => c.length)).toEqual([400_000, 400_000, 400_000]);
     // Снимок пришёл, но экран уже перерисован этим выводом — на экран он не идёт.
-    await vi.waitFor(() => expect(lastCommand(fake)).toContain('capture-pane'));
+    await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
     fake.emitData(blockFor(3, ['screen']));
+    fake.emitData(blockFor(4)); // ответ на запрос состояния панели: пусто — снимок как есть
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(chunks).toHaveLength(3);
     expect(chunks.join('')).not.toContain('screen');
@@ -624,6 +628,7 @@ describe('attachTerminal в control mode', () => {
       warnSpy.mockRestore();
       // Отвечаем на зависшую команду: иначе dispose отвергнет её строкой в лог прогона.
       fake.emitData(blockFor(3, []));
+    fake.emitData(blockFor(4)); // ответ на запрос состояния панели: пусто — снимок как есть
       await Promise.resolve();
     } finally {
       for (const h of handles) h.dispose();

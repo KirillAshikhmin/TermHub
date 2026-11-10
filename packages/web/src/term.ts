@@ -254,9 +254,12 @@ export function mountTerminal(
   // «включён» от терминала, открытого до перезапуска агента, горит над новой сессией,
   // которой оно не касается. Поэтому каждое подключение начинает с «агент ещё ничего
   // не называл», а зажечь пометку и назвать режим вправе только пришедший следом кадр.
+  let paneSize: { cols: number; rows: number } | undefined;
   const forgetAgentState = (): void => {
     setAltScreen(false);
     activeMode = undefined;
+    paneSize = undefined;
+    sentSize = ''; // новому терминалу агента размер ещё не называли
     syncMode();
   };
   modeBtn.addEventListener('click', () => {
@@ -310,7 +313,11 @@ export function mountTerminal(
     // лента. Признак остаётся ради ползунка: листать в альтернативном экране нечего.
     host.classList.toggle('is-alt', on);
   }
-  body.append(host);
+  // Пометка «размер задаёт другой клиент tmux» (см. doFit).
+  const foreignNote = document.createElement('div');
+  foreignNote.className = 'th-term__foreign';
+  foreignNote.hidden = true;
+  body.append(host, foreignNote);
   screen.append(body);
 
   root.append(screen);
@@ -533,15 +540,35 @@ export function mountTerminal(
     dot.title = label;
   };
 
+  // Два размера. `wanted` — под свой контейнер: его клиент просит у агента. `paneSize` —
+  // размер панели, который называет агент в control mode: tmux там НЕ подгоняет вывод под
+  // клиента, и если окно сессии держит другой клиент (системный терминал, второй браузер),
+  // панель остаётся его размера. Экран обязан быть размера панели — иначе вывод ложится
+  // со сдвигом и переносами; просьба о своём размере при этом продолжает уходить агенту.
+  let wanted = { cols: term.cols, rows: term.rows };
+  let sentSize = '';
+  const sendResize = (): void => {
+    sentSize = `${wanted.cols}x${wanted.rows}`;
+    channel?.resize(wanted.cols, wanted.rows);
+  };
   const doFit = (): void => {
     try {
-      fit.fit();
+      const dims = fit.proposeDimensions();
+      // Контейнер ещё не измерить — остаётся прежняя просьба: брать её с экрана нельзя,
+      // он может держать чужой размер панели.
+      if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)) wanted = { cols: dims.cols, rows: dims.rows };
+      const use = paneSize ?? wanted;
+      if (term.cols !== use.cols || term.rows !== use.rows) term.resize(use.cols, use.rows);
     } catch {
       // Контейнер ещё без размеров (не в DOM / скрыт) — ретраит следующий resize.
     }
+    const foreign = paneSize !== undefined && (paneSize.cols !== wanted.cols || paneSize.rows !== wanted.rows);
+    foreignNote.hidden = !foreign;
+    if (foreign && paneSize) foreignNote.textContent = t('term.foreignSize', { cols: paneSize.cols, rows: paneSize.rows });
+    // Экран держит размер панели, а контейнер сменился: onResize не сработает, просим сами.
+    // Первый RESIZE подключения шлёт onStatus (он обязан быть первым кадром) — не здесь.
+    if (connected && sentSize !== '' && sentSize !== `${wanted.cols}x${wanted.rows}`) sendResize();
   };
-
-  const sendResize = (): void => channel?.resize(term.cols, term.rows);
 
   // ── Очередь ввода до подключения ─────────────────────────────────────
   // Транспорт молча роняет байты, пока соединение не поднято (LAN: WebSocket ещё не
@@ -622,6 +649,10 @@ export function mountTerminal(
         syncMode();
       }
       if (state.altScreen !== undefined) setAltScreen(state.altScreen);
+      if (state.cols !== undefined && state.rows !== undefined) {
+        paneSize = { cols: state.cols, rows: state.rows };
+        doFit();
+      }
     },
     onStatus: (state) => {
       if (disposed) return;
@@ -705,7 +736,12 @@ export function mountTerminal(
     sendData(bytes);
   });
   // Перекладка (fit / смена шрифта) → сообщаем агенту новые cols/rows.
-  const resizeDisp = term.onResize(() => sendResize());
+  // Только когда сменилась НАША просьба: экран меняет размер и вслед за панелью, а
+  // повторять просьбу на каждую такую смену нельзя — два клиента tmux начали бы
+  // перетягивать размер окна друг у друга на каждое нажатие.
+  const resizeDisp = term.onResize(() => {
+    if (connected && sentSize !== `${wanted.cols}x${wanted.rows}`) sendResize();
+  });
 
   // ── Панель быстрых клавиш ────────────────────────────────────────────
   // Вид (шрифт, интервал, фон) меняют и кнопки A−/A+, и окно «Вид терминала» — оба

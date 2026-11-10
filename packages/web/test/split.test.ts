@@ -40,6 +40,30 @@ describe('сплит-вид', () => {
     handle.teardown();
   });
 
+  it('control mode: экран принимает размер панели, а агенту продолжает уходить свой', () => {
+    const { transport, opened, frames } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onStatus?.('connected');
+    const term = FakeTerminal.instances[0]!;
+    const note = root.querySelector<HTMLElement>('.th-term__foreign')!;
+    expect(note.hidden).toBe(true);
+    // Окно сессии держит другой клиент tmux: панель 244×63, а просили 80×24.
+    opened[0]!.opts.onTerminalState!({ cols: 244, rows: 63 });
+    expect([term.cols, term.rows]).toEqual([244, 63]);
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain('244×63');
+    expect(frames.filter((f) => f.kind === 'resize').every((f) => f.text === '80x24')).toBe(true);
+    // Панель вернулась к нашему размеру — пометка гаснет.
+    opened[0]!.opts.onTerminalState!({ cols: 80, rows: 24 });
+    expect([term.cols, term.rows]).toEqual([80, 24]);
+    expect(note.hidden).toBe(true);
+    // Новое подключение размер панели забывает: его назовёт новый терминал агента.
+    opened[0]!.opts.onTerminalState!({ cols: 100, rows: 30 });
+    opened[0]!.opts.onStatus?.('connected');
+    expect([term.cols, term.rows]).toEqual([80, 24]);
+    handle.teardown();
+  });
+
   it('каждой сессии — своя панель и свой канал; teardown закрывает все', () => {
     const { transport, opened } = termTransport();
     const stop = mountSplit(root, ['a', 'b', 'c'], transport);

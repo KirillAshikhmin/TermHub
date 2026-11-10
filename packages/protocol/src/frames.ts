@@ -72,6 +72,10 @@ export interface TerminalState {
   mode?: TerminalMode;
   /** Приложение в активной панели ушло в альтернативный экран — истории у него нет. */
   altScreen?: boolean;
+  /** Размер активной панели (control mode): экран клиента обязан быть этого размера, даже
+   *  если просил другой, — окно сессии может держать другой клиент tmux. */
+  cols?: number;
+  rows?: number;
 }
 
 export interface Frame {

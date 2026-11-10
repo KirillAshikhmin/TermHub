@@ -45,14 +45,20 @@ export function parseError(frame: Frame): ErrorPayload {
  *  кадром. Битый payload → пустой объект: клиент обновляет только пришедшее.
  *  Общий для обеих дорог — relay разбирает свои кадры этой же функцией. */
 export function parseTerminalState(frame: Frame): TerminalState {
-  let raw: { mode?: unknown; altScreen?: unknown };
+  let raw: { mode?: unknown; altScreen?: unknown; cols?: unknown; rows?: unknown };
   try {
-    raw = frameJson<{ mode?: unknown; altScreen?: unknown }>(frame);
+    raw = frameJson<typeof raw>(frame);
   } catch {
     return {};
   }
   const state: TerminalState = {};
   if (raw.mode === 'control' || raw.mode === 'attach') state.mode = raw.mode;
   if (typeof raw.altScreen === 'boolean') state.altScreen = raw.altScreen;
+  // Размер панели — только парой и только правдоподобный: по нему клиент меняет размер экрана.
+  const size = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 1000;
+  if (size(raw.cols) && size(raw.rows)) {
+    state.cols = raw.cols;
+    state.rows = raw.rows;
+  }
   return state;
 }
