@@ -143,9 +143,17 @@ export function openTerminal(root: HTMLElement, session: string, transport: Tran
 }
 
 /** Монтирует терминал сессии в root через транспорт. */
-export function mountTerminal(root: HTMLElement, session: string, transport: Transport): TerminalHandle {
+export function mountTerminal(
+  root: HTMLElement,
+  session: string,
+  transport: Transport,
+  opts: { embedded?: boolean } = {},
+): TerminalHandle {
+  // Встроенный терминал (панель сплит-вида): только сам экран — без шапки с вкладками,
+  // полосы разделов и панели клавиш; заголовком окна и размером экрана владеет сплит.
+  const embedded = opts.embedded === true;
   root.replaceChildren();
-  setSessionDocumentTitle(session, session);
+  if (!embedded) setSessionDocumentTitle(session, session);
   let disposed = false;
   markBellSeen(session); // открыли сессию — её звонок прочитан
   updateAppBadge(unseenBellCount()); // бейдж на иконке гаснет сразу, не ждя полла
@@ -172,7 +180,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     if (name === session) term.focus();
     else location.hash = termHash(name);
   };
-  const tabs = mountSessionTabs({
+  const tabs = embedded ? null : mountSessionTabs({
     transport,
     current: session,
     onSwitch: goTo,
@@ -203,7 +211,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       return;
     }
     if (name === session) location.hash = neighbor ? termHash(neighbor) : '#/';
-    else await tabs.refresh();
+    else await tabs?.refresh();
   }
   // ── Способ подключения и пометка альтернативного экрана ──────────────
   // Режим выбирает агент (его настройка старше просьбы клиента), поэтому чип
@@ -273,8 +281,8 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('mousedown', (e) => e.preventDefault());
   viewBtn.addEventListener('click', () => openTermSettings());
-  bar.append(tabs.el, toggleSlot, viewBtn, modeBtn, dot);
-  screen.append(bar);
+  bar.append(...(tabs ? [tabs.el] : []), toggleSlot, viewBtn, modeBtn, dot);
+  if (!embedded) screen.append(bar);
 
   // Баннер переподключения (скрыт, пока соединение живо).
   const banner = document.createElement('div');
@@ -873,31 +881,33 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // клавиатурой); «⋮» сворачивает оба в плавающую кнопку. Compose bar — ОТДЕЛЬНЫЙ
   // сосед: его видимость не зависит от сворачивания, ей управляет только тумблер ✎. ──
   let hideToolbar = (): void => {};
-  const holobar = renderHoloBar({ active: 'term', session, transport, onHide: () => hideToolbar() });
-  const holoWrap = document.createElement('div');
-  holoWrap.className = 'th-slide th-slide--top';
-  holoWrap.append(holobar);
-  bar.after(holoWrap); // под вкладками сессий (сверху, выезжает вниз)
+  if (!embedded) {
+    const holobar = renderHoloBar({ active: 'term', session, transport, onHide: () => hideToolbar() });
+    const holoWrap = document.createElement('div');
+    holoWrap.className = 'th-slide th-slide--top';
+    holoWrap.append(holobar);
+    bar.after(holoWrap); // под вкладками сессий (сверху, выезжает вниз)
 
-  const toolbars: HTMLElement[] = [holoWrap];
-  if (!readOnly) {
-    const panelWrap = document.createElement('div');
-    panelWrap.className = 'th-slide th-slide--bottom';
-    panelWrap.append(panel);
-    screen.append(panelWrap); // панель клавиш — снизу (над клавиатурой), выезжает снизу
-    screen.append(compose); // независим от тулбара (см. onComposeToggle)
-    toolbars.push(panelWrap);
+    const toolbars: HTMLElement[] = [holoWrap];
+    if (!readOnly) {
+      const panelWrap = document.createElement('div');
+      panelWrap.className = 'th-slide th-slide--bottom';
+      panelWrap.append(panel);
+      screen.append(panelWrap); // панель клавиш — снизу (над клавиатурой), выезжает снизу
+      screen.append(compose); // независим от тулбара (см. onComposeToggle)
+      toolbars.push(panelWrap);
+    }
+
+    // Плавающая «⋮» (в теле терминала) — видна только когда тулбар свёрнут. ResizeObserver
+    // на host сам пере-fit'ит терминал по кадрам анимации высоты панелей.
+    hideToolbar = wireToolbar({ toolbars, floatMount: body, toggleMount: toggleSlot, collapsedControls: readOnly ? [] : [floatingKeyboard], onChange: doFit }).hide;
   }
-
-  // Плавающая «⋮» (в теле терминала) — видна только когда тулбар свёрнут. ResizeObserver
-  // на host сам пере-fit'ит терминал по кадрам анимации высоты панелей.
-  hideToolbar = wireToolbar({ toolbars, floatMount: body, toggleMount: toggleSlot, collapsedControls: readOnly ? [] : [floatingKeyboard], onChange: doFit }).hide;
 
   // ── Подгонка под видимую область (клавиатура телефона) ───────────────
   const vv = window.visualViewport;
   let rafId = 0;
   const reposition = (): void => {
-    if (vv) {
+    if (vv && !embedded) {
       // Экран точно по видимой области: панель клавиш встаёт над клавиатурой,
       // тело терминала получает ровно оставшуюся высоту (offsetTop+height).
       screen.style.height = `${vv.height}px`;
@@ -939,7 +949,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
       host.removeEventListener('mouseup', onSelectionEnd);
       stopTouchScroll?.();
       stopTouchSelect?.();
-      tabs.teardown();
+      tabs?.teardown();
       dropPending();
       channel?.close();
       channel = null;
@@ -949,7 +959,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
         // повторный dispose безопасен
       }
       root.replaceChildren();
-      resetDocumentTitle();
+      if (!embedded) resetDocumentTitle();
     },
   };
 }

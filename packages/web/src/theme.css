@@ -1298,6 +1298,111 @@ select.th-input {
   color: var(--claude);
   background: var(--claude-tint);
 }
+/* Сплит-вид: несколько терминалов рядом. Панель — якорь для встроенного .th-term. */
+.th-split {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.th-splitbar__title {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.th-splitbar__add {
+  margin-left: auto;
+  max-width: 40vw;
+}
+.th-split__grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+.th-split[data-panes='3'] .th-split__grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+/* Узкое окно: панели друг под другом. */
+@media (max-width: 900px) {
+  .th-split .th-split__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.th-split__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+.th-split__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  background: var(--bg-elev);
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  cursor: default;
+}
+.th-split__pane:focus-within .th-split__head {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.th-split__pane.has-bell .th-split__head {
+  border-bottom-color: var(--claude);
+  background: var(--claude-tint);
+}
+.th-split__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-split__pane[data-agent='claude'] .th-split__name {
+  box-shadow: inset 3px 0 0 var(--claude);
+  padding-left: 8px;
+}
+.th-split__pane[data-agent='codex'] .th-split__name {
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 8px;
+}
+.th-split__pane[data-agent='opencode'] .th-split__name {
+  box-shadow: inset 3px 0 0 var(--opencode);
+  padding-left: 8px;
+}
+.th-split__head .th-iconbtn {
+  min-width: 26px;
+  min-height: 26px;
+}
+.th-split__head .th-icon {
+  width: 15px;
+  height: 15px;
+}
+.th-split__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+/* Встроенный терминал занимает панель, а не весь экран. */
+.th-split__body .th-term {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+.th-split__body .th-term__body {
+  padding: 6px 10px 0;
+}
 /* Командная палитра */
 .th-palette {
   display: flex;

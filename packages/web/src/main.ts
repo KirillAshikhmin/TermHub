@@ -17,6 +17,8 @@ import type { RemoteController, RemoteRoute } from './remote';
 import { initAudioUnlock, playBell } from './sound';
 import { shouldRegisterSw } from './sw-register';
 import { initTheme } from './theme';
+import { parseSplit, termHash } from './routes';
+import { mountSplit } from './split';
 import { initTermPrefs } from './term-prefs';
 import { LanTransport } from './transport';
 import type { Transport } from './transport';
@@ -43,6 +45,8 @@ function parseRoute(): RemoteRoute {
   if (hash.startsWith('#/pair')) return { name: 'pair' };
   if (hash.startsWith('#/files')) return { name: 'files' };
   if (hash.startsWith('#/diag')) return { name: 'diag' };
+  const split = parseSplit(hash);
+  if (split) return { name: 'split', sessions: split };
   const sfiles = /^#\/sfiles\/([^/]*)/.exec(hash);
   if (sfiles) {
     try {
@@ -120,6 +124,17 @@ function render(): void {
   resetDocumentTitle();
   cleanup?.();
   cleanup = null;
+  // Сплит-вид: несколько сессий рядом — нужен живой транспорт; без него (relay ещё не
+  // выбран) ниже отработает обычный путь и покажет выбор агента.
+  if (route.name === 'split' && transport) {
+    // Одна сессия — это уже не сплит, а обычный терминал.
+    if (route.sessions.length < 2) {
+      location.replace(termHash(route.sessions[0]!));
+      return;
+    }
+    cleanup = mountSplit(root, route.sessions, transport);
+    return;
+  }
   // Диагностика — отдельная страница (LAN-режим; в relay покажет подсказку).
   if (route.name === 'diag') {
     cleanup = mountDiag(root, transport ?? undefined);

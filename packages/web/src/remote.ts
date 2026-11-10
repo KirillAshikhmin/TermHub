@@ -33,6 +33,7 @@ export type RemoteRoute =
   | { name: 'srepo'; session: string }
   | { name: 'sgradle'; session: string }
   | { name: 'sfeed'; session: string }
+  | { name: 'split'; sessions: string[] }
   | { name: 'diag' }
   | { name: 'pair' };
 

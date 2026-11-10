@@ -170,6 +170,13 @@ const ru: Dict = {
     modeSwitch: 'Переключить способ подключения',
     queue: 'Ждут внимания: {n}. Перейти к следующей (Ctrl+Alt+↓)',
   },
+  split: {
+    title: 'Рядом',
+    add: 'Добавить сессию…',
+    openFull: 'Открыть на весь экран',
+    closePane: 'Убрать из сплита',
+    beside: 'Рядом: {name}',
+  },
   palette: {
     placeholder: 'Сессия, раздел или действие…',
     empty: 'Ничего не найдено',
@@ -632,6 +639,13 @@ const en: Dict = {
     modeOverridden: 'The {mode} request was not accepted: the agent picks the mode',
     modeSwitch: 'Switch the connection method',
     queue: 'Waiting for attention: {n}. Go to the next one (Ctrl+Alt+↓)',
+  },
+  split: {
+    title: 'Side by side',
+    add: 'Add a session…',
+    openFull: 'Open full screen',
+    closePane: 'Remove from split',
+    beside: 'Side by side: {name}',
   },
   palette: {
     placeholder: 'Session, section or action…',

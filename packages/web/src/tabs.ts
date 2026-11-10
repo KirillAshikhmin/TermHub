@@ -19,7 +19,7 @@ import { updateAppBadge } from './app-badge';
 import { hasCap } from './capabilities';
 import { previewOf, refreshPreviews } from './session-preview';
 import { openPalette, type PaletteItem } from './palette';
-import { sfeedHash, sfilesHash, srepoHash, termHash } from './routes';
+import { sfeedHash, sfilesHash, srepoHash, splitHash, termHash } from './routes';
 import { openTermSettings } from './term-settings';
 
 const POLL_INTERVAL = 3000;
@@ -301,6 +301,16 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       const title = sessionTitleText(s.title);
       const flag = bellUnseen(s.name) ? '🔔 ' : '';
       items.push({ label: flag + (title || s.name), hint: title ? s.name : undefined, hash: termHash(s.name) });
+    }
+    // Сплит-вид: текущая сессия и выбранная рядом.
+    for (const s of latest) {
+      if (s.name === opts.current) continue;
+      const title = sessionTitleText(s.title);
+      items.push({
+        label: t('split.beside', { name: title || s.name }),
+        hint: title ? s.name : undefined,
+        hash: splitHash([opts.current, s.name]),
+      });
     }
     const scope = opts.transport.clientScope;
     items.push({ label: t('holo.session'), hint: opts.current, hash: termHash(opts.current) });

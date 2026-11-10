@@ -43,3 +43,22 @@ export function parseSessionSub(prefix: 'sfiles' | 'srepo'): string | null {
   const m = new RegExp(`^#/${prefix}/[^/]*(?:/(.*))?$`).exec(location.hash);
   return m && m[1] !== undefined ? decodeURIComponent(m[1]) : null;
 }
+
+/** Сплит-вид: #/split/<сессия>/<сессия>[/…] — до четырёх сессий рядом. */
+export const SPLIT_MAX = 4;
+export function splitHash(sessions: string[]): string {
+  return `#/split/${sessions.slice(0, SPLIT_MAX).map(encodeURIComponent).join('/')}`;
+}
+
+/** Сессии из hash сплит-вида (без повторов, не больше SPLIT_MAX); null — hash не тот или битый. */
+export function parseSplit(hash: string): string[] | null {
+  const m = /^#\/split\/(.+)$/.exec(hash);
+  if (!m) return null;
+  try {
+    const names = m[1]!.split('/').filter(Boolean).map(decodeURIComponent);
+    const unique = [...new Set(names)].slice(0, SPLIT_MAX);
+    return unique.length > 0 ? unique : null;
+  } catch {
+    return null;
+  }
+}
