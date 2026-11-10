@@ -39,13 +39,26 @@ async function run(transport: CapsSource): Promise<string[]> {
       exchange = null;
       return [];
     }
-    // 404 (агент старше маршрута) или молчание — возможностей у агента нет.
+    // Ответ «нет» — только 404: агент старше маршрута. Всё остальное (агент перезапускается,
+    // сеть моргнула, 5xx) — сбой связи, а не сведения об умениях: запомнить его значило бы
+    // до перезагрузки страницы прятать ленту, расход и поиск у агента, который всё умеет.
+    // Обмена не было — следующий вопрос повторит его. Молчание relay сюда не попадает:
+    // его транспорт сам отвечает пустым списком по сроку.
+    if (!notFound(err)) {
+      exchange = null;
+      return [];
+    }
     agentCaps = [];
   }
   // Пока ходили, транспорт сменился или соединение оборвалось: ответ уже ничей.
   if (owner !== transport) return [];
   negotiated = intersect(CLIENT_CAPS, agentCaps);
   return [...negotiated];
+}
+
+/** Маршрута нет: агент старше объявления возможностей. */
+function notFound(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { status?: unknown }).status === 404;
 }
 
 /** Отказ авторизации: `status` несёт ApiError (api.ts). */

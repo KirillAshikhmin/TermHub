@@ -3,7 +3,7 @@
 // проверяются своими швами (relay-transport.test.ts, server.test.ts агента).
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { forgetCaps, hasCap, negotiateCaps, negotiatedCaps } from '../src/capabilities';
+import { forgetCaps, hasCap, negotiateCaps, negotiatedCaps, whenCap } from '../src/capabilities';
 import type { Transport } from '../src/transport';
 
 /** Агент-заглушка: отвечает по очереди (список — ответ, Error — отказ; последний
@@ -61,6 +61,15 @@ describe('negotiateCaps', () => {
     expect(await negotiateCaps(transport)).toEqual(['feed']);
     expect(announced.length).toBe(2);
     expect(hasCap('feed')).toBe(true);
+  });
+
+  it('сбой связи — не ответ «не умеет»: агент перезапускался, следующий вопрос повторяет обмен', async () => {
+    const { transport, announced } = agent(new TypeError('Failed to fetch'), httpError(502), ['feed']);
+    expect(await whenCap('feed', transport)).toBe(false);
+    expect(await whenCap('feed', transport)).toBe(false);
+    // Агент поднялся — возможность находится без перезагрузки страницы.
+    expect(await whenCap('feed', transport)).toBe(true);
+    expect(announced.length).toBe(3);
   });
 
   it('обмен один на транспорт: второй вызов не ходит к агенту повторно', async () => {
