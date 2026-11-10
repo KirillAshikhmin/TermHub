@@ -16,6 +16,10 @@ import { activity } from './activity';
 import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
+import { hasCap } from './capabilities';
+import { openPalette, type PaletteItem } from './palette';
+import { sfeedHash, sfilesHash, srepoHash, termHash } from './routes';
+import { openTermSettings } from './term-settings';
 
 const POLL_INTERVAL = 3000;
 
@@ -275,10 +279,60 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     const step = e.code === 'ArrowLeft' ? -1 : 1;
     return order[(Math.max(at, 0) + step + order.length) % order.length];
   };
+  /** Сессии, ждущие внимания (звонок или конец работы, который ещё не смотрели), кроме текущей. */
+  const waiting = (): string[] => order.filter((name) => name !== opts.current && bellUnseen(name));
+  /** Следующая ждущая — по порядку вкладок после текущей, по кругу. */
+  const nextWaiting = (): string | undefined => {
+    const names = waiting();
+    const at = order.indexOf(opts.current);
+    return names.find((name) => order.indexOf(name) > at) ?? names[0];
+  };
+  const goNextWaiting = (): void => {
+    const name = nextWaiting();
+    if (name) opts.onSwitch(name);
+  };
+  const paletteItems = (): PaletteItem[] => {
+    const items: PaletteItem[] = [];
+    const next = nextWaiting();
+    if (next) items.push({ label: t('palette.nextWaiting'), hint: next, run: goNextWaiting });
+    for (const s of latest) {
+      if (s.name === opts.current) continue;
+      const title = sessionTitleText(s.title);
+      const flag = bellUnseen(s.name) ? '🔔 ' : '';
+      items.push({ label: flag + (title || s.name), hint: title ? s.name : undefined, hash: termHash(s.name) });
+    }
+    const scope = opts.transport.clientScope;
+    items.push({ label: t('holo.session'), hint: opts.current, hash: termHash(opts.current) });
+    if (!scope || scope.files) {
+      items.push({ label: t('nav.files'), hint: opts.current, hash: sfilesHash(opts.current, '') });
+      items.push({ label: t('nav.repo'), hint: opts.current, hash: srepoHash(opts.current, '') });
+    }
+    if (hasCap('feed')) items.push({ label: t('holo.feed'), hint: opts.current, hash: sfeedHash(opts.current) });
+    if (!scope) items.push({ label: t('dashboard.newSession'), run: opts.onCreate });
+    items.push({ label: t('termview.title'), run: openTermSettings });
+    items.push({ label: t('palette.dashboard'), hash: '#/' });
+    return items;
+  };
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && panelOpen) {
       e.preventDefault();
       closePanel();
+      return;
+    }
+    // Палитра: Ctrl+Alt+K (и ⌘K). Голый Ctrl+K занят оболочкой — «стереть до конца строки».
+    const combo = e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey;
+    const cmdK = e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
+    if (e.code === 'KeyK' && (combo || cmdK)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!document.querySelector('.th-palette')) openPalette(paletteItems());
+      return;
+    }
+    // Ctrl+Alt+↓ — к следующей сессии, ждущей внимания.
+    if (combo && e.code === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      goNextWaiting();
       return;
     }
     const target = hotkeyTarget(e);
@@ -357,7 +411,24 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     expandBtn.setAttribute('aria-expanded', 'true');
   }
 
-  wrap.append(strip, expandBtn, panel);
+  // Очередь ждущих: счётчик сессий, где агент закончил или спросил, а туда ещё не
+  // заглядывали. Клик ведёт к следующей такой. Источник тот же, что у 🔔 на вкладках.
+  const queueBtn = document.createElement('button');
+  queueBtn.type = 'button';
+  queueBtn.className = 'th-tabs-queue';
+  queueBtn.hidden = true;
+  queueBtn.addEventListener('mousedown', (e) => e.preventDefault());
+  queueBtn.addEventListener('click', goNextWaiting);
+  const syncQueue = (): void => {
+    const n = waiting().length;
+    queueBtn.hidden = n === 0;
+    queueBtn.textContent = `🔔 ${n}`;
+    const label = t('term.queue', { n });
+    queueBtn.title = label;
+    queueBtn.setAttribute('aria-label', label);
+  };
+
+  wrap.append(strip, queueBtn, expandBtn, panel);
 
   const tabs = new Map<string, HTMLElement>();
   const currentTab = renderSessionTab(
@@ -425,6 +496,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     // Порядок — как в списке агента; перестановка сбросила бы фокус, поэтому
     // пропускаем, пока фокус внутри полосы. Узлы вне списка (текущая пропавшая
     // сессия) дрейфуют в конец.
+    syncQueue();
     const focusInside = document.activeElement instanceof Node && strip.contains(document.activeElement);
     if (!focusInside) {
       let anchor: ChildNode | null = strip.firstChild;

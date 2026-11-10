@@ -166,6 +166,13 @@ const ru: Dict = {
     modeNext: 'При следующем открытии терминала: {mode}',
     modeOverridden: 'Просьба о {mode} не принята: режим выбирает агент',
     modeSwitch: 'Переключить способ подключения',
+    queue: 'Ждут внимания: {n}. Перейти к следующей (Ctrl+Alt+↓)',
+  },
+  palette: {
+    placeholder: 'Сессия, раздел или действие…',
+    empty: 'Ничего не найдено',
+    nextWaiting: 'К следующей ждущей сессии',
+    dashboard: 'Все сессии',
   },
   termview: {
     title: 'Вид терминала',
@@ -620,6 +627,13 @@ const en: Dict = {
     modeNext: 'Next time the terminal opens: {mode}',
     modeOverridden: 'The {mode} request was not accepted: the agent picks the mode',
     modeSwitch: 'Switch the connection method',
+    queue: 'Waiting for attention: {n}. Go to the next one (Ctrl+Alt+↓)',
+  },
+  palette: {
+    placeholder: 'Session, section or action…',
+    empty: 'Nothing found',
+    nextWaiting: 'Go to the next waiting session',
+    dashboard: 'All sessions',
   },
   termview: {
     title: 'Terminal appearance',

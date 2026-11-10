@@ -1252,6 +1252,75 @@ select.th-input {
   background: var(--bg-hover);
 }
 
+/* Счётчик сессий, ждущих внимания: клик — к следующей. */
+.th-tabs-queue {
+  flex: none;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--claude);
+  border-radius: var(--r-full);
+  background: var(--claude-tint);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.th-tabs-queue:hover {
+  background: var(--bg-hover);
+}
+/* Командная палитра */
+.th-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.th-palette__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+.th-palette__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  cursor: pointer;
+}
+.th-palette__row:hover,
+.th-palette__row.is-active {
+  background: var(--bg-hover);
+}
+.th-palette__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-palette__hint {
+  flex: none;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.th-palette__empty {
+  padding: 10px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
 /* Кнопка-стрелка разворота панели сессий: иконка поворачивается на месте */
 .th-tabs-expand .th-icon {
   transition: transform var(--t);

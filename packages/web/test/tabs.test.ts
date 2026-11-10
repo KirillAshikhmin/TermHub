@@ -242,6 +242,45 @@ describe('mountSessionTabs', () => {
     expect(onSwitch).toHaveBeenCalledTimes(4);
   });
 
+  it('очередь ждущих: счётчик без текущей сессии, клик и Ctrl+Alt+↓ ведут к следующей', async () => {
+    const list = [sessionFixture('a'), sessionFixture('b'), sessionFixture('c', { bell: true })];
+    const { transport } = stubTransport([list]);
+    const onSwitch = vi.fn();
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'a', onSwitch });
+    await vi.advanceTimersByTimeAsync(0);
+    const queue = tabs.el.querySelector<HTMLButtonElement>('.th-tabs-queue')!;
+    expect(queue.hidden).toBe(false);
+    expect(queue.textContent).toBe('🔔 1');
+    queue.click();
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'ArrowDown', ctrlKey: true, altKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(onSwitch.mock.calls.map((c) => c[0])).toEqual(['c', 'c']);
+    tabs.teardown();
+  });
+
+  it('очередь пуста — счётчика нет', async () => {
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tabs.el.querySelector<HTMLButtonElement>('.th-tabs-queue')!.hidden).toBe(true);
+    tabs.teardown();
+  });
+
+  it('Ctrl+Alt+K открывает палитру с сессиями и разделами', async () => {
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b', { title: '✳ Router' })]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport });
+    await vi.advanceTimersByTimeAsync(0);
+    const e = new KeyboardEvent('keydown', { code: 'KeyK', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
+    const labels = [...document.querySelectorAll('.th-palette__label')].map((n) => n.textContent);
+    expect(labels).toContain('Router');
+    expect(labels).toContain(t('nav.files'));
+    tabs.teardown();
+    document.body.replaceChildren();
+  });
+
   it('вкладка получает метку агента по команде панели', async () => {
     const { transport } = stubTransport([[sessionFixture('a', { command: '2.1.317' }), sessionFixture('b')]]);
     const tabs = mountSessionTabs({ ...baseOpts, transport });
