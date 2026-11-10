@@ -13,6 +13,7 @@ import { verify, fingerprint, isPairRoomId } from '@termhub/protocol';
 import { Rooms, type AgentConn, MAX_PAIR_ATTEMPTS } from './rooms.js';
 import { serveStatic, serveChunk, BOOT_JS, CHUNK_PROBE_PATH } from './static.js';
 import { PollHub } from './poll.js';
+import { RtcHub, type RtcOptions } from './rtc.js';
 
 /** Максимальный размер WS-сообщения; больше → соединение закрывается с 1009.
  *  16 МБ — чтобы вмещать чтение файлов браузером (картинка до 10 МБ → base64
@@ -49,9 +50,26 @@ export interface RelayOptions {
   /** Раздавать бандл кусками через service worker (сети, где поток душат после пары
    *  десятков пакетов). По умолчанию — env RELAY_CHUNKED==='1'. */
   chunked?: boolean;
-  /** Какой транспорт предлагать браузеру: 'ws' (по умолчанию) или 'poll' — короткими
-   *  запросами. По умолчанию — env RELAY_CLIENT_TRANSPORT. Агенту и CLI не указ. */
-  clientTransport?: 'ws' | 'poll';
+  /** Какой транспорт предлагать браузеру: 'ws' (по умолчанию), 'poll' — короткими
+   *  запросами, 'rtc' — WebRTC DataChannel (с откатом на короткие запросы).
+   *  По умолчанию — env RELAY_CLIENT_TRANSPORT. Агенту и CLI не указ. */
+  clientTransport?: 'ws' | 'poll' | 'rtc';
+  /** WebRTC DataChannel: диапазон UDP-портов и внешний адрес. По умолчанию — env
+   *  RTC_PORT_RANGE («9450-9457») и RTC_PUBLIC_IP; без диапазона режим выключен. */
+  rtc?: RtcOptions;
+}
+
+function rtcFromEnv(): RtcOptions | undefined {
+  const m = /^(\d{1,5})-(\d{1,5})$/.exec(process.env.RTC_PORT_RANGE ?? '');
+  if (!m) return undefined;
+  const range: [number, number] = [Number(m[1]), Number(m[2])];
+  if (range[0] >= range[1] || range[1] > 65535) return undefined;
+  return { portRange: range, publicIp: process.env.RTC_PUBLIC_IP || undefined };
+}
+
+function transportFromEnv(): 'ws' | 'poll' | 'rtc' {
+  const value = process.env.RELAY_CLIENT_TRANSPORT;
+  return value === 'poll' || value === 'rtc' ? value : 'ws';
 }
 
 export interface RelayHandle {
@@ -96,12 +114,13 @@ class RelayServer {
   private readonly server: Server;
   private readonly poll: PollHub;
   private readonly chunked: boolean;
-  private readonly clientTransport: 'ws' | 'poll';
+  private readonly clientTransport: 'ws' | 'poll' | 'rtc';
+  private readonly rtc?: RtcHub;
 
   constructor(opts: RelayOptions) {
     this.opts = opts;
     this.chunked = opts.chunked ?? process.env.RELAY_CHUNKED === '1';
-    this.clientTransport = opts.clientTransport ?? (process.env.RELAY_CLIENT_TRANSPORT === 'poll' ? 'poll' : 'ws');
+    this.clientTransport = opts.clientTransport ?? transportFromEnv();
     // Тот же путь, что у WebSocket: клиенту хватает одного адреса relay на оба способа.
     this.poll = new PollHub(WS_PATH, MAX_MESSAGE, (conn, req) => {
       const ip = this.clientIp(req);
@@ -109,6 +128,19 @@ class RelayServer {
       this.onConnection(conn as unknown as WebSocket, ip);
       return true;
     });
+    const rtc = opts.rtc ?? rtcFromEnv();
+    if (rtc) {
+      this.rtc = new RtcHub(
+        WS_PATH,
+        MAX_MESSAGE,
+        rtc,
+        (conn, req) => {
+          this.onConnection(conn as unknown as WebSocket, this.clientIp(req));
+          return true;
+        },
+        (req) => this.rateAllow(this.clientIp(req)),
+      );
+    }
     this.pairTtl = opts.pairTtlMs ?? DEFAULT_PAIR_TTL;
     this.rateCfg = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
     this.trustProxy = opts.trustProxy ?? process.env.RELAY_TRUST_PROXY === '1';
@@ -149,6 +181,7 @@ class RelayServer {
     clearInterval(this.heartbeat);
     for (const ws of this.wss.clients) ws.terminate();
     this.poll.close();
+    this.rtc?.close();
     this.rooms.dispose();
     this.wss.close();
     await new Promise<void>((resolve, reject) => this.server.close((err) => (err ? reject(err) : resolve())));
@@ -171,9 +204,12 @@ class RelayServer {
       res.end(buf);
       return;
     }
+    if (this.rtc?.handle(req, res, url)) return;
     if (this.poll.handle(req, res, url)) return;
     if (method === 'GET' && pathname === '/api/mode') {
-      return this.sendJson(res, 200, { mode: 'relay', chunked: this.chunked, transport: this.clientTransport });
+      // Без поднятого WebRTC совет 'rtc' бессмыслен: клиент потерял бы время на откат.
+      const transport = this.clientTransport === 'rtc' && !this.rtc ? 'poll' : this.clientTransport;
+      return this.sendJson(res, 200, { mode: 'relay', chunked: this.chunked, transport });
     }
     if (pathname.startsWith('/api/')) return this.sendJson(res, 404, { error: 'not found' });
     if (method !== 'GET') return this.sendJson(res, 405, { error: 'method not allowed' });

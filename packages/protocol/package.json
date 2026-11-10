@@ -24,6 +24,10 @@
       "types": "./dist/pollsock.d.ts",
       "default": "./dist/pollsock.js"
     },
+    "./rtcsock": {
+      "types": "./dist/rtcsock.d.ts",
+      "default": "./dist/rtcsock.js"
+    },
     "./session-title": {
       "types": "./dist/session-title.d.ts",
       "default": "./dist/session-title.js"

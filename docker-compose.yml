@@ -22,6 +22,8 @@ services:
       # RELAY_CLIENT_TRANSPORT: "poll"  # браузеру — короткие запросы вместо WebSocket
       # DISGUISE_PORT: "9444"           # порт маскировки для агента и CLI (+ проброс порта)
       # DISGUISE_UPSTREAM: "caddy:443"
+      # RTC_PORT_RANGE: "9450-9457"     # WebRTC для браузера (+ проброс этих портов по UDP)
+      # RTC_PUBLIC_IP: "203.0.113.10"
     # При работе за Caddy (профиль tls) этот проброс можно убрать — наружу
     # смотрит только Caddy на 80/443.
     ports:

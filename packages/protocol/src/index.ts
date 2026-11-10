@@ -5,3 +5,4 @@ export * from './b64.js';
 export * from './session-title.js';
 export * from './disguise.js';
 export * from './pollsock.js';
+export * from './rtcsock.js';

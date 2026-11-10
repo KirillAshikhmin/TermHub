@@ -3,6 +3,8 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import tls from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,6 +175,8 @@ export class AgentServer {
   private readonly wss = new WebSocketServer({ noServer: true });
   private readonly staticDir: string;
   private server?: Server;
+  /** Второй вход — обычный HTTP только на 127.0.0.1 (`localHttpPort`). */
+  private loopback?: Server;
   private termHandler?: (ws: WebSocket, session: string) => void;
 
   constructor(opts: {
@@ -216,14 +220,67 @@ export class AgentServer {
   /** Поднимает сервер (https при заданном TLS) и возвращает фактический порт. */
   async listen(): Promise<number> {
     const server = this.config.tls
-      ? https.createServer(this.readTls(this.config.tls), (req, res) => this.dispatch(req, res))
+      ? https.createServer(this.tlsOptions(this.config.tls), (req, res) => this.dispatch(req, res))
       : http.createServer((req, res) => this.dispatch(req, res));
     server.requestTimeout = 30_000;
     server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
     this.server = server;
     await new Promise<void>((resolve) => server.listen(this.config.port, this.config.host, resolve));
+    await this.listenLoopback();
     const addr = server.address();
     return typeof addr === 'object' && addr ? addr.port : this.config.port;
+  }
+
+  /** Порт второго входа (обычный HTTP на 127.0.0.1) или undefined, если он не поднят. */
+  loopbackPort(): number | undefined {
+    const addr = this.loopback?.address();
+    return typeof addr === 'object' && addr ? addr.port : undefined;
+  }
+
+  /** Обычный HTTP только на loopback: `http://localhost` браузеры считают защищённым
+   *  контекстом, так что локально приложение работает полностью и без сертификата.
+   *  Наружу этот вход не смотрит никогда — адрес привязки не настраивается. Занятый порт
+   *  агента не роняет: основной вход важнее. */
+  private async listenLoopback(): Promise<void> {
+    const port = this.config.localHttpPort;
+    if (port === undefined || port === null) return;
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      console.warn(`[config] localHttpPort "${String(port)}" is not a port, ignored`);
+      return;
+    }
+    const server = http.createServer((req, res) => this.dispatch(req, res));
+    server.requestTimeout = 30_000;
+    server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, '127.0.0.1', resolve);
+      });
+      this.loopback = server;
+    } catch (err) {
+      console.warn(`[server] local http port ${port} is unavailable: ${(err as Error).message}`);
+    }
+  }
+
+  /** Основной сертификат плюс дополнительные (`tlsExtra`), выбираемые по имени из
+   *  запроса: так `https://localhost` получает свой сертификат, а внешнее имя — прежний. */
+  private tlsOptions(main: { cert: string; key: string }): https.ServerOptions {
+    const base = this.readTls(main);
+    const extra = (this.config.tlsExtra ?? []).map((entry) => {
+      const pem = this.readTls(entry);
+      return { x509: new X509Certificate(pem.cert), context: tls.createSecureContext(pem) };
+    });
+    if (extra.length === 0) return base;
+    const own = new X509Certificate(base.cert);
+    return {
+      ...base,
+      SNICallback: (name, done) => {
+        // Основной сертификат старше: дополнительный берётся, только если основной
+        // это имя не покрывает. Без совпадений — основной (undefined).
+        if (own.checkHost(name) !== undefined) return done(null, undefined);
+        done(null, extra.find((e) => e.x509.checkHost(name) !== undefined)?.context);
+      },
+    };
   }
 
   /** config.tls хранит пути к файлам сертификата/ключа — читает их содержимое. */
@@ -250,6 +307,12 @@ export class AgentServer {
       this.server!.close((err) => (err ? reject(err) : resolve()));
     });
     this.server = undefined;
+    const loopback = this.loopback;
+    if (loopback) {
+      this.loopback = undefined;
+      loopback.closeIdleConnections();
+      await new Promise<void>((resolve) => loopback.close(() => resolve()));
+    }
   }
 
   /** Точка входа запроса: маршрутизация с честными кодами ошибок. */
@@ -361,13 +424,15 @@ export class AgentServer {
       this.rateLimit.fail(ip);
       return this.sendJson(res, 401, { error: 'invalid password' });
     }
-    res.setHeader('Set-Cookie', this.cookieHeader());
+    res.setHeader('Set-Cookie', this.cookieHeader(req));
     this.sendJson(res, 200, { ok: true });
   }
 
-  private cookieHeader(): string {
+  private cookieHeader(req: IncomingMessage): string {
     const attrs = ['HttpOnly', 'SameSite=Lax', 'Path=/', `Max-Age=${COOKIE_MAX_AGE}`];
-    if (this.config.tls) attrs.push('Secure');
+    // Secure — по соединению, а не по конфигу: на HTTP-входе loopback такую куку
+    // Safari не сохранил бы вовсе, и вход по паролю там не работал бы.
+    if ((req.socket as { encrypted?: boolean }).encrypted) attrs.push('Secure');
     return `${COOKIE_NAME}=${issueCookie(this.config.cookieSecret)}; ${attrs.join('; ')}`;
   }
 

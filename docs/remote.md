@@ -162,7 +162,7 @@ environment:
 and in Caddy, HTTP/1.1 only with the connection closed after every response (a ready block is
 commented out in `Caddyfile.example`). Without it the browser multiplexes everything over one
 connection, which then dies. A single device can pick the transport by hand:
-`localStorage['termhub.relayTransport'] = 'poll'` (or `'ws'`).
+`localStorage['termhub.relayTransport'] = 'poll'` (or `'ws'`, `'rtc'`).
 
 **2. Agent and CLI: disguise.** The filter decides on the client's first packet and lets
 through connections that start like SSH, RDP or DNS. The relay opens a port that strips such a
@@ -191,6 +191,18 @@ and in the agent's `~/.termhub/config.json`:
 (`TERMHUB_RELAY_TRANSPORT=poll`), slower but needing nothing on the server beyond step 1 — or
 your own tunnel: `ssh -N -L 19443:127.0.0.1:443 user@relay.example.com` plus
 `"relayConnect": "127.0.0.1:19443"` with no disguise.
+
+**4. Browser: WebRTC instead of short requests.** A real long-lived stream, so the echo is
+faster than with short requests. It needs UDP to the relay:
+
+```yaml
+environment:
+  RELAY_CLIENT_TRANSPORT: "rtc"     # if the channel does not open the browser falls back to poll
+  RTC_PORT_RANGE: "9450-9457"       # one port per simultaneous connection
+  RTC_PUBLIC_IP: "203.0.113.10"     # public address when the relay is behind NAT (Docker)
+ports:
+  - "9450-9457:9450-9457/udp"
+```
 
 The agent log shows the chosen way in its startup line:
 `Relay bridge enabled: wss://… (websocket, disguised as ssh, via relay.example.com:9444)`.

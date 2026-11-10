@@ -4,6 +4,7 @@
 import { initCrypto } from '@termhub/protocol';
 import { runSetup } from './setup.js';
 import { readRelayDial, describeDial } from './relay-dial.js';
+import { runLocalCert } from './local-cert.js';
 import { loadConfig, loadIdentity, loadAuthorized, readTerminalMode, TMUX_SOCKET } from './config.js';
 import { SessionService } from './sessions.js';
 import { FileService } from './files.js';
@@ -23,7 +24,7 @@ import { localUrls } from './local-urls.js';
 
 function usage(cmd: string | undefined): string {
   const header = cmd ? `Unknown command: ${cmd}` : 'No command specified';
-  return `${header}\nAvailable: setup, start, share, pair, connect, devices, revoke, service, doctor`;
+  return `${header}\nAvailable: setup, start, share, pair, connect, devices, revoke, service, doctor, local-cert`;
 }
 
 /** Запуск агента: конфиг → SessionService → HTTP/WS-сервер (+ relay-мост). Не завершается. */
@@ -80,6 +81,8 @@ async function runStart(): Promise<number> {
   sessions.startPolling();
   link?.start();
   console.log(`TermHub agent listening on ${config.host}:${port} (${config.tls ? 'https' : 'http'})`);
+  const loopbackPort = server.loopbackPort();
+  if (loopbackPort !== undefined) console.log(`Local http entrance: http://localhost:${loopbackPort}`);
   if (link) console.log(`Relay bridge enabled: ${config.relayUrl} (${describeDial(relayDial)})`);
 
   const shutdown = (): void => {
@@ -118,6 +121,7 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (cmd === 'service') return serviceCommand(argv.slice(1));
   if (cmd === 'doctor') return runDoctor();
+  if (cmd === 'local-cert') return runLocalCert();
   console.error(usage(cmd));
   return 1;
 }

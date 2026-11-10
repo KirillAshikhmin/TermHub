@@ -40,6 +40,11 @@ export interface TermhubConfig {
   sessionRoots: string[];
   /** Пути к файлам сертификата/ключа (не сам PEM-контент); null — обычный http. */
   tls: { cert: string; key: string } | null;
+  /** Дополнительные сертификаты, выбираемые по имени из запроса (SNI) — например, свой
+   *  для `localhost` (`termhub local-cert`). Без `tls` не используются. */
+  tlsExtra?: Array<{ cert: string; key: string }>;
+  /** Второй вход: обычный HTTP только на 127.0.0.1. Поля может не быть — входа нет. */
+  localHttpPort?: number;
   relayUrl: string | null;
   /** Обходы для сетей, где фильтр душит соединение с relay (см. relay-dial.ts). Полей
    *  может не быть — тогда обычный WebSocket прямо по relayUrl. */

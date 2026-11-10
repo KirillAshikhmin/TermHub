@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@termhub/protocol": "*",
+    "werift": "^0.27.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {

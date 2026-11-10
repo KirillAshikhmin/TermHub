@@ -127,3 +127,20 @@ push subscriptions) is created with `0700` permissions; individual files are
 `0600`. The VAPID private key (for Web Push) and the agent's long-term private
 key never leave the Mac — only their public parts are transmitted over the
 network.
+
+## Local entrances: `localhost`
+
+The agent's main certificate is issued for an external name, so the browser rightly complains
+about `https://localhost`. There are two ways to open the agent locally without warnings.
+
+- **A certificate of its own for localhost.** `termhub local-cert` creates a certificate
+  authority and a leaf certificate in `~/.termhub` and adds the leaf to `tlsExtra`; the agent
+  picks it by the requested name while the main certificate keeps working. The authority is
+  constrained to `localhost`, `127.0.0.1` and `::1` inside its own certificate: even a leaked
+  authority key cannot sign another site. You grant the trust yourself with one command the CLI
+  prints (it asks for your password). The leaf lives 800 days; renew with the same command, the
+  authority stays the same.
+- **Plain HTTP on loopback.** `"localHttpPort": 7711` in `config.json` opens a second entrance
+  on `127.0.0.1` and nowhere else. Browsers treat `http://localhost` as a secure context, so the
+  service worker and clipboard work. The password is still required; the traffic is not
+  encrypted, but it never leaves the machine.

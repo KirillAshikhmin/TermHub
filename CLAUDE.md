@@ -271,6 +271,13 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - Превью на карточках — `session-preview.ts`: последняя реплика из ленты, не чаще раза в 10 с на сессию и только при возможности `feed`.
 - Поиск по всем лентам — `feed-search-all.ts`, на клиенте: до 5 страниц по 200 записей с хвоста каждой беседы; прыжок к находке передаётся через `setFeedJump`/`takeFeedJump`, адрес ленты курсора не несёт.
 
+## Локальные входы агента
+
+- `tlsExtra` в config.json — дополнительные сертификаты, выбираемые по имени запроса (`SNICallback` в `server.ts`); основной сертификат старше. `termhub local-cert` (`local-cert.ts`) выпускает через `openssl` свой центр, ограниченный именами localhost/127.0.0.1/::1 (`nameConstraints`), и лист на 800 дней; доверие центру выдаёт владелец командой, которую CLI печатает.
+- `localHttpPort` — второй вход, обычный HTTP только на 127.0.0.1 (адрес привязки не настраивается): `http://localhost` браузеры считают защищённым контекстом. Занятый порт агента не роняет.
+- Кука получает `Secure` по соединению (`req.socket.encrypted`), а не по наличию `tls` в конфиге — иначе вход по паролю на HTTP-входе не работал бы в Safari.
+- Тесты — `packages/agent/test/local-entrance.test.ts` (настоящий `openssl` во временном каталоге).
+
 ## Обход удушения потока (ADR 0034)
 
 Фильтр на пути к relay пропускает ~25 пакетов сервера на соединение и дальше молчит; лимит — на поток, судьбу потока решает первый пакет клиента. Три обхода, все настройкой, по умолчанию выключены.
@@ -280,9 +287,11 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - `packages/relay/src/static.ts` — режим кусков (`RELAY_CHUNKED=1`): `serveChunk` (`/_c/<i>/<путь>` — кусок 8 КБ сжатого файла), `bootIndex` (переписывает `index.html` на загрузчик), `BOOT_JS`, проба `/__sw-chunked`. Собирает куски `packages/web/src/sw-chunks.ts` в `sw.ts`; режим SW узнаёт из `/api/mode` (`chunked`), LAN-агент этого поля не отдаёт.
 - `packages/protocol/src/disguise.ts` — преамбулы `ssh`/`rdp`/`dns` и `prefaceLength`; `packages/relay/src/disguise-port.ts` — порт, срезающий преамбулу (`DISGUISE_PORT`, `DISGUISE_UPSTREAM`).
 - `packages/agent/src/relay-dial.ts` — единственное место, где агент и CLI открывают соединение с relay: `readRelayDial` (config.json: `relayConnect`, `relayDisguise`, `relayTransport`; окружение `TERMHUB_RELAY_*` старше) и `openRelaySocket`. Своего `new WebSocket(relayUrl)` не заводить.
-- `packages/web/src/relay-socket.ts` — то же для браузера: подсказка relay (`/api/mode`, `transport`) и выбор устройства `localStorage['termhub.relayTransport']`.
+- `packages/protocol/src/rtcsock.ts` — `RtcSocket`: тот же интерфейс WebSocket поверх WebRTC DataChannel; сигнализация `POST /relay/rtc {sdp} → {sdp}`, кандидаты клиента вырезаются (`stripCandidates`), по каналу идёт поток `pollsock` кусками `RTC_CHUNK` 16 КБ. `packages/relay/src/rtc.ts` — `RtcHub`/`RtcConn` на `werift` (ленивый импорт, ICE-lite, `RTC_PORT_RANGE`, `RTC_PUBLIC_IP` подставляется в кандидаты ответа — `advertise`).
+- `packages/web/src/relay-socket.ts` — то же для браузера: подсказка relay (`/api/mode`, `transport`: `ws`/`poll`/`rtc`) и выбор устройства `localStorage['termhub.relayTransport']`. `rtc`, не открывшийся с первого раза, на 10 минут уступает `poll`. У агента и CLI режима `rtc` нет — им хватает маскировки.
 - Каждый ответ коротких запросов и кусков обязан закрывать соединение; перед relay для этого нужен HTTP/1.1 без h2 и `Connection: close` (Caddy снимает hop-by-hop заголовок relay, поэтому ставит свой). В HTTP/2 всё едет одним соединением и умирает.
 - Пути `/relay/*` service worker пропускает мимо кэша (`sw-strategy.ts`): это живой поток, а стратегия по умолчанию — cache-first.
+- Тесты WebRTC — `packages/relay/test/rtc.test.ts`: клиентом служит тот же `RtcSocket` поверх `werift` (`opts.peer`), браузерный `RTCPeerConnection` в сюите не участвует.
 - Тесты: `packages/relay/test/bypass.test.ts` (живой relay: оба транспорта в обе стороны, куски, порт маскировки), `packages/agent/test/relay-dial.test.ts`, `packages/web/test/sw-chunks.test.ts`, `packages/protocol/test/{pollsock,disguise}.test.ts`.
 
 ## Объявление возможностей (ADR 0018)
