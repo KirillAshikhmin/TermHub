@@ -14,7 +14,7 @@ import { openTermSettings } from '../src/term-settings';
 describe('term prefs', () => {
   beforeEach(() => {
     localStorage.clear();
-    for (const key of ['termBg', 'termScheme', 'holoAuto']) delete document.documentElement.dataset[key];
+    for (const key of ['termBg', 'holoAuto']) delete document.documentElement.dataset[key];
     document.body.replaceChildren();
   });
 
@@ -59,26 +59,24 @@ describe('term prefs', () => {
     expect(readTermPrefs().fontSize).toBe(13);
     expect(document.querySelector('.th-termview__value')!.textContent).toBe('13 px');
     const segments = document.querySelectorAll('.th-termview .th-segment');
-    // Порядок сегментов: интервал, схема, фон, полоса разделов.
+    // Порядок сегментов: интервал, тема, фон, полоса разделов.
     segments[2]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
     expect(readTermPrefs().bg).toBe('dark');
-    segments[1]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[2]!.click();
-    expect(readTermPrefs().scheme).toBe('light');
     const font = document.querySelector<HTMLSelectElement>('.th-termview__select')!;
     font.value = 'jetbrains';
     font.dispatchEvent(new Event('change'));
     expect(readTermPrefs().font).toBe('jetbrains');
   });
 
-  it('explicit scheme overrides the app theme and is marked on the root', () => {
-    setTermPrefs({ scheme: 'dark' });
-    expect(termIsLight()).toBe(false);
-    expect(document.documentElement.dataset.termScheme).toBe('dark');
-    setTermPrefs({ scheme: 'light' });
+  it('theme choice in the window switches the whole app, not just the terminal', () => {
+    openTermSettings();
+    const theme = document.querySelectorAll('.th-termview .th-segment')[1]!;
+    theme.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[2]!.click();
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
     expect(termIsLight()).toBe(true);
-    expect(document.documentElement.dataset.termScheme).toBe('light');
-    setTermPrefs({ scheme: 'auto' });
-    expect(document.documentElement.dataset.termScheme).toBeUndefined();
+    theme.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(termIsLight()).toBe(false);
   });
 
   it('puts the chosen font ahead of the base stack and ignores unknown ones', () => {

@@ -75,6 +75,13 @@ function cssVar(name: string, fallback: string): string {
   return value || fallback;
 }
 
+/** Claude Code и Codex красят вывод своими truecolor-цветами под тёмный терминал: белые
+ *  маркеры и бледно-голубые ссылки на светлом фоне пропадают. В светлой теме xterm сам
+ *  дотягивает такой текст до читаемого контраста; в тёмной цвета идут как есть. */
+function minContrast(): number {
+  return termIsLight() ? 4.5 : 1;
+}
+
 /** Тема xterm из палитры приложения (совпадает с чромом в light/dark). */
 function xtermTheme(): ITheme {
   const light = termIsLight();
@@ -306,6 +313,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     fontFamily: termFontFamily(prefs.font, cssVar('--font-mono', 'monospace')),
     fontSize: prefs.fontSize,
     lineHeight: prefs.lineHeight,
+    minimumContrastRatio: minContrast(),
     theme: xtermTheme(),
     cursorBlink: true,
     // В control mode локальный scrollback — основной путь: tmux не держит терминал в
@@ -703,6 +711,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     term.options.fontSize = next.fontSize;
     term.options.lineHeight = next.lineHeight;
     term.options.theme = xtermTheme();
+    term.options.minimumContrastRatio = minContrast();
     doFit(); // → term.onResize → sendResize
   });
 

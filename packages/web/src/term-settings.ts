@@ -6,13 +6,12 @@ import {
   FONT_MIN,
   LINE_HEIGHTS,
   TERM_FONTS,
-  TERM_SCHEMES,
   readTermPrefs,
   setTermPrefs,
   type TermBg,
   type TermFont,
-  type TermScheme,
 } from './term-prefs';
+import { THEME_CHOICES, setThemeChoice, themeChoice, type ThemeChoice } from './theme';
 import { iconButton, openModal } from './ui';
 
 function field(label: string, control: HTMLElement): HTMLElement {
@@ -136,11 +135,16 @@ export function openTermSettings(): void {
       prefs = setTermPrefs({ font: fontSelect.value as TermFont });
     });
 
-    const scheme = segment<TermScheme>(
+    // Тема — всего приложения сразу. Пустой setTermPrefs лишь будит открытый терминал,
+    // чтобы он перечитал краски.
+    const scheme = segment<ThemeChoice>(
       t('termview.scheme'),
-      TERM_SCHEMES.map((value) => ({ value, label: t(`termview.scheme_${value}`) })),
-      prefs.scheme,
-      (value) => (prefs = setTermPrefs({ scheme: value })),
+      THEME_CHOICES.map((value) => ({ value, label: t(`termview.scheme_${value}`) })),
+      themeChoice(),
+      (value) => {
+        setThemeChoice(value);
+        prefs = setTermPrefs({});
+      },
     );
     const holo = segment<boolean>(
       t('termview.holo'),

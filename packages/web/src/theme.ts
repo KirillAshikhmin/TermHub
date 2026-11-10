@@ -45,3 +45,30 @@ export function toggleTheme(): Theme {
   apply(next);
   return next;
 }
+
+/** Выбор темы: явная или `auto` (за системой). */
+export type ThemeChoice = Theme | 'auto';
+export const THEME_CHOICES: readonly ThemeChoice[] = ['auto', 'dark', 'light'];
+
+export function themeChoice(): ThemeChoice {
+  try {
+    const saved = localStorage.getItem(LS_KEY);
+    if (saved === 'dark' || saved === 'light') return saved;
+  } catch {
+    // localStorage недоступен — за системой.
+  }
+  return 'auto';
+}
+
+/** Ставит тему всего приложения (чром и терминал вместе) и возвращает действующую. */
+export function setThemeChoice(choice: ThemeChoice): Theme {
+  try {
+    if (choice === 'auto') localStorage.removeItem(LS_KEY);
+    else localStorage.setItem(LS_KEY, choice);
+  } catch {
+    // Персист необязателен.
+  }
+  const theme = choice === 'auto' ? currentTheme() : choice;
+  apply(theme);
+  return theme;
+}

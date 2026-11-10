@@ -105,19 +105,6 @@
 :root[data-term-bg='dark'] {
   --term-bg: var(--bg);
 }
-/* Схема терминала, выбранная явно, не зависит от темы приложения. Новая схема — новый
-   блок здесь плюс строка в TERM_SCHEMES (term-prefs.ts). */
-:root[data-term-scheme='dark'] {
-  --term-bg: #1a2029;
-  --term-fg: #e6edf3;
-}
-:root[data-term-scheme='dark'][data-term-bg='dark'] {
-  --term-bg: #0d1117;
-}
-:root[data-term-scheme='light'] {
-  --term-bg: #f6f8fa;
-  --term-fg: #1f2328;
-}
 
 *,
 *::before,
