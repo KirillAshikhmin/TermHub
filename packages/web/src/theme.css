@@ -1257,6 +1257,65 @@ select.th-input {
   background: var(--bg-hover);
 }
 
+/* Заголовок группы вкладок: виден только в боковой панели. */
+.th-tabs__group {
+  display: none;
+}
+/* Боковая панель сессий (выбор в окне «Вид терминала», только десктоп): полоса вкладок
+   становится столбцом слева, а экраны сессии сдвигаются вправо. Полоса остаётся тем же
+   узлом в шапке — меняется только раскладка, поэтому вкладки, очередь и горячие клавиши
+   работают без второй реализации. */
+@media (min-width: 900px) and (pointer: fine) {
+  :root[data-side-tabs] {
+    --side-w: 232px;
+  }
+  :root[data-side-tabs] .th-ws-view,
+  :root[data-side-tabs] .th-ws-view > .th-term {
+    padding-left: var(--side-w);
+  }
+  :root[data-side-tabs] .th-ws-view .th-tabs {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: var(--side-w);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: 8px 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    z-index: 8;
+  }
+  :root[data-side-tabs] .th-ws-view .th-tab {
+    max-width: none;
+  }
+  :root[data-side-tabs] .th-ws-view .th-tab__btn {
+    flex: 1;
+    text-align: left;
+  }
+  :root[data-side-tabs] .th-ws-view .th-tabs__group {
+    display: block;
+    margin: 10px 4px 2px;
+    color: var(--text-faint);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  :root[data-side-tabs] .th-ws-view .th-tabs__group:first-child {
+    margin-top: 0;
+  }
+  /* Шапка без вкладок: кнопки прижаты вправо. */
+  :root[data-side-tabs] .th-ws-view .th-tabs-wrap {
+    justify-content: flex-end;
+  }
+}
 /* Счётчик сессий, ждущих внимания: клик — к следующей. */
 .th-tabs-queue {
   flex: none;

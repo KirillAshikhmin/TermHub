@@ -3,7 +3,14 @@ import type { SessionInfo } from '@termhub/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setLang, t } from '../src/i18n';
-import { mountSessionTabs, pickNeighbor, renderSessionTab, updateSessionTab } from '../src/tabs';
+import {
+  groupSessions,
+  mountSessionTabs,
+  pickNeighbor,
+  renderSessionTab,
+  sessionGroup,
+  updateSessionTab,
+} from '../src/tabs';
 import { observeBells, recordBell } from '../src/bell-seen';
 import { activity } from '../src/activity';
 import type { Transport } from '../src/transport';
@@ -279,6 +286,28 @@ describe('mountSessionTabs', () => {
     expect(labels).toContain(t('nav.files'));
     tabs.teardown();
     document.body.replaceChildren();
+  });
+
+  it('боковая панель кучкует вкладки по проектам и ставит заголовки групп', async () => {
+    expect(sessionGroup('sprut_app2')).toBe('sprut_app');
+    expect(sessionGroup('TermHub')).toBe('TermHub');
+    expect(sessionGroup('42')).toBe('42');
+    expect(groupSessions([{ name: 'a1' }, { name: 'b' }, { name: 'a2' }]).map((s) => s.name)).toEqual(['a1', 'a2', 'b']);
+
+    const real = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ matches: q.includes('min-width: 900px') })) as typeof window.matchMedia;
+    localStorage.setItem('termhub.sideTabs', '1');
+    const { transport } = stubTransport([[sessionFixture('app1'), sessionFixture('zed'), sessionFixture('app2')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'zed' });
+    await vi.advanceTimersByTimeAsync(0);
+    const strip = tabs.el.querySelector('.th-tabs')!;
+    const seq = [...strip.children].map((n) =>
+      n.classList.contains('th-tabs__group') ? `[${n.textContent}]` : n.querySelector('.th-tab__name')!.textContent,
+    );
+    expect(seq).toEqual(['[app]', 'app1', 'app2', '[zed]', 'zed']);
+    tabs.teardown();
+    localStorage.removeItem('termhub.sideTabs');
+    window.matchMedia = real;
   });
 
   it('вкладка получает метку агента по команде панели', async () => {

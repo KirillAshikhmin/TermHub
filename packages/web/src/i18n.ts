@@ -202,6 +202,9 @@ const ru: Dict = {
     holo: 'Полоса разделов (десктоп)',
     holoAlways: 'Всегда видна',
     holoHover: 'По наведению',
+    tabs: 'Вкладки сессий (десктоп)',
+    tabsTop: 'Сверху',
+    tabsSide: 'Сбоку, по проектам',
   },
   quickkeys: {
     title: 'Быстрые клавиши',
@@ -672,6 +675,9 @@ const en: Dict = {
     holo: 'Section bar (desktop)',
     holoAlways: 'Always visible',
     holoHover: 'On hover',
+    tabs: 'Session tabs (desktop)',
+    tabsTop: 'On top',
+    tabsSide: 'Sidebar, by project',
   },
   quickkeys: {
     title: 'Quick keys',

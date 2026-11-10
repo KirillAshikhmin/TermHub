@@ -24,6 +24,8 @@ export interface TermPrefs {
   font: TermFont;
   /** Полоса разделов сессии (Терминал / Файлы / …) на десктопе видна только по наведению. */
   holoAuto: boolean;
+  /** Вкладки сессий на десктопе — столбцом слева с группировкой по проекту. */
+  sideTabs: boolean;
 }
 
 export const FONT_MIN = 10;
@@ -39,6 +41,7 @@ const LINE_LS_KEY = 'termhub.lineHeight';
 const BG_LS_KEY = 'termhub.termBg';
 const FONT_FAMILY_LS_KEY = 'termhub.termFont';
 const HOLO_AUTO_LS_KEY = 'termhub.holoAuto';
+const SIDE_TABS_LS_KEY = 'termhub.sideTabs';
 
 function read(key: string): string | null {
   try {
@@ -79,6 +82,7 @@ export function readTermPrefs(): TermPrefs {
     bg: read(BG_LS_KEY) === 'dark' ? 'dark' : 'soft',
     font: (Object.keys(TERM_FONTS) as TermFont[]).find((v) => v === read(FONT_FAMILY_LS_KEY)) ?? 'system',
     holoAuto: read(HOLO_AUTO_LS_KEY) === '1',
+    sideTabs: read(SIDE_TABS_LS_KEY) === '1',
   };
 }
 
@@ -109,6 +113,8 @@ function applyAttrs(prefs: TermPrefs): void {
   else delete data.termBg;
   if (prefs.holoAuto) data.holoAuto = '';
   else delete data.holoAuto;
+  if (prefs.sideTabs) data.sideTabs = '';
+  else delete data.sideTabs;
 }
 
 /** Проставляет сохранённый вид терминала при старте приложения. */
@@ -122,6 +128,7 @@ export function setTermPrefs(patch: Partial<TermPrefs>): TermPrefs {
   if (patch.bg !== undefined) write(BG_LS_KEY, patch.bg);
   if (patch.font !== undefined) write(FONT_FAMILY_LS_KEY, patch.font);
   if (patch.holoAuto !== undefined) write(HOLO_AUTO_LS_KEY, patch.holoAuto ? '1' : '0');
+  if (patch.sideTabs !== undefined) write(SIDE_TABS_LS_KEY, patch.sideTabs ? '1' : '0');
   // Поверх прочитанного кладём patch: при недоступном localStorage вид всё равно
   // должен смениться хотя бы на этот сеанс.
   const prefs = { ...readTermPrefs(), ...patch };
@@ -129,4 +136,13 @@ export function setTermPrefs(patch: Partial<TermPrefs>): TermPrefs {
   applyAttrs(prefs);
   for (const fn of listeners) fn(prefs);
   return prefs;
+}
+
+/** Десктоп: широкое окно и мышь. Только там работают боковые вкладки и компактная шапка. */
+export function isDesktop(): boolean {
+  try {
+    return window.matchMedia('(min-width: 900px) and (pointer: fine)').matches;
+  } catch {
+    return false;
+  }
 }

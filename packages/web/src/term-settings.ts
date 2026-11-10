@@ -156,6 +156,16 @@ export function openTermSettings(): void {
       (value) => (prefs = setTermPrefs({ holoAuto: value })),
     );
 
+    const side = segment<boolean>(
+      t('termview.tabs'),
+      [
+        { value: false, label: t('termview.tabsTop') },
+        { value: true, label: t('termview.tabsSide') },
+      ],
+      prefs.sideTabs,
+      (value) => (prefs = setTermPrefs({ sideTabs: value })),
+    );
+
     box.append(
       head,
       field(t('termview.fontSize'), stepper),
@@ -164,6 +174,7 @@ export function openTermSettings(): void {
       scheme,
       bg,
       holo,
+      side,
     );
     return box;
   });

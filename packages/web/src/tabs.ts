@@ -20,6 +20,7 @@ import { hasCap } from './capabilities';
 import { previewOf, refreshPreviews } from './session-preview';
 import { openPalette, type PaletteItem } from './palette';
 import { sfeedHash, sfilesHash, srepoHash, splitHash, termHash } from './routes';
+import { isDesktop, onTermPrefsChange, readTermPrefs } from './term-prefs';
 import { openTermSettings } from './term-settings';
 
 const POLL_INTERVAL = 3000;
@@ -76,6 +77,24 @@ export function mountSessionBar(opts: {
   toggleSlot.className = 'th-termbar__slot';
   bar.append(tabs.el, toggleSlot);
   return { el: bar, toggleSlot, teardown: tabs.teardown };
+}
+
+/** Проект сессии для боковой панели: имя без хвостового номера (`sprut_app2` → `sprut_app`). */
+export function sessionGroup(name: string): string {
+  return name.replace(/[\s._-]*\d+$/, '') || name;
+}
+
+/** Сессии, собранные по проектам: группы идут в порядке первого появления, внутри
+ *  группы порядок прежний — выбранная сортировка не ломается, а лишь кучкуется. */
+export function groupSessions<T extends { name: string }>(sessions: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  for (const s of sessions) {
+    const key = sessionGroup(s.name);
+    const list = groups.get(key);
+    if (list) list.push(s);
+    else groups.set(key, [s]);
+  }
+  return [...groups.values()].flat();
 }
 
 /** Минимум, который нужен табу от сессии (SessionInfo подходит структурно). */
@@ -469,7 +488,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   const render = (input: SessionInfo[]): void => {
     latest = input; // снимок для панели быстрого переключения
     tabsCache.set(opts.transport, input); // переживёт пере-монтирование экрана
-    const sessions = sortSessions(input, sortMode, bellUnseen, readManualOrder());
+    // Боковая панель (десктоп, по выбору) кучкует вкладки по проектам.
+    const side = isDesktop() && readTermPrefs().sideTabs;
+    const sorted = sortSessions(input, sortMode, bellUnseen, readManualOrder());
+    const sessions = side ? groupSessions(sorted) : sorted;
     order = sessions.map((s) => s.name);
     const currentInfo = input.find((session) => session.name === opts.current);
     opts.onCurrentTitle?.(currentInfo ? sessionTitleText(currentInfo.title) || opts.current : opts.current);
@@ -520,6 +542,8 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     syncQueue();
     const focusInside = document.activeElement instanceof Node && strip.contains(document.activeElement);
     if (!focusInside) {
+      // Заголовки групп — не вкладки: снимаем перед перестановкой и ставим заново.
+      for (const head of strip.querySelectorAll('.th-tabs__group')) head.remove();
       let anchor: ChildNode | null = strip.firstChild;
       for (const s of sessions) {
         const el = tabs.get(s.name);
@@ -527,10 +551,27 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
         if (el === anchor) anchor = anchor.nextSibling;
         else strip.insertBefore(el, anchor);
       }
+      if (side) {
+        let prev = '';
+        for (const s of sessions) {
+          const group = sessionGroup(s.name);
+          const el = tabs.get(s.name);
+          if (!el || group === prev) continue;
+          prev = group;
+          const head = document.createElement('div');
+          head.className = 'th-tabs__group';
+          head.textContent = group;
+          strip.insertBefore(head, el);
+        }
+      }
     }
   };
 
   markBellSeen(opts.current); // просмотр при переключении, а не на каждом полле
+  // Переключили «сверху / сбоку» в окне вида — перестраиваем полосу на месте.
+  const unsubscribePrefs = onTermPrefsChange(() => {
+    if (latest.length) render(latest);
+  });
   const unsubscribeBell = onBellChange(() => {
     updateAppBadge(unseenBellCount());
     if (latest.length) render(latest);
@@ -570,6 +611,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     teardown(): void {
       stopped = true;
       unsubscribeBell();
+      unsubscribePrefs();
       window.clearInterval(timer);
       document.removeEventListener('keydown', onKeyDown, true);
     },
