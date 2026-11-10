@@ -28,6 +28,7 @@ import {
   type TerminalMode,
 } from '@termhub/protocol';
 
+import { openRelaySocket } from './relay-socket';
 import { b64, unb64 } from './b64';
 import { parseTerminalState } from './ws-frames';
 import { feedQuery } from './api';
@@ -334,7 +335,7 @@ export class RelayTransport implements Transport {
     if (this.stopped) return;
     this.state = 'connecting';
     this.onLink?.(this.everStreamed ? 'reconnecting' : 'connecting');
-    const ws = new WebSocket(this.url);
+    const ws = openRelaySocket(this.url);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.onopen = (): void => this.send({ t: 'connect', agentId: this.agentId });

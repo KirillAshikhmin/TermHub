@@ -11,12 +11,13 @@
  * - `cache-first` — иммутабельные ассеты (`/assets/*`, хэш-имена vite) и прочая
  *   статика: версионируются именем файла, залипания нет.
  * - `network-only` — `/api/*`: динамика, всегда сеть, кэш не задействуем.
- * - `passthrough` — `/ws/`: WebSocket-апгрейд, SW не проксирует сокеты.
+ * - `passthrough` — `/ws/`: WebSocket-апгрейд, SW не проксирует сокеты; `/relay/` —
+ *   запросы транспорта «короткими запросами» (кэшировать их нельзя: это живой поток).
  */
 export type FetchStrategy = 'network-first' | 'cache-first' | 'network-only' | 'passthrough';
 
 export function pickStrategy(url: URL, mode: string): FetchStrategy {
-  if (url.pathname.startsWith('/ws/')) return 'passthrough';
+  if (url.pathname.startsWith('/ws/') || url.pathname.startsWith('/relay/')) return 'passthrough';
   if (url.pathname.startsWith('/api/')) return 'network-only';
   if (mode === 'navigate') return 'network-first';
   if (url.pathname === '/' || url.pathname.endsWith('/index.html')) return 'network-first';

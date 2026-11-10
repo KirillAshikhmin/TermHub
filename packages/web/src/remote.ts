@@ -17,6 +17,7 @@ import { addAgent, listAgents, loadClientName, loadIdentity, removeAgent, saveAg
 import type { KnownAgent } from './keys';
 import { mountPairing } from './pairing';
 import { RelayTransport } from './relay-transport';
+import { setRelayTransportHint } from './relay-socket';
 import type { LinkStatus } from './relay-transport';
 import type { Transport } from './transport';
 import { openTerminal } from './term';
@@ -69,7 +70,8 @@ function relayWsUrl(): string {
 }
 
 /** Инициализирует крипто/ключи и возвращает контроллер remote-режима. */
-export async function createRemote(opts: { rerender: () => void }): Promise<RemoteController> {
+export async function createRemote(opts: { rerender: () => void; transport?: unknown }): Promise<RemoteController> {
+  setRelayTransportHint(opts.transport);
   await initCrypto();
   const identity: Identity = await loadIdentity();
   const clientName = await loadClientName();

@@ -4,6 +4,7 @@
 // локально: подмешивать webworker-lib к DOM-конфигурации проекта нельзя (конфликты).
 
 import { pickStrategy } from './sw-strategy';
+import { fetchChunked } from './sw-chunks';
 
 const CACHE = 'termhub-shell-v1';
 const SHELL = ['./', './index.html'];
@@ -48,6 +49,33 @@ interface SwScope {
 
 const sw = self as unknown as SwScope;
 
+/** Путь пробы загрузчика relay: «этот service worker умеет собирать файлы из кусков». */
+const CHUNK_PROBE = '/__sw-chunked';
+
+// Режим раздачи кусками объявляет сам сервер (`/api/mode`, поле `chunked`): LAN-агент
+// его не знает вовсе, relay включает настройкой. Спрашиваем один раз на жизнь SW;
+// неудачный запрос ответом не считается — следующий файл спросит заново.
+let chunkedMode: Promise<boolean> | null = null;
+function isChunked(): Promise<boolean> {
+  chunkedMode ??= fetch(new URL('api/mode', sw.registration.scope).href, { cache: 'no-store' })
+    .then((res) => (res.ok ? (res.json() as Promise<{ chunked?: unknown }>) : null))
+    .then((info) => info?.chunked === true)
+    .catch(() => {
+      chunkedMode = null;
+      return false;
+    });
+  return chunkedMode;
+}
+
+/** Сетевой запрос статики: в режиме кусков файл собирается из них, иначе — как обычно. */
+async function fromNetwork(request: Request): Promise<Response> {
+  if (await isChunked()) {
+    const assembled = await fetchChunked(new URL(request.url), sw.registration.scope, (url, init) => fetch(url, init));
+    if (assembled) return assembled;
+  }
+  return fetch(request);
+}
+
 sw.addEventListener('install', (event) => {
   event.waitUntil(
     caches
@@ -73,6 +101,10 @@ sw.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== sw.location.origin) return;
+  if (url.pathname.endsWith(CHUNK_PROBE)) {
+    event.respondWith(isChunked().then((ok) => new Response(ok ? 'ok' : 'no', { status: ok ? 200 : 404 })));
+    return;
+  }
   const strategy = pickStrategy(url, request.mode);
   // /ws/ — WebSocket-апгрейд, SW не проксирует сокеты: отдаём браузеру напрямую.
   if (strategy === 'passthrough') return;
@@ -151,7 +183,7 @@ async function cacheFirst(request: Request): Promise<Response> {
   const cache = await caches.open(CACHE);
   const cached = await cache.match(request);
   if (cached) return cached;
-  const response = await fetch(request);
+  const response = await fromNetwork(request);
   if (response.ok) await cache.put(request, response.clone());
   return response;
 }

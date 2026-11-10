@@ -3,6 +3,7 @@
 
 import { initCrypto } from '@termhub/protocol';
 import { runSetup } from './setup.js';
+import { readRelayDial, describeDial } from './relay-dial.js';
 import { loadConfig, loadIdentity, loadAuthorized, readTerminalMode, TMUX_SOCKET } from './config.js';
 import { SessionService } from './sessions.js';
 import { FileService } from './files.js';
@@ -39,10 +40,12 @@ async function runStart(): Promise<number> {
 
   // Relay-мост поднимается только если задан relayUrl (иначе агент — чисто LAN).
   let relayLink: RelayLink | undefined;
+  const relayDial = readRelayDial(config);
   if (config.relayUrl) {
     await initCrypto();
     relayLink = new RelayLink({
       url: config.relayUrl,
+      dial: relayDial,
       identity: loadIdentity(),
       authorized: () => loadAuthorized(),
       sessions,
@@ -77,7 +80,7 @@ async function runStart(): Promise<number> {
   sessions.startPolling();
   link?.start();
   console.log(`TermHub agent listening on ${config.host}:${port} (${config.tls ? 'https' : 'http'})`);
-  if (link) console.log(`Relay bridge enabled: ${config.relayUrl}`);
+  if (link) console.log(`Relay bridge enabled: ${config.relayUrl} (${describeDial(relayDial)})`);
 
   const shutdown = (): void => {
     sessions.stopPolling();

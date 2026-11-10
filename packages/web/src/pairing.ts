@@ -10,6 +10,7 @@ import {
   parsePairingCode,
   sealPair,
 } from '@termhub/protocol';
+import { openRelaySocket } from './relay-socket';
 import type { Identity } from '@termhub/protocol';
 
 import { b64, unb64 } from './b64';
@@ -152,7 +153,7 @@ export function mountPairing(root: HTMLElement, opts: PairingOpts): () => void {
     submit.replaceChildren(spinner());
     teardownSocket();
 
-    const sock = new WebSocket(opts.wsUrl);
+    const sock = openRelaySocket(opts.wsUrl);
     ws = sock;
 
     timer = setTimeout(() => fail(t('pair.errorTimeout')), PAIR_TIMEOUT_MS);

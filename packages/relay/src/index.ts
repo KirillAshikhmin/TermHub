@@ -11,7 +11,8 @@ import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { verify, fingerprint, isPairRoomId } from '@termhub/protocol';
 import { Rooms, type AgentConn, MAX_PAIR_ATTEMPTS } from './rooms.js';
-import { serveStatic } from './static.js';
+import { serveStatic, serveChunk, BOOT_JS, CHUNK_PROBE_PATH } from './static.js';
+import { PollHub } from './poll.js';
 
 /** Максимальный размер WS-сообщения; больше → соединение закрывается с 1009.
  *  16 МБ — чтобы вмещать чтение файлов браузером (картинка до 10 МБ → base64
@@ -45,6 +46,12 @@ export interface RelayOptions {
   trustProxy?: boolean;
   /** Заглушить stdout-логирование (тесты). */
   silent?: boolean;
+  /** Раздавать бандл кусками через service worker (сети, где поток душат после пары
+   *  десятков пакетов). По умолчанию — env RELAY_CHUNKED==='1'. */
+  chunked?: boolean;
+  /** Какой транспорт предлагать браузеру: 'ws' (по умолчанию) или 'poll' — короткими
+   *  запросами. По умолчанию — env RELAY_CLIENT_TRANSPORT. Агенту и CLI не указ. */
+  clientTransport?: 'ws' | 'poll';
 }
 
 export interface RelayHandle {
@@ -87,9 +94,21 @@ class RelayServer {
   private readonly rateSweep: ReturnType<typeof setInterval>;
   private readonly heartbeat: ReturnType<typeof setInterval>;
   private readonly server: Server;
+  private readonly poll: PollHub;
+  private readonly chunked: boolean;
+  private readonly clientTransport: 'ws' | 'poll';
 
   constructor(opts: RelayOptions) {
     this.opts = opts;
+    this.chunked = opts.chunked ?? process.env.RELAY_CHUNKED === '1';
+    this.clientTransport = opts.clientTransport ?? (process.env.RELAY_CLIENT_TRANSPORT === 'poll' ? 'poll' : 'ws');
+    // Тот же путь, что у WebSocket: клиенту хватает одного адреса relay на оба способа.
+    this.poll = new PollHub(WS_PATH, MAX_MESSAGE, (conn, req) => {
+      const ip = this.clientIp(req);
+      if (!this.rateAllow(ip)) return false;
+      this.onConnection(conn as unknown as WebSocket, ip);
+      return true;
+    });
     this.pairTtl = opts.pairTtlMs ?? DEFAULT_PAIR_TTL;
     this.rateCfg = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
     this.trustProxy = opts.trustProxy ?? process.env.RELAY_TRUST_PROXY === '1';
@@ -129,6 +148,7 @@ class RelayServer {
     clearInterval(this.rateSweep);
     clearInterval(this.heartbeat);
     for (const ws of this.wss.clients) ws.terminate();
+    this.poll.close();
     this.rooms.dispose();
     this.wss.close();
     await new Promise<void>((resolve, reject) => this.server.close((err) => (err ? reject(err) : resolve())));
@@ -151,7 +171,10 @@ class RelayServer {
       res.end(buf);
       return;
     }
-    if (method === 'GET' && pathname === '/api/mode') return this.sendJson(res, 200, { mode: 'relay' });
+    if (this.poll.handle(req, res, url)) return;
+    if (method === 'GET' && pathname === '/api/mode') {
+      return this.sendJson(res, 200, { mode: 'relay', chunked: this.chunked, transport: this.clientTransport });
+    }
     if (pathname.startsWith('/api/')) return this.sendJson(res, 404, { error: 'not found' });
     if (method !== 'GET') return this.sendJson(res, 405, { error: 'method not allowed' });
 
@@ -161,7 +184,24 @@ class RelayServer {
     } catch {
       return this.sendJson(res, 400, { error: 'bad path' });
     }
-    serveStatic(res, decoded, this.opts.staticDir);
+    // Проба «умеет ли service worker куски»: настоящий ответ даёт сам SW, до сети
+    // запрос доходит только без него — и обязан получить отказ, а не index.html.
+    if (decoded === CHUNK_PROBE_PATH) return this.sendJson(res, 404, { error: 'not found' });
+    if (this.chunked) {
+      if (decoded === '/boot.js') {
+        const buf = Buffer.from(BOOT_JS, 'utf8');
+        res.writeHead(200, {
+          'Content-Type': 'text/javascript; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Content-Length': buf.length,
+          Connection: 'close',
+        });
+        res.end(buf);
+        return;
+      }
+      if (decoded.startsWith('/_c/')) return serveChunk(res, decoded, this.opts.staticDir);
+    }
+    serveStatic(res, decoded, this.opts.staticDir, this.chunked);
   }
 
   private sendJson(res: ServerResponse, status: number, body: unknown): void {

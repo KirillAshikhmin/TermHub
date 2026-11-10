@@ -158,15 +158,18 @@ async function boot(): Promise<void> {
   initAudioUnlock();
 
   let mode: 'lan' | 'relay' = 'lan';
+  let relayTransport: unknown;
   try {
-    mode = (await api.mode()).mode;
+    const info = await api.mode();
+    mode = info.mode;
+    relayTransport = info.transport;
   } catch {
     // /api/mode недоступен — работаем как LAN (экран входа сам покажет ошибку сети).
   }
 
   if (mode === 'relay') {
     const { createRemote } = await import('./remote');
-    remote = await createRemote({ rerender: render });
+    remote = await createRemote({ rerender: render, transport: relayTransport });
   } else {
     lanTransport = new LanTransport();
   }

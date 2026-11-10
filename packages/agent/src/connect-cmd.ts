@@ -11,6 +11,7 @@
 // TTY-обёртка — нет.
 
 import { WebSocket } from 'ws';
+import { openRelaySocket, readRelayDial } from './relay-dial.js';
 import { randomBytes } from 'node:crypto';
 import {
   decodeFrame,
@@ -156,7 +157,7 @@ class RemoteConn implements RemoteAgent {
     // Не рушим процесс unhandledRejection, если вызывающий не подписался на ready.
     this.ready.catch(() => {});
 
-    const ws = new WebSocket(relayUrl);
+    const ws = openRelaySocket(relayUrl, readRelayDial());
     this.ws = ws;
     ws.on('open', () => this.send({ t: 'connect', agentId: this.agentId }));
     ws.on('message', (data: Buffer, isBinary: boolean) => this.onMessage(data, isBinary));

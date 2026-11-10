@@ -4,6 +4,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startRelay } from './index.js';
+import { startDisguiseProxy } from './disguise-port.js';
 
 const DEFAULT_PORT = 9720;
 
@@ -18,4 +19,13 @@ export async function main(): Promise<void> {
   const staticDir = resolveStaticDir();
   const handle = await startRelay({ port, staticDir });
   console.log(`[relay] listening on :${handle.port} (static: ${staticDir})`);
+  // Порт маскировки (см. disguise-port.ts): DISGUISE_PORT включает его, DISGUISE_UPSTREAM
+  // говорит, куда отдавать поток после преамбулы, — по умолчанию на сам relay, но за
+  // TLS-прокси нужен адрес прокси (например caddy:9443), иначе клиент придёт без TLS.
+  const disguisePort = Number(process.env.DISGUISE_PORT ?? 0);
+  if (disguisePort > 0) {
+    const [host, portText] = (process.env.DISGUISE_UPSTREAM ?? `127.0.0.1:${handle.port}`).split(':');
+    const proxy = await startDisguiseProxy({ port: disguisePort, upstreamHost: host, upstreamPort: Number(portText) });
+    console.log(`[relay] disguise port :${proxy.port} → ${host}:${portText}`);
+  }
 }

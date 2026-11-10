@@ -8,6 +8,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { WebSocket } from 'ws';
+import { openRelaySocket, type RelayDial } from './relay-dial.js';
 import { randomBytes } from 'node:crypto';
 
 import {
@@ -190,6 +191,7 @@ interface ReadyWaiter {
 /** Мост агента через relay: одно WS-соединение, реконнект, пейринг, клиенты. */
 export class RelayLink {
   private readonly url: string;
+  private readonly dial: RelayDial;
   private readonly identity: Identity;
   private readonly authorized: () => AuthorizedDevice[];
   private readonly sessions: SessionService;
@@ -233,6 +235,8 @@ export class RelayLink {
 
   constructor(opts: {
     url: string;
+    /** Способ соединения с relay (маскировка, свой адрес, короткие запросы); по умолчанию — прямой WebSocket. */
+    dial?: RelayDial;
     identity: Identity;
     authorized: () => AuthorizedDevice[];
     sessions: SessionService;
@@ -260,6 +264,7 @@ export class RelayLink {
     feed?: FeedReader;
   }) {
     this.url = opts.url;
+    this.dial = opts.dial ?? {};
     this.identity = opts.identity;
     this.authorized = opts.authorized;
     this.sessions = opts.sessions;
@@ -437,7 +442,7 @@ export class RelayLink {
   private connect(): void {
     if (this.stopped) return;
     this.registered = false;
-    const ws = new WebSocket(this.url);
+    const ws = openRelaySocket(this.url, this.dial);
     this.ws = ws;
     ws.on('open', () => this.send({ t: 'register', edPub: toB64(this.identity.edPub) }));
     ws.on('message', (data: Buffer, isBinary: boolean) => this.onMessage(ws, data, isBinary));

@@ -433,7 +433,7 @@ describe('relay http', () => {
     expect(await health.text()).toBe('ok');
     const mode = await fetch(`http://127.0.0.1:${h.port}/api/mode`);
     expect(mode.status).toBe(200);
-    expect(await mode.json()).toEqual({ mode: 'relay' });
+    expect(await mode.json()).toEqual({ mode: 'relay', chunked: false, transport: 'ws' });
   });
 
   it('без статики → отдаёт HTML-заглушку', async () => {

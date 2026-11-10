@@ -15,6 +15,7 @@
 
 import os from 'node:os';
 import { WebSocket } from 'ws';
+import { openRelaySocket, readRelayDial } from './relay-dial.js';
 import {
   fingerprint,
   fromB64,
@@ -58,7 +59,7 @@ export function runPair(opts: RunPairOpts): Promise<KnownAgent> {
   const deviceName = opts.deviceName ?? os.hostname();
 
   return new Promise<KnownAgent>((resolve, reject) => {
-    const ws = new WebSocket(opts.relayUrl);
+    const ws = openRelaySocket(opts.relayUrl, readRelayDial());
     let settled = false;
 
     const finish = (err: Error | null, agent?: KnownAgent): void => {

@@ -41,6 +41,11 @@ export interface TermhubConfig {
   /** Пути к файлам сертификата/ключа (не сам PEM-контент); null — обычный http. */
   tls: { cert: string; key: string } | null;
   relayUrl: string | null;
+  /** Обходы для сетей, где фильтр душит соединение с relay (см. relay-dial.ts). Полей
+   *  может не быть — тогда обычный WebSocket прямо по relayUrl. */
+  relayConnect?: string;
+  relayDisguise?: 'ssh' | 'rdp' | 'dns';
+  relayTransport?: 'ws' | 'poll';
   vapid: { publicKey: string; privateKey: string; subject: string };
   locale: null | 'ru' | 'en';
   /** Способ подключения терминала к tmux. Поля может не быть — это `control`;

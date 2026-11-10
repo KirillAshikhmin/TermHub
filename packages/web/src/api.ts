@@ -12,6 +12,8 @@ export interface DirGroup {
 export interface ModeInfo {
   mode: 'lan' | 'relay';
   host: string;
+  /** Только relay: каким сокетом ходить — 'ws' или 'poll' (короткими запросами). */
+  transport?: string;
 }
 
 /** Пресет создаваемой сессии. «zsh» — оболочка, остальные запускают одноимённую

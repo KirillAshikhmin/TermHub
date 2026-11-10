@@ -16,6 +16,14 @@
       "types": "./dist/capabilities.d.ts",
       "default": "./dist/capabilities.js"
     },
+    "./disguise": {
+      "types": "./dist/disguise.d.ts",
+      "default": "./dist/disguise.js"
+    },
+    "./pollsock": {
+      "types": "./dist/pollsock.d.ts",
+      "default": "./dist/pollsock.js"
+    },
     "./session-title": {
       "types": "./dist/session-title.d.ts",
       "default": "./dist/session-title.js"
