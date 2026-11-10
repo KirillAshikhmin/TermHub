@@ -84,7 +84,8 @@ import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
 import { runGradleAction } from './gradle-action.js';
 import { buildSessionName } from './gradle.js';
-import { sessionFeed, type FeedResult } from './session-feed.js';
+import { sessionFeed, sessionUsage, type FeedResult } from './session-feed.js';
+import type { UsageReader } from './transcript-usage.js';
 import { feedPage, feedSession, type FeedReader } from './feed-request.js';
 import { VcsService } from './vcs.js';
 
@@ -209,6 +210,7 @@ export class RelayLink {
   /** Лента сессии: имя сессии → страница беседы её агента. Тот же вызов делает LAN,
    *  поэтому ответ обоих транспортов — один и тот же объект. */
   private readonly feed: FeedReader;
+  private readonly usage: UsageReader;
   private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
@@ -262,6 +264,7 @@ export class RelayLink {
     ptyPool?: PtyPool;
     /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
     feed?: FeedReader;
+    usage?: UsageReader;
   }) {
     this.url = opts.url;
     this.dial = opts.dial ?? {};
@@ -282,6 +285,7 @@ export class RelayLink {
     // Сокет передаём явно: по умолчанию лента (как resolve и SessionService) его не
     // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
     this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
+    this.usage = opts.usage ?? ((session) => sessionUsage(session, { socketName: this.socketName }));
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -1106,7 +1110,7 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, refused));
       return;
     }
-    this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req)));
+    this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req, this.usage)));
   }
 
   /** Листинг директории файлового браузера через relay. Ошибка (вне корня) —

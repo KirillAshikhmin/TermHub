@@ -7,6 +7,7 @@
   --bg-elev: #161b22;
   /* Фон области терминала: чуть светлее чрома, как в системном терминале. */
   --term-bg: #1a2029;
+  --term-bg-contrast: #0d1117;
   --term-fg: var(--text);
   --bg-elev-2: #1b2230;
   --bg-hover: #212a3a;
@@ -50,7 +51,8 @@
   :root:not([data-theme]) {
     --bg: #f6f8fa;
     --bg-elev: #ffffff;
-    --term-bg: #f6f8fa;
+    --term-bg: #f0f2f5;
+    --term-bg-contrast: #ffffff;
     --bg-elev-2: #eef1f5;
     --bg-hover: #e6eaf0;
     --border: #d5dbe2;
@@ -78,7 +80,8 @@
 :root[data-theme='light'] {
   --bg: #f6f8fa;
   --bg-elev: #ffffff;
-  --term-bg: #f6f8fa;
+  --term-bg: #f0f2f5;
+  --term-bg-contrast: #ffffff;
   --bg-elev-2: #eef1f5;
   --bg-hover: #e6eaf0;
   --border: #d5dbe2;
@@ -101,9 +104,10 @@
   --shadow: 0 1px 2px rgba(140, 149, 159, 0.2), 0 12px 28px rgba(140, 149, 159, 0.18);
   --shadow-sm: 0 1px 2px rgba(140, 149, 159, 0.25);
 }
-/* Выбор «Тёмный фон» в окне «Вид терминала»: область терминала сливается с чромом. */
-:root[data-term-bg='dark'] {
-  --term-bg: var(--bg);
+/* Фон терминала «Контрастный» (окно «Вид терминала»), один выбор на обе темы: в тёмной —
+   самый тёмный, в светлой — чисто белый. «Мягкий» — значение по умолчанию из палитры. */
+:root[data-term-bg='contrast'] {
+  --term-bg: var(--term-bg-contrast);
 }
 
 *,
@@ -1159,9 +1163,9 @@ select.th-input {
 /* Метка агента — маленькая буква перед подписью вкладки (C — Claude, X — Codex,
    O — opencode). Цветная черта читалась как «сессия ждёт реакции», поэтому метка —
    буква: она называет агента, а не состояние. */
-.th-tab[data-agent]::before {
-  content: var(--tab-agent-letter);
+.th-tab__agent {
   flex: none;
+  cursor: help;
   margin-left: 6px;
   padding: 1px 4px;
   border: 1px solid color-mix(in srgb, var(--tab-agent) 45%, transparent);
@@ -1172,17 +1176,17 @@ select.th-input {
   line-height: 1.2;
   opacity: 0.85;
 }
-.th-tab[data-agent='claude'] {
+.th-tab[data-agent='claude'],
+.th-split__pane[data-agent='claude'] {
   --tab-agent: var(--claude);
-  --tab-agent-letter: 'C';
 }
-.th-tab[data-agent='codex'] {
+.th-tab[data-agent='codex'],
+.th-split__pane[data-agent='codex'] {
   --tab-agent: var(--accent);
-  --tab-agent-letter: 'X';
 }
-.th-tab[data-agent='opencode'] {
+.th-tab[data-agent='opencode'],
+.th-split__pane[data-agent='opencode'] {
   --tab-agent: var(--opencode);
-  --tab-agent-letter: 'O';
 }
 /* Десктоп: шапка сессии ниже и кнопки мельче — высота уходит терминалу; подпись вкладки
    остаётся в две строки. На тач-экране шапка прежняя, под палец. */
@@ -1432,27 +1436,8 @@ select.th-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.th-split__pane[data-agent] .th-split__head::before {
-  flex: none;
-  padding: 1px 4px;
-  border-radius: 4px;
-  font-size: 0.62rem;
-  font-weight: 700;
-  line-height: 1.2;
-  border: 1px solid currentColor;
-  opacity: 0.8;
-}
-.th-split__pane[data-agent='claude'] .th-split__head::before {
-  content: 'C';
-  color: var(--claude);
-}
-.th-split__pane[data-agent='codex'] .th-split__head::before {
-  content: 'X';
-  color: var(--accent);
-}
-.th-split__pane[data-agent='opencode'] .th-split__head::before {
-  content: 'O';
-  color: var(--opencode);
+.th-split__head .th-tab__agent {
+  margin-left: 0;
 }
 .th-split__head .th-iconbtn {
   min-width: 26px;
@@ -1476,6 +1461,89 @@ select.th-input {
 }
 .th-split__body .th-term__body {
   padding: 6px 10px 0;
+}
+/* Расход по сессиям */
+.th-overlay .th-modal:has(.th-usage__table) {
+  max-width: 760px;
+}
+.th-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.th-usage__status {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+.th-usage__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+.th-usage__table th,
+.th-usage__table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.th-usage__table th:first-child {
+  text-align: left;
+  font-weight: 400;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.th-usage__table thead th {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.th-usage__table thead tr:first-child th {
+  text-align: center;
+}
+.th-usage__sum th,
+.th-usage__sum td {
+  font-weight: 700;
+  border-bottom: none;
+}
+/* Поиск по лентам всех сессий */
+.th-feedall {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.th-feedall__status {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.th-feedall__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+.th-feedall__group {
+  margin-top: 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.th-feedall__row {
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.th-feedall__row:hover {
+  background: var(--bg-hover);
 }
 /* Командная палитра */
 .th-palette {

@@ -40,7 +40,7 @@ import { SessionService } from '../src/sessions.js';
 import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
 import { saveAuthorized, loadAuthorized } from '../src/config.js';
-import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON } from './feed-fixture.js';
+import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON, USAGE_PAGE, USAGE_PAGE_JSON } from './feed-fixture.js';
 import type { AuthorizedDevice } from '../src/config.js';
 
 /** Доступен ли tmux (иначе happy-LIST пропускается). */
@@ -1290,6 +1290,7 @@ describe('RelayLink — лента сессии через relay', () => {
   let feedId: string;
   let feedLink: RelayLink;
   let asked: { session: string; opts: Record<string, unknown> }[] = [];
+  const usageAsked: string[] = [];
   /** Подставная лента бросает вместо ответа: сорванное чтение обязано доехать телом. */
   let crash = false;
 
@@ -1306,6 +1307,10 @@ describe('RelayLink — лента сессии через relay', () => {
         if (crash) throw new Error('transcript vanished');
         asked.push({ session, opts: opts as Record<string, unknown> });
         return FEED_PAGE;
+      },
+      usage: async (session) => {
+        usageAsked.push(session);
+        return USAGE_PAGE;
       },
     });
     feedLink.start();
@@ -1380,6 +1385,21 @@ describe('RelayLink — лента сессии через relay', () => {
     expect(frame?.type).toBe(FrameType.FeedResult);
     expect(td.decode(frame!.payload)).toBe(FEED_PAGE_JSON);
     expect(asked.map((a) => a.session)).toEqual([OWN_SESSION]);
+  }, 25000);
+
+  it('флаг usage: расход своей сессии тем же кадром и тем же JSON, что по LAN; чужой — отказ', async () => {
+    usageAsked.length = 0;
+    const c = await feedClient({ session: OWN_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, usage: 1 }));
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(frame!.payload)).toBe(USAGE_PAGE_JSON);
+    expect(usageAsked).toEqual([OWN_SESSION]);
+
+    c.send(jsonFrame(FrameType.Feed, 0, { session: 'someone-else', usage: 1 }));
+    const refused = await c.next();
+    expect(frameJson<{ ok: boolean; reason: string }>(refused!).reason).toBe('forbidden');
+    expect(usageAsked).toEqual([OWN_SESSION]);
   }, 25000);
 
   it('пустые значения в запросе равносильны отсутствующим, как и в URL §9', async () => {

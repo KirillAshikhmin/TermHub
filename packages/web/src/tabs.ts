@@ -13,15 +13,17 @@ import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
-import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
+import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking, type SessionAgent } from './session-status';
 import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { hasCap } from './capabilities';
+import { openFeedSearch } from './feed-search-all';
 import { previewOf, refreshPreviews } from './session-preview';
 import { openPalette, type PaletteItem } from './palette';
 import { sfeedHash, sfilesHash, srepoHash, splitHash, termHash } from './routes';
 import { isDesktop, onTermPrefsChange, readTermPrefs } from './term-prefs';
 import { openTermSettings } from './term-settings';
+import { openUsage } from './usage';
 
 const POLL_INTERVAL = 3000;
 
@@ -106,6 +108,13 @@ export interface TabInfo {
   command?: string;
 }
 
+/** Буква и полное имя агента для метки на вкладке. */
+export const AGENT_MARK: Record<SessionAgent, { letter: string; name: string }> = {
+  claude: { letter: 'C', name: 'Claude Code' },
+  codex: { letter: 'X', name: 'Codex' },
+  opencode: { letter: 'O', name: 'opencode' },
+};
+
 /** Чистый рендер таба сессии: кнопка-имя (переключение) + крестик (завершить). */
 export function renderSessionTab(
   info: TabInfo,
@@ -189,9 +198,23 @@ export function updateSessionTab(
   showActivity = false,
 ): void {
   tab.classList.toggle('is-active', active);
+  // Метка агента — буква с подсказкой: что за агент работает в сессии.
   const agent = sessionAgent(info.command ?? '');
-  if (agent) tab.dataset.agent = agent;
-  else delete tab.dataset.agent;
+  let mark = tab.querySelector<HTMLElement>('.th-tab__agent');
+  if (agent) {
+    tab.dataset.agent = agent;
+    if (!mark) {
+      mark = document.createElement('span');
+      mark.className = 'th-tab__agent';
+      tab.prepend(mark);
+    }
+    mark.textContent = AGENT_MARK[agent].letter;
+    mark.title = AGENT_MARK[agent].name;
+    mark.setAttribute('aria-label', AGENT_MARK[agent].name);
+  } else {
+    delete tab.dataset.agent;
+    mark?.remove();
+  }
   const main = tab.querySelector<HTMLElement>('.th-tab__btn');
   main?.setAttribute('aria-current', active ? 'true' : 'false');
   setTabActivityDot(main, translate, showActivity);
@@ -337,7 +360,11 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       items.push({ label: t('nav.files'), hint: opts.current, hash: sfilesHash(opts.current, '') });
       items.push({ label: t('nav.repo'), hint: opts.current, hash: srepoHash(opts.current, '') });
     }
-    if (hasCap('feed')) items.push({ label: t('holo.feed'), hint: opts.current, hash: sfeedHash(opts.current) });
+    if (hasCap('feed')) {
+      items.push({ label: t('holo.feed'), hint: opts.current, hash: sfeedHash(opts.current) });
+      items.push({ label: t('feedall.title'), run: () => openFeedSearch(opts.transport) });
+    }
+    if (hasCap('usage')) items.push({ label: t('usage.title'), run: () => openUsage(opts.transport) });
     if (!scope) items.push({ label: t('dashboard.newSession'), run: opts.onCreate });
     items.push({ label: t('termview.title'), run: openTermSettings });
     items.push({ label: t('palette.dashboard'), hash: '#/' });

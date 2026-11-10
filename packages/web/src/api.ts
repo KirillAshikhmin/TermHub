@@ -141,6 +141,8 @@ export interface FeedOptions {
   before?: string;
   after?: string;
   around?: string;
+  /** Вместо страницы ленты вернуть расход сессии (usage.ts; возможность `usage`). */
+  usage?: true;
 }
 
 /** Запрос страницы на проводе: один перечень опций на оба транспорта — LAN раскладывает
@@ -154,6 +156,7 @@ export function feedQuery(session: string, opts: FeedOptions): Record<string, st
   if (opts.before) query.before = opts.before;
   if (opts.after) query.after = opts.after;
   if (opts.around) query.around = opts.around;
+  if (opts.usage) query.usage = 1;
   return query;
 }
 

@@ -22,7 +22,8 @@ import { runRepoAction } from './vcs.js';
 import type { VcsService } from './vcs.js';
 import { runGradleAction } from './gradle-action.js';
 import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
-import { sessionFeed } from './session-feed.js';
+import { sessionFeed, sessionUsage } from './session-feed.js';
+import type { UsageReader } from './transcript-usage.js';
 import { feedPage, type FeedReader } from './feed-request.js';
 import { AGENT_CAPS, intersect, parseCaps } from '@termhub/protocol';
 
@@ -162,6 +163,7 @@ export class AgentServer {
   /** Лента сессии: имя сессии → страница беседы её агента. Тот же вызов делает relay,
    *  поэтому ответ обоих транспортов — один и тот же объект. */
   private readonly feed: FeedReader;
+  private readonly usage: UsageReader;
   /** Пересечение возможностей с последним клиентом, объявившимся по LAN (ADR 0018),
    *  и время обмена. Relay ведёт такой же счёт у себя (RelayLink.status), диагностика
    *  показывает более поздний: клиент бывает и по LAN, и через relay, а знать нужно
@@ -188,6 +190,7 @@ export class AgentServer {
     staticDir?: string;
     /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
     feed?: FeedReader;
+    usage?: UsageReader;
   }) {
     this.config = opts.config;
     this.sessions = opts.sessions;
@@ -202,6 +205,7 @@ export class AgentServer {
     // Сокет передаём явно: по умолчанию лента (как resolve и SessionService) его не
     // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
     this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
+    this.usage = opts.usage ?? ((session) => sessionUsage(session, { socketName: this.socketName }));
   }
 
   /** Регистрирует обработчик терминальных WS (Task 6). */
@@ -442,13 +446,18 @@ export class AgentServer {
    *  произвольного пути через неё нет. */
   private async feedApi(res: ServerResponse, url: URL): Promise<void> {
     const q = url.searchParams;
-    const result = await feedPage(this.feed, {
-      session: q.get('session'),
-      limit: q.get('limit'),
-      before: q.get('before'),
-      after: q.get('after'),
-      around: q.get('around'),
-    });
+    const result = await feedPage(
+      this.feed,
+      {
+        session: q.get('session'),
+        limit: q.get('limit'),
+        before: q.get('before'),
+        after: q.get('after'),
+        around: q.get('around'),
+        usage: q.get('usage'),
+      },
+      this.usage,
+    );
     return this.sendJson(res, 200, result);
   }
 

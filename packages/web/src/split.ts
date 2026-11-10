@@ -6,6 +6,7 @@ import { resetDocumentTitle } from './document-title';
 import { t } from './i18n';
 import { SPLIT_MAX, splitHash, termHash } from './routes';
 import { sessionAgent, sessionTitleText, sessionWorking } from './session-status';
+import { AGENT_MARK } from './tabs';
 import { openTermSettings } from './term-settings';
 import { mountTerminal, type TerminalHandle } from './term';
 import type { Transport } from './transport';
@@ -49,7 +50,7 @@ export function mountSplit(root: HTMLElement, sessions: string[], transport: Tra
   const grid = document.createElement('div');
   grid.className = 'th-split__grid';
   const terms: TerminalHandle[] = [];
-  const heads = new Map<string, { pane: HTMLElement; name: HTMLElement }>();
+  const heads = new Map<string, { pane: HTMLElement; name: HTMLElement; mark: HTMLElement }>();
   for (const session of sessions) {
     const pane = document.createElement('section');
     pane.className = 'th-split__pane';
@@ -63,12 +64,15 @@ export function mountSplit(root: HTMLElement, sessions: string[], transport: Tra
       const rest = sessions.filter((s) => s !== session);
       location.hash = rest.length > 1 ? splitHash(rest) : termHash(rest[0]!);
     });
-    head.append(name, open, close);
+    const mark = document.createElement('span');
+    mark.className = 'th-tab__agent';
+    mark.hidden = true;
+    head.append(mark, name, open, close);
     const body = document.createElement('div');
     body.className = 'th-split__body';
     pane.append(head, body);
     grid.append(pane);
-    heads.set(session, { pane, name });
+    heads.set(session, { pane, name, mark });
     const handle = mountTerminal(body, session, transport, { embedded: true });
     terms.push(handle);
     // Клик по заголовку панели — фокус в её терминал; заодно звонок считается прочитанным.
@@ -101,8 +105,12 @@ export function mountSplit(root: HTMLElement, sessions: string[], transport: Tra
         if (focused) markBellSeen(s.name);
         head.pane.classList.toggle('has-bell', !focused && bellUnseen(s.name));
         const agent = sessionAgent(s.command);
-        if (agent) head.pane.dataset.agent = agent;
-        else delete head.pane.dataset.agent;
+        head.mark.hidden = !agent;
+        if (agent) {
+          head.pane.dataset.agent = agent;
+          head.mark.textContent = AGENT_MARK[agent].letter;
+          head.mark.title = AGENT_MARK[agent].name;
+        } else delete head.pane.dataset.agent;
       }
       const free = list.filter((s) => !sessions.includes(s.name));
       add.hidden = sessions.length >= SPLIT_MAX || free.length === 0;

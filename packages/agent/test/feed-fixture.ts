@@ -3,6 +3,7 @@
 // красит тест другого: разъехаться молча тела больше не могут.
 
 import type { FeedResult } from '../src/session-feed.js';
+import type { UsageResult } from '../src/transcript-usage.js';
 
 /** Страница ленты, которую отдаёт подставная лента обоих транспортов. Значения выбраны
  *  так, чтобы в ответе было видно каждое поле §6 — включая complete/live, которые
@@ -27,3 +28,18 @@ export const FEED_PAGE_JSON =
 
 /** Ответ на неожиданный сбой чтения: один и тот же на обоих транспортах. */
 export const FEED_CRASH_JSON = '{"ok":false,"reason":"lookup-failed","detail":"transcript vanished"}';
+
+/** Расход сессии — тот же приём: одно тело на оба транспорта (флаг `usage` запроса ленты). */
+export const USAGE_PAGE: UsageResult = {
+  ok: true,
+  agent: 'claude',
+  total: { input: 10, cached: 200, cacheWrite: 30, output: 40, turns: 2, activeMs: 60000 },
+  today: { input: 4, cached: 100, cacheWrite: 0, output: 15, turns: 1, activeMs: 1000 },
+  started: 1757800000000,
+  last: 1757800060000,
+};
+
+export const USAGE_PAGE_JSON =
+  '{"ok":true,"agent":"claude","total":{"input":10,"cached":200,"cacheWrite":30,"output":40,"turns":2,"activeMs":60000},' +
+  '"today":{"input":4,"cached":100,"cacheWrite":0,"output":15,"turns":1,"activeMs":1000},' +
+  '"started":1757800000000,"last":1757800060000}';

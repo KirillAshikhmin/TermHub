@@ -42,11 +42,14 @@ describe('term prefs', () => {
   });
 
   it('marks the dark background on the root and restores it at start', () => {
-    setTermPrefs({ bg: 'dark' });
-    expect(document.documentElement.dataset.termBg).toBe('dark');
+    setTermPrefs({ bg: 'contrast' });
+    expect(document.documentElement.dataset.termBg).toBe('contrast');
     delete document.documentElement.dataset.termBg;
     initTermPrefs();
-    expect(document.documentElement.dataset.termBg).toBe('dark');
+    expect(document.documentElement.dataset.termBg).toBe('contrast');
+    // Прежнее имя выбора, сохранённое до переименования, читается как контрастный.
+    localStorage.setItem('termhub.termBg', 'dark');
+    expect(readTermPrefs().bg).toBe('contrast');
     setTermPrefs({ bg: 'soft' });
     expect(document.documentElement.dataset.termBg).toBeUndefined();
   });
@@ -61,7 +64,7 @@ describe('term prefs', () => {
     const segments = document.querySelectorAll('.th-termview .th-segment');
     // Порядок сегментов: интервал, тема, фон, полоса разделов.
     segments[2]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
-    expect(readTermPrefs().bg).toBe('dark');
+    expect(readTermPrefs().bg).toBe('contrast');
     const font = document.querySelector<HTMLSelectElement>('.th-termview__select')!;
     font.value = 'jetbrains';
     font.dispatchEvent(new Event('change'));

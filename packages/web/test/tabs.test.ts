@@ -316,6 +316,10 @@ describe('mountSessionTabs', () => {
     await vi.advanceTimersByTimeAsync(0);
     const [a, b] = [...tabs.el.querySelectorAll<HTMLElement>('.th-tab')];
     expect(a!.dataset.agent).toBe('claude');
+    const mark = a!.querySelector<HTMLElement>('.th-tab__agent')!;
+    expect(mark.textContent).toBe('C');
+    expect(mark.title).toBe('Claude Code');
+    expect(b!.querySelector('.th-tab__agent')).toBeNull();
     expect(b!.dataset.agent).toBeUndefined();
     tabs.teardown();
   });
