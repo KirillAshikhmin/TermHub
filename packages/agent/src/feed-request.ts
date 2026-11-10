@@ -6,6 +6,7 @@
 
 import type { FeedResult } from './session-feed.js';
 import type { FeedOptions } from './transcript-feed.js';
+import type { UsageReader, UsageResult } from './transcript-usage.js';
 
 /** Лента сессии: имя сессии → страница беседы её агента. */
 export type FeedReader = (session: string, opts: FeedOptions) => Promise<FeedResult>;
@@ -18,8 +19,15 @@ export function feedSession(raw: Record<string, unknown>): string {
 
 /** Страница по запросу любого транспорта. Не бросает: неожиданный сбой отвечает той же
  *  причиной, какой лента отвечает на свои, — тело отказа у LAN и relay одно. */
-export async function feedPage(read: FeedReader, raw: Record<string, unknown>): Promise<FeedResult> {
+export async function feedPage(
+  read: FeedReader,
+  raw: Record<string, unknown>,
+  usage?: UsageReader,
+): Promise<FeedResult | UsageResult> {
   try {
+    // Расход едет тем же запросом, что и лента (ADR 0033): флаг `usage` меняет тело
+    // ответа, а адресация, права гостя и очередь на транспорте остаются лентовыми.
+    if (usage && usageFlag(raw.usage)) return await usage(feedSession(raw));
     return await read(feedSession(raw), {
       limit: limitValue(raw.limit),
       before: cursorValue(raw.before),
@@ -29,6 +37,11 @@ export async function feedPage(read: FeedReader, raw: Record<string, unknown>): 
   } catch (err) {
     return { ok: false, reason: 'lookup-failed', detail: (err as Error).message };
   }
+}
+
+/** Флаг расхода: `true` из кадра, `1`/`true` из query-строки; пусто — флага нет. */
+function usageFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === '1' || value === 'true';
 }
 
 /** Курсор: пустое значение равносильно отсутствующему. */

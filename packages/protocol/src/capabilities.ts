@@ -5,11 +5,14 @@
 /** Лента сессии из транскрипта агента. */
 export const CAP_FEED = 'feed';
 
+/** Расход сессии (токены, время) из транскрипта: флаг `usage` в запросе ленты. */
+export const CAP_USAGE = 'usage';
+
 /** Что умеет агент этой версии. */
-export const AGENT_CAPS: readonly string[] = [CAP_FEED];
+export const AGENT_CAPS: readonly string[] = [CAP_FEED, CAP_USAGE];
 
 /** Что понимает клиент (PWA) этой версии. */
-export const CLIENT_CAPS: readonly string[] = [CAP_FEED];
+export const CLIENT_CAPS: readonly string[] = [CAP_FEED, CAP_USAGE];
 
 /** Список возможностей из чужого JSON: оставляет только строки и схлопывает дубли.
  *  Всё непонятное отбрасывается молча — незнакомое имя это не ошибка, а просто

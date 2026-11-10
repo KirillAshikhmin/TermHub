@@ -88,7 +88,7 @@ function cssVar(name: string, fallback: string): string {
 
 function xtermTheme(): ITheme {
   const light = termIsLight();
-  const background = cssVar('--term-bg', light ? '#f6f8fa' : '#1a2029');
+  const background = cssVar('--term-bg', light ? '#f0f2f5' : '#1a2029');
   const accent = cssVar('--accent', light ? '#16b790' : '#38d3a8');
   return {
     background,

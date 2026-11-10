@@ -10,6 +10,7 @@ import { enablePush } from './push';
 import { currentTheme, toggleTheme } from './theme';
 import { openFeedSearch } from './feed-search-all';
 import { openTermSettings } from './term-settings';
+import { openUsage } from './usage';
 import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
@@ -634,6 +635,16 @@ function buildMenu(
     void whenCap('feed', tr).then((ok) => {
       if (!ok) return;
       const item = addItem('feed', t('feedall.title'), () => openFeedSearch(tr));
+      pop.insertBefore(item, pop.firstChild);
+    });
+  }
+
+  // — Расход по сессиям: только если агент умеет его считать.
+  if (transport) {
+    const tr = transport;
+    void whenCap('usage', tr).then((ok) => {
+      if (!ok) return;
+      const item = addItem('pulse', t('usage.title'), () => openUsage(tr));
       pop.insertBefore(item, pop.firstChild);
     });
   }

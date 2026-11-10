@@ -13,7 +13,8 @@ import type { TermhubConfig, DeviceScope } from '../src/config.js';
 import type { SessionService } from '../src/sessions.js';
 import type { FeedResult } from '../src/session-feed.js';
 import type { FeedOptions } from '../src/transcript-feed.js';
-import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON } from './feed-fixture.js';
+import type { UsageResult } from '../src/transcript-usage.js';
+import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON, USAGE_PAGE, USAGE_PAGE_JSON } from './feed-fixture.js';
 import type { SessionInfo } from '@termhub/protocol';
 
 const SECRET = 'test-cookie-secret';
@@ -62,6 +63,7 @@ async function start(opts: {
   staticDir?: string;
   relayStatus?: () => { connected: boolean; agentId: string; clients: number; caps: string[]; capsAt: number } | null;
   feed?: (session: string, opts: FeedOptions) => Promise<FeedResult>;
+  usage?: (session: string) => Promise<UsageResult>;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -74,6 +76,7 @@ async function start(opts: {
     staticDir: opts.staticDir,
     relayStatus: opts.relayStatus,
     feed: opts.feed,
+    usage: opts.usage,
   });
   const port = await server.listen();
   return { server, base: `http://127.0.0.1:${port}` };
@@ -1121,6 +1124,28 @@ describe('GET /api/feed — лента сессии по LAN', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(FEED_PAGE_JSON);
     expect(asked.map((a) => a.session)).toEqual(['work']);
+  });
+
+  it('флаг usage отдаёт расход сессии тем же маршрутом, а ленту при этом не читает', async () => {
+    const usageAsked: string[] = [];
+    s = await start({
+      feed: async (session, opts) => {
+        asked.push({ session, opts });
+        return FEED_PAGE;
+      },
+      usage: async (session) => {
+        usageAsked.push(session);
+        return USAGE_PAGE;
+      },
+    });
+    const res = await fetch(`${s.base}/api/feed?session=work&usage=1`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(USAGE_PAGE_JSON);
+    expect(usageAsked).toEqual(['work']);
+    expect(asked).toEqual([]);
+    // Пустой флаг — это обычная лента.
+    const plain = await fetch(`${s.base}/api/feed?session=work&usage=`, { headers: { cookie: authCookie() } });
+    expect(await plain.text()).toBe(FEED_PAGE_JSON);
   });
 
   it('курсоры и лимит доезжают из query-строки, а отсутствующие не подставляются', async () => {

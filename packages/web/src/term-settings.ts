@@ -115,7 +115,7 @@ export function openTermSettings(): void {
       t('termview.bg'),
       [
         { value: 'soft', label: t('termview.bgSoft') },
-        { value: 'dark', label: t('termview.bgDark') },
+        { value: 'contrast', label: t('termview.bgContrast') },
       ],
       prefs.bg,
       (value) => (prefs = setTermPrefs({ bg: value })),

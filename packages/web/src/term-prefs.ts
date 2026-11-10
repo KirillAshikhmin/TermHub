@@ -3,7 +3,8 @@
 
 import { currentTheme } from './theme';
 
-export type TermBg = 'soft' | 'dark';
+/** Фон терминала: один выбор на обе темы. */
+export type TermBg = 'soft' | 'contrast';
 
 /** Шрифты терминала. Веб-шрифтов приложение не несёт: берётся установленный в системе,
  *  а если его нет — браузер молча идёт дальше по стеку. */
@@ -79,7 +80,8 @@ export function readTermPrefs(): TermPrefs {
     fontSize: Number.isFinite(rawFont) && rawFont > 0 ? clampFont(rawFont) : defaultFontSize(),
     // Чужое значение (ручная правка, старая версия) не принимаем: только известные ступени.
     lineHeight: LINE_HEIGHTS.find((v) => v === rawLine) ?? 1,
-    bg: read(BG_LS_KEY) === 'dark' ? 'dark' : 'soft',
+    // 'dark' — прежнее имя того же выбора, сохранённое до переименования.
+    bg: ['contrast', 'dark'].includes(read(BG_LS_KEY) ?? '') ? 'contrast' : 'soft',
     font: (Object.keys(TERM_FONTS) as TermFont[]).find((v) => v === read(FONT_FAMILY_LS_KEY)) ?? 'system',
     holoAuto: read(HOLO_AUTO_LS_KEY) === '1',
     sideTabs: read(SIDE_TABS_LS_KEY) === '1',
@@ -109,7 +111,7 @@ export function onTermPrefsChange(fn: (prefs: TermPrefs) => void): () => void {
 /** Вид задаётся атрибутами на корне: сами краски и раскладку держит theme.css. */
 function applyAttrs(prefs: TermPrefs): void {
   const data = document.documentElement.dataset;
-  if (prefs.bg === 'dark') data.termBg = 'dark';
+  if (prefs.bg === 'contrast') data.termBg = 'contrast';
   else delete data.termBg;
   if (prefs.holoAuto) data.holoAuto = '';
   else delete data.holoAuto;

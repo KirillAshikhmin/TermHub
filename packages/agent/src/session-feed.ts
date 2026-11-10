@@ -45,6 +45,7 @@ import {
   type FeedOptions,
   type FeedPage,
 } from './transcript-feed.js';
+import { readUsage, type UsageResult } from './transcript-usage.js';
 
 /** Ответ ленты: страница `readFeed` плюс `complete` и `live` — как их отдал определитель,
  *  без пересчёта. Отказ — те же причины, что у определителя, плюс `cursor-stale`. */
@@ -83,6 +84,42 @@ export async function sessionFeed(
   sources?: Partial<SessionFeedSources>,
 ): Promise<FeedResult> {
   const src = withDefaults(sources);
+  const located = await locate(session, src);
+  if (!located.ok) return located;
+  const { pane, found, file } = located;
+  try {
+    if (found.agent === 'opencode') {
+      if (!found.session) return fail('no-transcript', `resolver named no opencode session for pane ${pane}`);
+      const page = await readOpencodeFeed(file, found.session, opts);
+      return page.ok ? { ...page, complete: found.complete, live: found.live } : page;
+    }
+    return await pageOf(file, found.agent, opts, src, found.complete, found.live);
+  } catch (err) {
+    return fail('lookup-failed', `cannot read the feed of pane ${pane}: ${describe(err)}`);
+  }
+}
+
+/** Расход сессии (токены и время) из того же файла беседы, что читает лента. Цепочку
+ *  форков Codex не тянет: считается текущий файл. Беседа opencode — строки общей базы,
+ *  расхода в них этим путём не прочитать. */
+export async function sessionUsage(
+  session: string,
+  sources?: Partial<SessionFeedSources>,
+  now: number = Date.now(),
+): Promise<UsageResult> {
+  const located = await locate(session, withDefaults(sources));
+  if (!located.ok) return located;
+  if (located.found.agent === 'opencode') return fail('unknown-format', 'usage is not available for opencode sessions');
+  return readUsage(located.file, located.found.agent, now);
+}
+
+type Located =
+  | { ok: true; pane: string; found: Extract<TranscriptResult, { ok: true }>; file: string }
+  | FeedFailure;
+
+/** Имя сессии → активная панель → агент и текущий файл его беседы. Общий шаг ленты и
+ *  расхода: причины отказа у них одни. */
+async function locate(session: string, src: SessionFeedSources): Promise<Located> {
   if (!isExistingSessionName(session))
     return fail('lookup-failed', `session name is not a session name: «${session}»`);
   let pane: string | undefined;
@@ -101,16 +138,7 @@ export async function sessionFeed(
   // совпадают — опираться на совпадение значит сломаться молча, когда их станет больше.
   const file = found.files.at(-1);
   if (!file) return fail('no-transcript', `resolver named no transcript file for pane ${pane}`);
-  try {
-    if (found.agent === 'opencode') {
-      if (!found.session) return fail('no-transcript', `resolver named no opencode session for pane ${pane}`);
-      const page = await readOpencodeFeed(file, found.session, opts);
-      return page.ok ? { ...page, complete: found.complete, live: found.live } : page;
-    }
-    return await pageOf(file, found.agent, opts, src, found.complete, found.live);
-  } catch (err) {
-    return fail('lookup-failed', `cannot read the feed of pane ${pane}: ${describe(err)}`);
-  }
+  return { ok: true, pane, found, file };
 }
 
 /** Страница по файлу беседы и его цепочке: читает `readFeed`, а границу файлов переходит
