@@ -1156,28 +1156,33 @@ select.th-input {
   flex: none;
   font-size: 0.8rem;
 }
-/* Метка агента — цветная черта слева на вкладке. */
-.th-tab {
-  position: relative;
-}
+/* Метка агента — маленькая буква перед подписью вкладки (C — Claude, X — Codex,
+   O — opencode). Цветная черта читалась как «сессия ждёт реакции», поэтому метка —
+   буква: она называет агента, а не состояние. */
 .th-tab[data-agent]::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 7px;
-  bottom: 7px;
-  width: 3px;
-  border-radius: var(--r-full);
-  background: var(--tab-agent);
+  content: var(--tab-agent-letter);
+  flex: none;
+  margin-left: 6px;
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, var(--tab-agent) 45%, transparent);
+  border-radius: 4px;
+  color: var(--tab-agent);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.2;
+  opacity: 0.85;
 }
 .th-tab[data-agent='claude'] {
   --tab-agent: var(--claude);
+  --tab-agent-letter: 'C';
 }
 .th-tab[data-agent='codex'] {
   --tab-agent: var(--accent);
+  --tab-agent-letter: 'X';
 }
 .th-tab[data-agent='opencode'] {
   --tab-agent: var(--opencode);
+  --tab-agent-letter: 'O';
 }
 /* Десктоп: шапка сессии ниже и кнопки мельче — высота уходит терминалу; подпись вкладки
    остаётся в две строки. На тач-экране шапка прежняя, под палец. */
@@ -1368,17 +1373,27 @@ select.th-input {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.th-split__pane[data-agent='claude'] .th-split__name {
-  box-shadow: inset 3px 0 0 var(--claude);
-  padding-left: 8px;
+.th-split__pane[data-agent] .th-split__head::before {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.2;
+  border: 1px solid currentColor;
+  opacity: 0.8;
 }
-.th-split__pane[data-agent='codex'] .th-split__name {
-  box-shadow: inset 3px 0 0 var(--accent);
-  padding-left: 8px;
+.th-split__pane[data-agent='claude'] .th-split__head::before {
+  content: 'C';
+  color: var(--claude);
 }
-.th-split__pane[data-agent='opencode'] .th-split__name {
-  box-shadow: inset 3px 0 0 var(--opencode);
-  padding-left: 8px;
+.th-split__pane[data-agent='codex'] .th-split__head::before {
+  content: 'X';
+  color: var(--accent);
+}
+.th-split__pane[data-agent='opencode'] .th-split__head::before {
+  content: 'O';
+  color: var(--opencode);
 }
 .th-split__head .th-iconbtn {
   min-width: 26px;
