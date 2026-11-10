@@ -9,7 +9,7 @@ import tls from 'node:tls';
 import { X509Certificate } from 'node:crypto';
 import { AgentServer } from '../src/server.js';
 import { hashPassword, type TermhubConfig } from '../src/config.js';
-import { generateLocalCert, type LocalCertPaths } from '../src/local-cert.js';
+import { certKeyType, generateLocalCert, type LocalCertPaths } from '../src/local-cert.js';
 import type { SessionService } from '../src/sessions.js';
 
 let dir: string;
@@ -18,13 +18,21 @@ let main: { cert: string; key: string };
 
 beforeAll(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-local-'));
-  local = generateLocalCert(dir);
-  // «Основной» сертификат агента — самоподписанный на внешнее имя.
-  main = { cert: path.join(dir, 'main.pem'), key: path.join(dir, 'main-key.pem') };
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=agent.example.net',
-    '-addext', 'subjectAltName=DNS:agent.example.net', '-keyout', main.key, '-out', main.cert], { stdio: 'ignore' });
+  // «Основной» сертификат агента — самоподписанный на внешнее имя, на ключе ECDSA,
+  // как у Let's Encrypt: именно на этом сочетании RSA-лист не отдавался вовсе.
+  main = selfSigned('main', 'ec');
+  local = generateLocalCert(dir, certKeyType(main.cert));
   return () => fs.rmSync(dir, { recursive: true, force: true });
 });
+
+function selfSigned(name: string, type: 'ec' | 'rsa'): { cert: string; key: string } {
+  const out = { cert: path.join(dir, `${name}.pem`), key: path.join(dir, `${name}-key.pem`) };
+  if (type === 'rsa') execFileSync('openssl', ['genrsa', '-out', out.key, '2048'], { stdio: 'ignore' });
+  else execFileSync('openssl', ['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', out.key], { stdio: 'ignore' });
+  execFileSync('openssl', ['req', '-x509', '-key', out.key, '-days', '2', '-subj', '/CN=agent.example.net',
+    '-addext', 'subjectAltName=DNS:agent.example.net', '-out', out.cert], { stdio: 'ignore' });
+  return out;
+}
 
 function config(over: Partial<TermhubConfig> = {}): TermhubConfig {
   return {
@@ -95,6 +103,40 @@ describe('сертификат для localhost', () => {
     expect(viaName.subject).toContain('CN=agent.example.net');
     // незнакомое имя — основной сертификат, как и раньше
     expect((await handshake(port, 'other.example.org', ca)).subject).toContain('CN=agent.example.net');
+  });
+
+  it('лист выпускается с типом ключа основного сертификата — и с RSA-основным тоже отдаётся', async () => {
+    expect(certKeyType(main.cert)).toBe('ec');
+    expect(new X509Certificate(fs.readFileSync(local.cert)).publicKey.asymmetricKeyType).toBe('ec');
+    const rsaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-local-rsa-'));
+    try {
+      const rsaMain = selfSigned('main-rsa', 'rsa');
+      expect(certKeyType(rsaMain.cert)).toBe('rsa');
+      const rsaLocal = generateLocalCert(rsaDir, 'rsa');
+      server = new AgentServer({ config: config({ tls: rsaMain, tlsExtra: [{ cert: rsaLocal.cert, key: rsaLocal.key }] }), sessions });
+      const port = await server.listen();
+      const viaLocalhost = await handshake(port, 'localhost', fs.readFileSync(rsaLocal.ca));
+      expect(viaLocalhost.subject).toContain('CN=localhost');
+      expect(viaLocalhost.authorized).toBe(true);
+    } finally {
+      fs.rmSync(rsaDir, { recursive: true, force: true });
+    }
+  });
+
+  it('несовпадение типов ключа не молчит: агент предупреждает в логе', async () => {
+    const rsaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-local-mix-'));
+    const warn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (m: string) => warnings.push(m);
+    try {
+      const rsaLocal = generateLocalCert(rsaDir, 'rsa');
+      server = new AgentServer({ config: config({ tls: main, tlsExtra: [{ cert: rsaLocal.cert, key: rsaLocal.key }] }), sessions });
+      await server.listen();
+      expect(warnings.join('\n')).toContain('different key type');
+    } finally {
+      console.warn = warn;
+      fs.rmSync(rsaDir, { recursive: true, force: true });
+    }
   });
 
   it('без tlsExtra поведение прежнее', async () => {

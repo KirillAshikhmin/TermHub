@@ -272,6 +272,13 @@ export class AgentServer {
     });
     if (extra.length === 0) return base;
     const own = new X509Certificate(base.cert);
+    const ownKey = own.publicKey.asymmetricKeyType;
+    for (const e of extra) {
+      // При разных типах ключа сервер в TLS 1.3 отдаёт основной сертификат на любое имя.
+      if (e.x509.publicKey.asymmetricKeyType !== ownKey) {
+        console.warn(`[config] tlsExtra certificate "${e.x509.subject}" has a different key type than the main one and will not be served; rerun: termhub local-cert`);
+      }
+    }
     return {
       ...base,
       SNICallback: (name, done) => {

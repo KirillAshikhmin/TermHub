@@ -7,6 +7,7 @@
 // она спрашивает пароль, поэтому агент её только печатает.
 
 import { execFileSync } from 'node:child_process';
+import { X509Certificate } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,8 +35,22 @@ function openssl(args: string[], cwd: string): void {
   execFileSync('openssl', args, { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
 }
 
-/** Создаёт центр (если его ещё нет) и свежий лист-сертификат. Возвращает пути. */
-export function generateLocalCert(dir = configDir()): LocalCertPaths {
+export type CertKeyType = 'ec' | 'rsa';
+
+/** Тип ключа сертификата в файле; не прочитался — 'ec'. */
+export function certKeyType(certFile: string | undefined): CertKeyType {
+  try {
+    if (!certFile) return 'ec';
+    return new X509Certificate(fs.readFileSync(certFile)).publicKey.asymmetricKeyType === 'rsa' ? 'rsa' : 'ec';
+  } catch {
+    return 'ec';
+  }
+}
+
+/** Создаёт центр (если его ещё нет) и свежий лист-сертификат. Возвращает пути.
+ *  Тип ключа листа обязан совпадать с основным сертификатом агента: при ECDSA-основном и
+ *  RSA-дополнительном сервер в TLS 1.3 продолжает отдавать основной на любое имя. */
+export function generateLocalCert(dir = configDir(), keyType: CertKeyType = 'ec'): LocalCertPaths {
   const paths = localCertPaths(dir);
   const caKey = path.join(dir, 'local-ca-key.pem');
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-cert-'));
@@ -68,7 +83,7 @@ export function generateLocalCert(dir = configDir()): LocalCertPaths {
         'CN = localhost',
         '[leaf]',
         'basicConstraints = critical, CA:FALSE',
-        'keyUsage = critical, digitalSignature, keyEncipherment',
+        `keyUsage = critical, ${keyType === 'rsa' ? 'digitalSignature, keyEncipherment' : 'digitalSignature'}`,
         'extendedKeyUsage = serverAuth',
         'subjectAltName = DNS:localhost, IP:127.0.0.1, IP:::1',
         '',
@@ -80,8 +95,10 @@ export function generateLocalCert(dir = configDir()): LocalCertPaths {
       writeSecretFile(caKey, fs.readFileSync(path.join(work, 'ca-key.pem'), 'utf8'));
       writeSecretFile(paths.ca, fs.readFileSync(path.join(work, 'ca.pem'), 'utf8'));
     }
-    openssl(['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf-key.pem', '-out', 'leaf.csr',
-      '-config', 'leaf.cnf'], work);
+    // Ключ отдельной командой: так одинаково работает и OpenSSL, и системный LibreSSL.
+    if (keyType === 'rsa') openssl(['genrsa', '-out', 'leaf-key.pem', '2048'], work);
+    else openssl(['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'leaf-key.pem'], work);
+    openssl(['req', '-new', '-key', 'leaf-key.pem', '-out', 'leaf.csr', '-config', 'leaf.cnf'], work);
     openssl(['x509', '-req', '-in', 'leaf.csr', '-CA', paths.ca, '-CAkey', caKey, '-CAcreateserial',
       '-out', 'leaf.pem', '-days', String(LEAF_DAYS), '-sha256', '-extfile', 'leaf.cnf', '-extensions', 'leaf'], work);
     writeSecretFile(paths.key, fs.readFileSync(path.join(work, 'leaf-key.pem'), 'utf8'));
@@ -97,13 +114,16 @@ export function generateLocalCert(dir = configDir()): LocalCertPaths {
 export function runLocalCert(): number {
   ensureConfigDir();
   let paths: LocalCertPaths;
+  const file = configPath();
+  const current = fs.existsSync(file)
+    ? (JSON.parse(fs.readFileSync(file, 'utf8')) as { tls?: { cert: string } | null })
+    : null;
   try {
-    paths = generateLocalCert();
+    paths = generateLocalCert(configDir(), certKeyType(current?.tls?.cert));
   } catch (err) {
     console.error(`Failed to generate the localhost certificate (is openssl installed?): ${(err as Error).message}`);
     return 1;
   }
-  const file = configPath();
   if (fs.existsSync(file)) {
     const config = JSON.parse(fs.readFileSync(file, 'utf8')) as { tlsExtra?: Array<{ cert: string; key: string }> };
     const rest = (config.tlsExtra ?? []).filter((t) => t.cert !== paths.cert);
