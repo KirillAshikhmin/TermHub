@@ -1477,6 +1477,45 @@ select.th-input {
 .th-split__body .th-term__body {
   padding: 6px 10px 0;
 }
+/* Поиск по лентам всех сессий */
+.th-feedall {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.th-feedall__status {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+.th-feedall__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+.th-feedall__group {
+  margin-top: 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.th-feedall__row {
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.th-feedall__row:hover {
+  background: var(--bg-hover);
+}
 /* Командная палитра */
 .th-palette {
   display: flex;

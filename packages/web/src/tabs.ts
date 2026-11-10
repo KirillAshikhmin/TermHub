@@ -17,6 +17,7 @@ import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from '
 import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { hasCap } from './capabilities';
+import { openFeedSearch } from './feed-search-all';
 import { previewOf, refreshPreviews } from './session-preview';
 import { openPalette, type PaletteItem } from './palette';
 import { sfeedHash, sfilesHash, srepoHash, splitHash, termHash } from './routes';
@@ -337,7 +338,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       items.push({ label: t('nav.files'), hint: opts.current, hash: sfilesHash(opts.current, '') });
       items.push({ label: t('nav.repo'), hint: opts.current, hash: srepoHash(opts.current, '') });
     }
-    if (hasCap('feed')) items.push({ label: t('holo.feed'), hint: opts.current, hash: sfeedHash(opts.current) });
+    if (hasCap('feed')) {
+      items.push({ label: t('holo.feed'), hint: opts.current, hash: sfeedHash(opts.current) });
+      items.push({ label: t('feedall.title'), run: () => openFeedSearch(opts.transport) });
+    }
     if (!scope) items.push({ label: t('dashboard.newSession'), run: opts.onCreate });
     items.push({ label: t('termview.title'), run: openTermSettings });
     items.push({ label: t('palette.dashboard'), hash: '#/' });

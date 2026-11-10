@@ -170,6 +170,15 @@ const ru: Dict = {
     modeSwitch: 'Переключить способ подключения',
     queue: 'Ждут внимания: {n}. Перейти к следующей (Ctrl+Alt+↓)',
   },
+  feedall: {
+    title: 'Поиск по всем лентам',
+    placeholder: 'Что искать — и Enter',
+    hint: 'Ищет в последних записях беседы каждой сессии.',
+    progress: 'Просмотрено сессий: {done} из {all} — {name}…',
+    done: 'Найдено: {n}',
+    none: 'Ничего не найдено',
+    failed: 'Не удалось получить список сессий',
+  },
   split: {
     title: 'Рядом',
     add: 'Добавить сессию…',
@@ -642,6 +651,15 @@ const en: Dict = {
     modeOverridden: 'The {mode} request was not accepted: the agent picks the mode',
     modeSwitch: 'Switch the connection method',
     queue: 'Waiting for attention: {n}. Go to the next one (Ctrl+Alt+↓)',
+  },
+  feedall: {
+    title: 'Search all feeds',
+    placeholder: 'What to find — then Enter',
+    hint: 'Searches the recent conversation of every session.',
+    progress: 'Sessions scanned: {done} of {all} — {name}…',
+    done: 'Found: {n}',
+    none: 'Nothing found',
+    failed: 'Could not get the session list',
   },
   split: {
     title: 'Side by side',

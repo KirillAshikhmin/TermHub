@@ -5,7 +5,8 @@
 // живой workspace, пока не сменилась сессия/транспорт.
 
 import { whenCap } from './capabilities';
-import { mountFeed } from './feed';
+import { mountFeed, type FeedHandle } from './feed';
+import { takeFeedJump } from './feed-search-all';
 import { mountFiles } from './files';
 import { resetDocumentTitle, setSessionDocumentTitle } from './document-title';
 import type { GradleTab } from './gradle';
@@ -51,6 +52,12 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
   // Вкладка Gradle — единственная, у которой показ повторно спрашивает детект,
   // поэтому от неё держим хэндл, а не только teardown (см. show).
   let gradleView: GradleTab | null = null;
+  // Лента — ради прыжка к находке общего поиска (feed-search-all).
+  let feedView: FeedHandle | null = null;
+  const jumpIfAsked = (): void => {
+    const cursor = takeFeedJump(session);
+    if (cursor) void feedView?.jumpTo(cursor);
+  };
   const ensure = (tab: WsTab): WsView => {
     const cached = views.get(tab);
     if (cached) return cached;
@@ -63,7 +70,10 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
       v = { el, clean: term.teardown, focus: term.focus };
     } else if (tab === 'files') v = { el, clean: mountFiles(el, transport, session) };
     else if (tab === 'repo') v = { el, clean: mountRepo(el, transport, session) };
-    else if (tab === 'feed') v = { el, clean: mountFeed(el, session, transport).teardown };
+    else if (tab === 'feed') {
+      feedView = mountFeed(el, session, transport);
+      v = { el, clean: feedView.teardown };
+    }
     else {
       gradleView = mountGradleTab(el, transport, session);
       v = { el, clean: gradleView.teardown };
@@ -89,8 +99,10 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
     if (tab === 'feed') {
       void whenCap('feed', transport).then((ok) => {
         if (!alive || seq !== showSeq) return;
-        if (ok) reveal(ensure('feed'));
-        else toTerm();
+        if (ok) {
+          reveal(ensure('feed'));
+          jumpIfAsked();
+        } else toTerm();
       });
       return;
     }
