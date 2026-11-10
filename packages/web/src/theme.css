@@ -3590,6 +3590,13 @@ main.th-feed {
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
 }
+.th-feed__usage {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: help;
+}
 .th-feed__agent {
   font-size: 0.85rem;
   font-weight: 600;

@@ -257,7 +257,7 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - `sessionUsage(session, sources?, now?)` в `session-feed.ts` делит с лентой шаг `locate` (сессия → панель → файл беседы); opencode отвечает `unknown-format`.
 - Провод — флаг `usage` запроса ленты (`GET /api/feed?…&usage=1`, поле `usage` кадра `Feed`), ответ тем же `FeedResult`; своего кадра нет. Разбор флага — `feedPage(read, raw, usage?)` в `feed-request.ts`; `AgentServer({usage?})` и `RelayLink({usage?})` принимают `UsageReader`.
 - Возможность `CAP_USAGE = 'usage'`: без неё веб расход не спрашивает (старый агент ответил бы страницей ленты).
-- Веб: `packages/web/src/usage.ts` — `sessionUsage(transport, session)` поверх `Transport.feed(session, {usage: true})` и окно `openUsage(transport)` (меню дашборда и палитра). Ожидаемое тело — `USAGE_PAGE`/`USAGE_PAGE_JSON` в `feed-fixture.ts`, общее для LAN и relay.
+- Веб: `packages/web/src/usage.ts` — `sessionUsage(transport, session)` поверх `Transport.feed(session, {usage: true})` и окно `openUsage(transport)` (меню дашборда и палитра). Ожидаемое тело — `USAGE_PAGE`/`USAGE_PAGE_JSON` в `feed-fixture.ts`, общее для LAN и relay. Счётчик той же сессии стоит в шапке экрана ленты (`.th-feed__usage`): сегодня — текстом, вся беседа — в подсказке, обновление раз в 30 с при видимой вкладке.
 
 ## Вид, навигация и обзор (веб)
 

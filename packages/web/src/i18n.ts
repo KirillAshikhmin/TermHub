@@ -423,6 +423,8 @@ const ru: Dict = {
     restart: 'Остановить и запустить',
   },
   feed: {
+    usageToday: 'Сегодня: {time} · вывод {out} · всего {all}',
+    usageTotal: 'За всю беседу: {time} · вывод {out} токенов · всего {all} токенов',
     claude: 'Claude',
     codex: 'Codex',
     opencode: 'OpenCode',
@@ -922,6 +924,8 @@ const en: Dict = {
     restart: 'Stop and run',
   },
   feed: {
+    usageToday: 'Today: {time} · out {out} · all {all}',
+    usageTotal: 'Whole conversation: {time} · output {out} tokens · all {all} tokens',
     claude: 'Claude',
     codex: 'Codex',
     opencode: 'OpenCode',

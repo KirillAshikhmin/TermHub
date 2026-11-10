@@ -22,6 +22,8 @@ import { sfeedHash } from './routes';
 import { mountSessionBar } from './tabs';
 import type { FeedEntry, FeedOptions, FeedPage, FeedResult, Transport } from './transport';
 import { errorScreen, renderHoloBar, svgIcon, wireToolbar } from './ui';
+import { allTokens, formatDuration, formatTokens, sessionUsage } from './usage';
+import { whenCap } from './capabilities';
 
 /** Размер страницы: хвост открывается быстро, листание тянет такими же кусками. */
 const LIMIT = 100;
@@ -176,7 +178,11 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   actionsToggle.checked = true;
   try { actionsToggle.checked = localStorage.getItem(HIDE_ACTIONS_KEY) !== '1'; } catch { /* необязательная настройка */ }
   actionsWrap.append(actionsToggle, document.createTextNode(t('feed.showActions')));
-  head.append(agentEl, liveEl, toggleWrap, actionsWrap);
+  // Расход этой сессии: время работы и токены за сегодня, в подсказке — за всю беседу.
+  const usageEl = document.createElement('span');
+  usageEl.className = 'th-feed__usage';
+  usageEl.hidden = true;
+  head.append(agentEl, liveEl, usageEl, toggleWrap, actionsWrap);
 
   // Полоса поиска — над списком и под шапкой (наполняется ниже, когда есть чем
   // листать назад: поиску нужны loadOlder и jumpTo).
@@ -821,6 +827,32 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   paintFab();
   void enqueue(tailJob);
 
+  // ── Расход сессии: счётчик в шапке ленты ─────────────────────────────
+  // Спрашивается при открытии и раз в 30 с, пока вкладка на экране; у агента без
+  // возможности `usage` счётчика нет вовсе. Отказ (нет агента, opencode) счётчик прячет.
+  const refreshUsage = async (): Promise<void> => {
+    if (!(await whenCap('usage', transport)) || disposed) return;
+    try {
+      const res = await sessionUsage(transport, session);
+      if (disposed) return;
+      usageEl.hidden = !res.ok;
+      if (!res.ok) return;
+      const line = (u: typeof res.total): Record<string, string> => ({
+        time: formatDuration(u.activeMs),
+        out: formatTokens(u.output),
+        all: formatTokens(allTokens(u)),
+      });
+      usageEl.textContent = t('feed.usageToday', line(res.today));
+      usageEl.title = t('feed.usageTotal', line(res.total));
+    } catch {
+      // Обрыв связи: прежние цифры остаются, следующий заход спросит снова.
+    }
+  };
+  const usageTimer = window.setInterval(() => {
+    if (shown()) void refreshUsage();
+  }, 30_000);
+  void refreshUsage();
+
   return {
     el: main,
     searchSlot,
@@ -829,6 +861,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     jumpTo,
     teardown: () => {
       disposed = true;
+      window.clearInterval(usageTimer);
       window.clearInterval(timer);
       window.clearTimeout(highlightTimer);
       window.clearTimeout(searchTimer);
