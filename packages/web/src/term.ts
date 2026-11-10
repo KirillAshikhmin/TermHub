@@ -40,7 +40,7 @@ import { playBell } from './sound';
 import { onTermPrefsChange, readTermPrefs, setTermPrefs, termFontFamily, termIsLight } from './term-prefs';
 import { openTermSettings } from './term-settings';
 import type { TerminalMode, TermChannel, TermConnState, Transport } from './transport';
-import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
+import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, svgIcon, toast, wireToolbar } from './ui';
 
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
@@ -269,14 +269,14 @@ export function mountTerminal(
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
   dot.setAttribute('role', 'status');
-  // «⋮» (показать свёрнутые панели) и «Aa» (вид терминала) живут в шапке, а не поверх
+  // «⋮» (показать свёрнутые панели) и ползунки (вид терминала) живут в шапке, а не поверх
   // вывода: плавающая кнопка в углу закрывала текст.
   const toggleSlot = document.createElement('span');
   toggleSlot.className = 'th-termbar__slot';
   const viewBtn = document.createElement('button');
   viewBtn.type = 'button';
   viewBtn.className = 'th-termbar__view';
-  viewBtn.textContent = 'Aa';
+  viewBtn.append(svgIcon('sliders'));
   viewBtn.title = t('termview.title');
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('mousedown', (e) => e.preventDefault());

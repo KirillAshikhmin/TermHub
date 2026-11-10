@@ -1875,11 +1875,15 @@ select.th-input {
   opacity: 1;
   color: var(--text-dim);
 }
-/* «Aa» — окно вида терминала. */
+/* Ползунки — окно вида терминала. */
 .th-termbar__view {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
   height: 26px;
-  padding: 0 7px;
+  padding: 0;
   color: var(--text-dim);
   background: none;
   font: inherit;
@@ -1894,6 +1898,10 @@ select.th-input {
 .th-termbar__view:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+.th-termbar__view .th-icon {
+  width: 15px;
+  height: 15px;
 }
 .th-termview {
   display: flex;

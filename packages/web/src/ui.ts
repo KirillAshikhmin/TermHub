@@ -42,7 +42,8 @@ const ICONS: Record<string, string> = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
-  type: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>',
+  // Ползунки — параметры отображения (окно «Вид терминала»).
+  sliders: '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/><circle cx="16" cy="6" r="2.2"/><circle cx="10" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
   feed: '<path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3.5 21l1.9-5.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 13h4.5"/>',
 };
 
@@ -650,7 +651,7 @@ function buildMenu(
   }
 
   // — Вид терминала (шрифт, интервал, фон): окно поверх, меню закрывается.
-  addItem('type', t('termview.title'), () => openTermSettings());
+  addItem('sliders', t('termview.title'), () => openTermSettings());
 
   // — Язык (RU↔EN). setLang перерисует приложение (onLangChange) — меню
   //   пересоберётся уже на новом языке, обновлять пункт на месте не нужно.

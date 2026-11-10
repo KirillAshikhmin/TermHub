@@ -10,7 +10,7 @@ import { AGENT_MARK } from './tabs';
 import { openTermSettings } from './term-settings';
 import { mountTerminal, type TerminalHandle } from './term';
 import type { Transport } from './transport';
-import { iconButton } from './ui';
+import { iconButton, svgIcon } from './ui';
 
 const POLL_MS = 3000;
 
@@ -39,7 +39,7 @@ export function mountSplit(root: HTMLElement, sessions: string[], transport: Tra
   const viewBtn = document.createElement('button');
   viewBtn.type = 'button';
   viewBtn.className = 'th-termbar__view';
-  viewBtn.textContent = 'Aa';
+  viewBtn.append(svgIcon('sliders'));
   viewBtn.title = t('termview.title');
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('click', () => openTermSettings());
