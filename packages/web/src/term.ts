@@ -37,16 +37,12 @@ import { resolveSessionPath } from './session-path';
 import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
+import { onTermPrefsChange, readTermPrefs, setTermPrefs } from './term-prefs';
+import { openTermSettings } from './term-settings';
 import { currentTheme } from './theme';
 import type { TerminalMode, TermChannel, TermConnState, Transport } from './transport';
 import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
-const FONT_MIN = 10;
-const FONT_MAX = 22;
-// На десктопе плотнее (как системный терминал), на тач-экране — крупнее под палец и глаз.
-const FONT_DEFAULT_TOUCH = 14;
-const FONT_DEFAULT_DESKTOP = 12;
-const FONT_LS_KEY = 'termhub.fontSize';
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
 // Потолок очереди ввода до подключения (см. sendData): не влезающий чанк отбрасывается целиком.
@@ -59,10 +55,12 @@ let composeOpen = false;
 
 // ANSI-палитры под тему приложения (fg/bg/курсор берём из CSS-переменных, а 16
 // цветов ANSI фиксируем — в theme.css их нет). Дают читаемый вывод в обеих темах.
+// Тёмные black/brightBlack подобраны под «мягкий» фон (#1a2029): тусклый текст держит
+// контраст ≈4,9 на нём и не слепит на тёмном (#0d1117).
 const DARK_ANSI: Partial<ITheme> = {
-  black: '#484f58', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
+  black: '#545d68', red: '#ff7b72', green: '#3fb950', yellow: '#d29922',
   blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4',
-  brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
+  brightBlack: '#848d97', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341',
   brightBlue: '#79c0ff', brightMagenta: '#d2a8ff', brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
 };
 const LIGHT_ANSI: Partial<ITheme> = {
@@ -91,22 +89,6 @@ function xtermTheme(): ITheme {
     selectionBackground: cssVar('--accent-tint', 'rgba(56, 211, 168, 0.25)'),
     ...(light ? LIGHT_ANSI : DARK_ANSI),
   };
-}
-
-/** Размер шрифта из localStorage, зажатый в [10, 22]. */
-function readFontSize(): number {
-  try {
-    const raw = Number(localStorage.getItem(FONT_LS_KEY));
-    if (Number.isFinite(raw) && raw > 0) return Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(raw)));
-  } catch {
-    // localStorage недоступен — размер по умолчанию.
-  }
-  try {
-    if (window.matchMedia('(pointer: coarse)').matches) return FONT_DEFAULT_TOUCH;
-  } catch {
-    // matchMedia недоступен — считаем десктопом.
-  }
-  return FONT_DEFAULT_DESKTOP;
 }
 
 /** Состояние экранной клавиатуры из localStorage (по умолчанию включена). */
@@ -273,7 +255,19 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
   dot.setAttribute('role', 'status');
-  bar.append(tabs.el, modeBtn, dot);
+  // «⋮» (показать свёрнутые панели) и «Aa» (вид терминала) живут в шапке, а не поверх
+  // вывода: плавающая кнопка в углу закрывала текст.
+  const toggleSlot = document.createElement('span');
+  toggleSlot.className = 'th-termbar__slot';
+  const viewBtn = document.createElement('button');
+  viewBtn.type = 'button';
+  viewBtn.className = 'th-termbar__view';
+  viewBtn.textContent = 'Aa';
+  viewBtn.title = t('termview.title');
+  viewBtn.setAttribute('aria-label', t('termview.title'));
+  viewBtn.addEventListener('mousedown', (e) => e.preventDefault());
+  viewBtn.addEventListener('click', () => openTermSettings());
+  bar.append(tabs.el, toggleSlot, viewBtn, modeBtn, dot);
   screen.append(bar);
 
   // Баннер переподключения (скрыт, пока соединение живо).
@@ -308,10 +302,11 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   root.append(screen);
 
   // ── xterm ────────────────────────────────────────────────────────────
-  let fontSize = readFontSize();
+  let prefs = readTermPrefs();
   const term = new Terminal({
     fontFamily: cssVar('--font-mono', 'monospace'),
-    fontSize,
+    fontSize: prefs.fontSize,
+    lineHeight: prefs.lineHeight,
     theme: xtermTheme(),
     cursorBlink: true,
     // В control mode локальный scrollback — основной путь: tmux не держит терминал в
@@ -698,16 +693,18 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   const resizeDisp = term.onResize(() => sendResize());
 
   // ── Панель быстрых клавиш ────────────────────────────────────────────
+  // Вид (шрифт, интервал, фон) меняют и кнопки A−/A+, и окно «Вид терминала» — оба
+  // пишут в term-prefs, а терминал перестраивается здесь, в одном месте.
   const stepFont = (delta: number): void => {
-    fontSize = Math.max(FONT_MIN, Math.min(FONT_MAX, fontSize + delta));
-    term.options.fontSize = fontSize;
-    try {
-      localStorage.setItem(FONT_LS_KEY, String(fontSize));
-    } catch {
-      // Персист размера необязателен.
-    }
-    doFit(); // → term.onResize → sendResize
+    setTermPrefs({ fontSize: prefs.fontSize + delta });
   };
+  const offPrefs = onTermPrefsChange((next) => {
+    prefs = next;
+    term.options.fontSize = next.fontSize;
+    term.options.lineHeight = next.lineHeight;
+    term.options.theme = xtermTheme();
+    doFit(); // → term.onResize → sendResize
+  });
 
   // ── Панель поиска по буферу терминала (по кнопке ⌕) ──────────────────
   const searchBar = document.createElement('div');
@@ -885,7 +882,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
 
   // Плавающая «⋮» (в теле терминала) — видна только когда тулбар свёрнут. ResizeObserver
   // на host сам пере-fit'ит терминал по кадрам анимации высоты панелей.
-  hideToolbar = wireToolbar({ toolbars, floatMount: body, collapsedControls: readOnly ? [] : [floatingKeyboard], onChange: doFit }).hide;
+  hideToolbar = wireToolbar({ toolbars, floatMount: body, toggleMount: toggleSlot, collapsedControls: readOnly ? [] : [floatingKeyboard], onChange: doFit }).hide;
 
   // ── Подгонка под видимую область (клавиатура телефона) ───────────────
   const vv = window.visualViewport;
@@ -919,6 +916,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
     focus: () => term.focus(),
     teardown: (): void => {
       disposed = true;
+      offPrefs();
       if (rafId) cancelAnimationFrame(rafId);
       ro.disconnect();
       window.removeEventListener('resize', scheduleFit);

@@ -17,6 +17,7 @@ import type { RemoteController, RemoteRoute } from './remote';
 import { initAudioUnlock, playBell } from './sound';
 import { shouldRegisterSw } from './sw-register';
 import { initTheme } from './theme';
+import { initTermPrefs } from './term-prefs';
 import { LanTransport } from './transport';
 import type { Transport } from './transport';
 import { dismissOverlays } from './ui';
@@ -138,6 +139,7 @@ function render(): void {
 async function boot(): Promise<void> {
   document.documentElement.lang = getLang();
   initTheme();
+  initTermPrefs();
   initAudioUnlock();
 
   let mode: 'lan' | 'relay' = 'lan';

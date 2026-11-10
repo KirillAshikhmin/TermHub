@@ -8,6 +8,7 @@ import { getLang, setLang, t } from './i18n';
 import { notificationsSupported, permissionState, requestNotificationPermission } from './notify';
 import { enablePush } from './push';
 import { currentTheme, toggleTheme } from './theme';
+import { openTermSettings } from './term-settings';
 import { SORT_MODES, writeSortMode, type SortMode } from './session-sort';
 import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
@@ -39,6 +40,7 @@ const ICONS: Record<string, string> = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  type: '<path d="M4 7V5h16v2M9 19h6M12 5v14"/>',
   feed: '<path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3.5 21l1.9-5.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 13h4.5"/>',
 };
 
@@ -499,11 +501,13 @@ export function renderHoloBar(opts: {
 
 /** Плавающая «⋮» + сворачивание тулбара (persist). toolbars — элементы, сворачиваемые
  *  вместе (на терминале: Holo-бар сверху + панель клавиш снизу); floatMount — куда
- *  положить плавающую кнопку (видна, только когда свёрнуто); onChange — колбэк после
+ *  положить плавающую кнопку (видна, только когда свёрнуто); toggleMount — место в шапке,
+ *  куда «⋮» встаёт вместо плавания поверх содержимого; onChange — колбэк после
  *  смены (напр. пере-fit терминала). Возвращает hide() для кнопки «⋮» внутри Holo-бара. */
 export function wireToolbar(opts: {
   toolbars: HTMLElement[];
   floatMount: HTMLElement;
+  toggleMount?: HTMLElement;
   collapsedControls?: HTMLElement[];
   onChange?: () => void;
 }): { hide: () => void } {
@@ -528,7 +532,13 @@ export function wireToolbar(opts: {
     opts.onChange?.();
   };
   toggle.addEventListener('click', () => set(true));
-  opts.floatMount.append(toggle, ...(opts.collapsedControls ?? []));
+  if (opts.toggleMount) {
+    toggle.classList.add('th-term__toolbar-toggle--bar');
+    opts.toggleMount.append(toggle);
+    opts.floatMount.append(...(opts.collapsedControls ?? []));
+  } else {
+    opts.floatMount.append(toggle, ...(opts.collapsedControls ?? []));
+  }
   apply();
   return { hide: () => set(false) };
 }
@@ -616,6 +626,9 @@ function buildMenu(
     },
     { keepOpen: true },
   );
+
+  // — Вид терминала (шрифт, интервал, фон): окно поверх, меню закрывается.
+  addItem('type', t('termview.title'), () => openTermSettings());
 
   // — Язык (RU↔EN). setLang перерисует приложение (onLangChange) — меню
   //   пересоберётся уже на новом языке, обновлять пункт на месте не нужно.
