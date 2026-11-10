@@ -214,7 +214,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   fab.hidden = true;
   main.append(head, searchSlot, listEl, fab);
   host.append(sbar.el, toolbar, main);
-  hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main }).hide;
+  hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main, toggleMount: sbar.toggleSlot }).hide;
 
   // ── Состояние окна ленты ─────────────────────────────────────────────
   let items: FeedEntry[] = [];

@@ -7,6 +7,7 @@
   --bg-elev: #161b22;
   /* Фон области терминала: чуть светлее чрома, как в системном терминале. */
   --term-bg: #1a2029;
+  --term-fg: var(--text);
   --bg-elev-2: #1b2230;
   --bg-hover: #212a3a;
   --border: #29313d;
@@ -103,6 +104,19 @@
 /* Выбор «Тёмный фон» в окне «Вид терминала»: область терминала сливается с чромом. */
 :root[data-term-bg='dark'] {
   --term-bg: var(--bg);
+}
+/* Схема терминала, выбранная явно, не зависит от темы приложения. Новая схема — новый
+   блок здесь плюс строка в TERM_SCHEMES (term-prefs.ts). */
+:root[data-term-scheme='dark'] {
+  --term-bg: #1a2029;
+  --term-fg: #e6edf3;
+}
+:root[data-term-scheme='dark'][data-term-bg='dark'] {
+  --term-bg: #0d1117;
+}
+:root[data-term-scheme='light'] {
+  --term-bg: #f6f8fa;
+  --term-fg: #1f2328;
 }
 
 *,
@@ -1155,11 +1169,42 @@ select.th-input {
   flex: none;
   font-size: 0.8rem;
 }
-/* Десктоп: шапка сессии в одну строку — «имя  сессия» рядом, кнопки мельче; высота
-   уходит терминалу. На тач-экране остаётся прежняя, под палец. */
+/* Метка агента — цветная черта слева на вкладке. */
+.th-tab {
+  position: relative;
+}
+.th-tab[data-agent]::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: var(--r-full);
+  background: var(--tab-agent);
+}
+.th-tab[data-agent='claude'] {
+  --tab-agent: var(--claude);
+}
+.th-tab[data-agent='codex'] {
+  --tab-agent: var(--accent);
+}
+.th-tab[data-agent='opencode'] {
+  --tab-agent: var(--opencode);
+}
+/* Десктоп: шапка сессии ниже и кнопки мельче — высота уходит терминалу; подпись вкладки
+   остаётся в две строки. На тач-экране шапка прежняя, под палец. */
 @media (min-width: 900px) and (pointer: fine) {
   :root {
-    --termbar-h: 40px;
+    --termbar-h: 46px;
+  }
+  .th-tab__btn {
+    padding-top: 3px;
+    padding-bottom: 3px;
+  }
+  .th-tab__close {
+    padding-top: 3px;
+    padding-bottom: 3px;
   }
   .th-termbar .th-iconbtn {
     min-width: 32px;
@@ -1169,16 +1214,29 @@ select.th-input {
     width: 18px;
     height: 18px;
   }
-  .th-tab__label {
-    flex-direction: row;
-    align-items: baseline;
-    gap: 7px;
+}
+/* Полоса разделов по наведению (выбор в окне «Вид терминала», только мышь): лежит поверх
+   верхней строки терминала и проявляется от шапки — высота терминала не меняется, а
+   значит и tmux не получает перекладку на каждое движение мыши. */
+@media (pointer: fine) {
+  :root[data-holo-auto] .th-term > .th-slide--top {
+    position: absolute;
+    top: calc(var(--termbar-h) + env(safe-area-inset-top));
+    left: 0;
+    right: 0;
+    z-index: 7;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-6px);
+    box-shadow: var(--shadow);
+    transition: opacity var(--t), transform var(--t);
   }
-  .th-tab__name {
-    max-width: 26ch;
-  }
-  .th-tab__sub {
-    max-width: 16ch;
+  :root[data-holo-auto] .th-term > .th-termbar:hover + .th-slide--top,
+  :root[data-holo-auto] .th-term > .th-slide--top:hover,
+  :root[data-holo-auto] .th-term > .th-slide--top:focus-within {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
   }
 }
 
@@ -1520,6 +1578,10 @@ select.th-input {
 .th-termview__step {
   min-width: 44px;
   font-size: 1.1rem;
+}
+.th-termview__select {
+  width: 100%;
+  min-height: 40px;
 }
 .th-termview__value {
   flex: 1;

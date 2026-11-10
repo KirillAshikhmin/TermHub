@@ -29,7 +29,7 @@ import {
 import { t } from './i18n';
 import { sgradleHash, termHash } from './routes';
 import { mountSessionBar } from './tabs';
-import { currentTheme } from './theme';
+import { termIsLight } from './term-prefs';
 import { enableTouchScroll } from './touch-scroll';
 import type { TermChannel, Transport } from './transport';
 import {
@@ -87,12 +87,12 @@ function cssVar(name: string, fallback: string): string {
 }
 
 function xtermTheme(): ITheme {
-  const light = currentTheme() === 'light';
+  const light = termIsLight();
   const background = cssVar('--term-bg', light ? '#f6f8fa' : '#1a2029');
   const accent = cssVar('--accent', light ? '#16b790' : '#38d3a8');
   return {
     background,
-    foreground: cssVar('--text', light ? '#1f2328' : '#e6edf3'),
+    foreground: cssVar('--term-fg', light ? '#1f2328' : '#e6edf3'),
     cursor: accent,
     cursorAccent: background,
     selectionBackground: cssVar('--accent-tint', 'rgba(56, 211, 168, 0.25)'),
@@ -287,7 +287,7 @@ export function mountGradleTab(root: HTMLElement, transport: Transport, session:
     });
   };
 
-  hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main, onChange: scheduleFit }).hide;
+  hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main, toggleMount: sbar.toggleSlot, onChange: scheduleFit }).hide;
 
   // ── Раскладка: список сверху, вывод снизу, разделитель тянется ───────
   let split = readSplit();

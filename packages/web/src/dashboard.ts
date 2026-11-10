@@ -14,7 +14,7 @@ import type { Transport } from './transport';
 import { activity } from './activity';
 import { makeActivityDot } from './activity-dot';
 import { termHash } from './routes';
-import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
+import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { updateAppBadge } from './app-badge';
@@ -30,7 +30,7 @@ function basename(path: string): string {
 
 /** true для команды claude (акцентный бейдж). */
 function isClaude(command: string): boolean {
-  return command.trim().toLowerCase().startsWith('claude');
+  return sessionAgent(command) === 'claude';
 }
 
 /** Имя карточки: заголовок терминала (Claude его меняет), а в скобках — tmux-имя

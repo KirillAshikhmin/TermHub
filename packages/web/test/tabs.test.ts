@@ -218,6 +218,40 @@ describe('mountSessionTabs', () => {
     tabs.teardown();
   });
 
+  it('Ctrl+Alt+цифра и Ctrl+Alt+стрелки переключают вкладки, не пуская сочетание дальше', async () => {
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b'), sessionFixture('c')]]);
+    const onSwitch = vi.fn();
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'b', onSwitch });
+    await vi.advanceTimersByTimeAsync(0);
+    const press = (code: string, init: KeyboardEventInit = { ctrlKey: true, altKey: true }): KeyboardEvent => {
+      const e = new KeyboardEvent('keydown', { code, bubbles: true, cancelable: true, ...init });
+      document.body.dispatchEvent(e);
+      return e;
+    };
+    expect(press('Digit1').defaultPrevented).toBe(true);
+    press('Digit9'); // 9 — последняя
+    press('ArrowLeft');
+    press('ArrowRight');
+    press('Digit2'); // текущая: сочетание съедено, перехода нет
+    expect(onSwitch.mock.calls.map((c) => c[0])).toEqual(['a', 'c', 'a', 'c']);
+    // Без модификаторов и за пределами списка — не наше.
+    expect(press('Digit1', {}).defaultPrevented).toBe(false);
+    expect(press('Digit7').defaultPrevented).toBe(false);
+    tabs.teardown();
+    press('Digit1');
+    expect(onSwitch).toHaveBeenCalledTimes(4);
+  });
+
+  it('вкладка получает метку агента по команде панели', async () => {
+    const { transport } = stubTransport([[sessionFixture('a', { command: '2.1.317' }), sessionFixture('b')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport });
+    await vi.advanceTimersByTimeAsync(0);
+    const [a, b] = [...tabs.el.querySelectorAll<HTMLElement>('.th-tab')];
+    expect(a!.dataset.agent).toBe('claude');
+    expect(b!.dataset.agent).toBeUndefined();
+    tabs.teardown();
+  });
+
   it('таб текущей сессии не исчезает, даже когда её нет в списке', async () => {
     const { transport } = stubTransport([[sessionFixture('a')]]);
     const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'gone' });

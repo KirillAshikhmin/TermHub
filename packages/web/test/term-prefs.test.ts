@@ -1,12 +1,20 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { initTermPrefs, onTermPrefsChange, readTermPrefs, setTermPrefs } from '../src/term-prefs';
+import { sessionAgent } from '../src/session-status';
+import {
+  initTermPrefs,
+  onTermPrefsChange,
+  readTermPrefs,
+  setTermPrefs,
+  termFontFamily,
+  termIsLight,
+} from '../src/term-prefs';
 import { openTermSettings } from '../src/term-settings';
 
 describe('term prefs', () => {
   beforeEach(() => {
     localStorage.clear();
-    delete document.documentElement.dataset.termBg;
+    for (const key of ['termBg', 'termScheme', 'holoAuto']) delete document.documentElement.dataset[key];
     document.body.replaceChildren();
   });
 
@@ -51,7 +59,48 @@ describe('term prefs', () => {
     expect(readTermPrefs().fontSize).toBe(13);
     expect(document.querySelector('.th-termview__value')!.textContent).toBe('13 px');
     const segments = document.querySelectorAll('.th-termview .th-segment');
-    segments[1]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
+    // Порядок сегментов: интервал, схема, фон, полоса разделов.
+    segments[2]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
     expect(readTermPrefs().bg).toBe('dark');
+    segments[1]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[2]!.click();
+    expect(readTermPrefs().scheme).toBe('light');
+    const font = document.querySelector<HTMLSelectElement>('.th-termview__select')!;
+    font.value = 'jetbrains';
+    font.dispatchEvent(new Event('change'));
+    expect(readTermPrefs().font).toBe('jetbrains');
+  });
+
+  it('explicit scheme overrides the app theme and is marked on the root', () => {
+    setTermPrefs({ scheme: 'dark' });
+    expect(termIsLight()).toBe(false);
+    expect(document.documentElement.dataset.termScheme).toBe('dark');
+    setTermPrefs({ scheme: 'light' });
+    expect(termIsLight()).toBe(true);
+    expect(document.documentElement.dataset.termScheme).toBe('light');
+    setTermPrefs({ scheme: 'auto' });
+    expect(document.documentElement.dataset.termScheme).toBeUndefined();
+  });
+
+  it('puts the chosen font ahead of the base stack and ignores unknown ones', () => {
+    expect(termFontFamily('system', 'monospace')).toBe('monospace');
+    expect(termFontFamily('jetbrains', 'monospace')).toBe("'JetBrains Mono', monospace");
+    localStorage.setItem('termhub.termFont', 'comic');
+    expect(readTermPrefs().font).toBe('system');
+  });
+
+  it('auto-hide of the section bar is a root attribute', () => {
+    setTermPrefs({ holoAuto: true });
+    expect('holoAuto' in document.documentElement.dataset).toBe(true);
+    setTermPrefs({ holoAuto: false });
+    expect('holoAuto' in document.documentElement.dataset).toBe(false);
+  });
+
+  it('recognises the agent by the pane command', () => {
+    expect(sessionAgent('2.1.317')).toBe('claude');
+    expect(sessionAgent('claude')).toBe('claude');
+    expect(sessionAgent('codex')).toBe('codex');
+    expect(sessionAgent('opencode')).toBe('opencode');
+    expect(sessionAgent('zsh')).toBeNull();
+    expect(sessionAgent('node')).toBeNull();
   });
 });

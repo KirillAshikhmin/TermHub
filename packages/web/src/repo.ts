@@ -646,7 +646,7 @@ export function mountRepo(root: HTMLElement, transport: Transport, session?: str
     toolbar.className = 'th-holowrap th-slide th-slide--top';
     toolbar.append(holo);
     root.append(sbar.el, toolbar, main);
-    hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main }).hide;
+    hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main, toggleMount: sbar.toggleSlot }).hide;
   } else {
     const header = renderHeader(true, transport);
     teardownTop = header.teardown;

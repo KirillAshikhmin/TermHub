@@ -37,9 +37,8 @@ import { resolveSessionPath } from './session-path';
 import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
-import { onTermPrefsChange, readTermPrefs, setTermPrefs } from './term-prefs';
+import { onTermPrefsChange, readTermPrefs, setTermPrefs, termFontFamily, termIsLight } from './term-prefs';
 import { openTermSettings } from './term-settings';
-import { currentTheme } from './theme';
 import type { TerminalMode, TermChannel, TermConnState, Transport } from './transport';
 import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
@@ -78,12 +77,12 @@ function cssVar(name: string, fallback: string): string {
 
 /** Тема xterm из палитры приложения (совпадает с чромом в light/dark). */
 function xtermTheme(): ITheme {
-  const light = currentTheme() === 'light';
+  const light = termIsLight();
   const background = cssVar('--term-bg', light ? '#f6f8fa' : '#1a2029');
   const accent = cssVar('--accent', light ? '#16b790' : '#38d3a8');
   return {
     background,
-    foreground: cssVar('--text', light ? '#1f2328' : '#e6edf3'),
+    foreground: cssVar('--term-fg', light ? '#1f2328' : '#e6edf3'),
     cursor: accent,
     cursorAccent: background,
     selectionBackground: cssVar('--accent-tint', 'rgba(56, 211, 168, 0.25)'),
@@ -304,7 +303,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   // ── xterm ────────────────────────────────────────────────────────────
   let prefs = readTermPrefs();
   const term = new Terminal({
-    fontFamily: cssVar('--font-mono', 'monospace'),
+    fontFamily: termFontFamily(prefs.font, cssVar('--font-mono', 'monospace')),
     fontSize: prefs.fontSize,
     lineHeight: prefs.lineHeight,
     theme: xtermTheme(),
@@ -700,6 +699,7 @@ export function mountTerminal(root: HTMLElement, session: string, transport: Tra
   };
   const offPrefs = onTermPrefsChange((next) => {
     prefs = next;
+    term.options.fontFamily = termFontFamily(next.font, cssVar('--font-mono', 'monospace'));
     term.options.fontSize = next.fontSize;
     term.options.lineHeight = next.lineHeight;
     term.options.theme = xtermTheme();

@@ -1,7 +1,18 @@
 // Окно «Вид терминала»: шрифт, межстрочный интервал, фон. Меняет вид сразу — открытый
 // терминал слушает term-prefs и перестраивается под окном.
 import { t } from './i18n';
-import { FONT_MAX, FONT_MIN, LINE_HEIGHTS, readTermPrefs, setTermPrefs, type TermBg } from './term-prefs';
+import {
+  FONT_MAX,
+  FONT_MIN,
+  LINE_HEIGHTS,
+  TERM_FONTS,
+  TERM_SCHEMES,
+  readTermPrefs,
+  setTermPrefs,
+  type TermBg,
+  type TermFont,
+  type TermScheme,
+} from './term-prefs';
 import { iconButton, openModal } from './ui';
 
 function field(label: string, control: HTMLElement): HTMLElement {
@@ -111,7 +122,45 @@ export function openTermSettings(): void {
       (value) => (prefs = setTermPrefs({ bg: value })),
     );
 
-    box.append(head, field(t('termview.fontSize'), stepper), line, bg);
+    const fontSelect = document.createElement('select');
+    fontSelect.className = 'th-sort__select th-termview__select';
+    fontSelect.setAttribute('aria-label', t('termview.font'));
+    for (const key of Object.keys(TERM_FONTS) as TermFont[]) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = TERM_FONTS[key].label || t('termview.fontSystem');
+      opt.selected = key === prefs.font;
+      fontSelect.append(opt);
+    }
+    fontSelect.addEventListener('change', () => {
+      prefs = setTermPrefs({ font: fontSelect.value as TermFont });
+    });
+
+    const scheme = segment<TermScheme>(
+      t('termview.scheme'),
+      TERM_SCHEMES.map((value) => ({ value, label: t(`termview.scheme_${value}`) })),
+      prefs.scheme,
+      (value) => (prefs = setTermPrefs({ scheme: value })),
+    );
+    const holo = segment<boolean>(
+      t('termview.holo'),
+      [
+        { value: false, label: t('termview.holoAlways') },
+        { value: true, label: t('termview.holoHover') },
+      ],
+      prefs.holoAuto,
+      (value) => (prefs = setTermPrefs({ holoAuto: value })),
+    );
+
+    box.append(
+      head,
+      field(t('termview.fontSize'), stepper),
+      field(t('termview.font'), fontSelect),
+      line,
+      scheme,
+      bg,
+      holo,
+    );
     return box;
   });
 }

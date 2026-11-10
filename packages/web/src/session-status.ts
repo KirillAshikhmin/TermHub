@@ -12,3 +12,15 @@ export {
   sessionWorking,
   titleIndicator,
 } from '@termhub/protocol/session-title';
+
+export type SessionAgent = 'claude' | 'codex' | 'opencode';
+
+/** Какой агент работает в сессии — по команде панели tmux. Claude Code называет свой
+ *  процесс номером версии («2.1.317»), поэтому голая версия — тоже он. */
+export function sessionAgent(command: string): SessionAgent | null {
+  const cmd = command.trim().toLowerCase();
+  if (cmd.startsWith('claude') || /^\d+\.\d+\.\d+$/.test(cmd)) return 'claude';
+  if (cmd.startsWith('codex')) return 'codex';
+  if (cmd.startsWith('opencode')) return 'opencode';
+  return null;
+}

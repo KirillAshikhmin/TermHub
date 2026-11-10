@@ -13,7 +13,7 @@ import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
-import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
+import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 
@@ -44,7 +44,7 @@ export function mountSessionBar(opts: {
   current: string;
   onSwitch: (name: string) => void;
   onCreate: () => void;
-}): { el: HTMLElement; teardown: () => void } {
+}): { el: HTMLElement; toggleSlot: HTMLElement; teardown: () => void } {
   const bar = document.createElement('div');
   bar.className = 'th-termbar';
   bar.append(iconButton('back', t('term.back'), () => (location.hash = '#/')));
@@ -66,8 +66,11 @@ export function mountSessionBar(opts: {
     onCreate: opts.onCreate,
     onCurrentTitle: (title) => setSessionDocumentTitle(title, opts.current),
   });
-  bar.append(tabs.el);
-  return { el: bar, teardown: tabs.teardown };
+  // Место под «⋮» (показать свёрнутую полосу разделов): в шапке, а не поверх содержимого.
+  const toggleSlot = document.createElement('span');
+  toggleSlot.className = 'th-termbar__slot';
+  bar.append(tabs.el, toggleSlot);
+  return { el: bar, toggleSlot, teardown: tabs.teardown };
 }
 
 /** Минимум, который нужен табу от сессии (SessionInfo подходит структурно). */
@@ -75,6 +78,8 @@ export interface TabInfo {
   name: string;
   bell: boolean;
   title: string;
+  /** Команда панели — по ней таб получает цветную метку агента. */
+  command?: string;
 }
 
 /** Чистый рендер таба сессии: кнопка-имя (переключение) + крестик (завершить). */
@@ -160,6 +165,9 @@ export function updateSessionTab(
   showActivity = false,
 ): void {
   tab.classList.toggle('is-active', active);
+  const agent = sessionAgent(info.command ?? '');
+  if (agent) tab.dataset.agent = agent;
+  else delete tab.dataset.agent;
   const main = tab.querySelector<HTMLElement>('.th-tab__btn');
   main?.setAttribute('aria-current', active ? 'true' : 'false');
   setTabActivityDot(main, translate, showActivity);
@@ -253,13 +261,34 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     if (e.target === panel) closePanel(); // тап по затемнённому фону закрывает
   });
   // Escape закрывает панель (ожидаемое поведение оверлея).
+  // Ctrl+Alt+1…9 — вкладка по номеру (9 — последняя), Ctrl+Alt+←/→ — соседняя по кругу.
+  // Сочетание выбрано свободным и от браузера (Ctrl/Cmd+цифра — его вкладки), и от
+  // терминала (Alt+цифра уходит в TUI как Meta). Смотрим `code`, а не `key`: Option на
+  // macOS меняет печатаемый символ.
+  let order: string[] = [];
+  const hotkeyTarget = (e: KeyboardEvent): string | undefined => {
+    if (!e.ctrlKey || !e.altKey || e.metaKey || e.shiftKey || order.length === 0) return undefined;
+    const digit = /^Digit([1-9])$/.exec(e.code);
+    if (digit) return digit[1] === '9' ? order[order.length - 1] : order[Number(digit[1]) - 1];
+    if (e.code !== 'ArrowLeft' && e.code !== 'ArrowRight') return undefined;
+    const at = order.indexOf(opts.current);
+    const step = e.code === 'ArrowLeft' ? -1 : 1;
+    return order[(Math.max(at, 0) + step + order.length) % order.length];
+  };
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && panelOpen) {
       e.preventDefault();
       closePanel();
+      return;
     }
+    const target = hotkeyTarget(e);
+    if (target === undefined) return;
+    // Перехват на capture: иначе сочетание успеет уйти в терминал вводом.
+    e.preventDefault();
+    e.stopPropagation();
+    if (target !== opts.current) opts.onSwitch(target);
   };
-  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keydown', onKeyDown, true);
 
   const expandBtn = iconButton('down', t('term.sessionsPanel'), () => (panelOpen ? closePanel() : openPanel()));
   expandBtn.classList.add('th-tabs-expand');
@@ -354,6 +383,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     latest = input; // снимок для панели быстрого переключения
     tabsCache.set(opts.transport, input); // переживёт пере-монтирование экрана
     const sessions = sortSessions(input, sortMode, bellUnseen, readManualOrder());
+    order = sessions.map((s) => s.name);
     const currentInfo = input.find((session) => session.name === opts.current);
     opts.onCurrentTitle?.(currentInfo ? sessionTitleText(currentInfo.title) || opts.current : opts.current);
     // Гость (scope задан после первого list) не управляет сессиями: прячем «+» и
@@ -448,7 +478,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       stopped = true;
       unsubscribeBell();
       window.clearInterval(timer);
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown, true);
     },
     refresh,
   };
