@@ -258,7 +258,7 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 
 ## Вид, навигация и обзор (веб)
 
-- `packages/web/src/term-prefs.ts` — вид терминала в `localStorage`: размер и семейство шрифта, межстрочный интервал, фон (`soft`/`contrast`, один выбор на обе темы), автоскрытие полосы разделов, боковые вкладки. Атрибуты на `:root` (`data-term-bg`, `data-holo-auto`, `data-side-tabs`) — раскладку и краски держит `theme.css`; открытый терминал слушает `onTermPrefsChange`. Окно — `term-settings.ts` («Aa» в шапке, пункт меню).
+- `packages/web/src/term-prefs.ts` — вид терминала в `localStorage`: размер и семейство шрифта, межстрочный интервал, фон (`soft`/`contrast`, один выбор на обе темы), автоскрытие полосы разделов, боковые вкладки. Атрибуты на `:root` (`data-term-bg`, `data-holo-auto`, `data-side-tabs`) — раскладку и краски держит `theme.css`; открытый терминал слушает `onTermPrefsChange`. Окно — `term-settings.ts` (кнопка с ползунками в шапке, пункт меню).
 - Своей цветовой схемы у терминала нет: он идёт за темой приложения (`setThemeChoice` в `theme.ts`). В светлой теме xterm получает `minimumContrastRatio: 4.5` — агенты красят вывод под тёмный терминал.
 - Горячие клавиши живут в `mountSessionTabs` (capture на `document`): `Ctrl+Alt+1…9` — вкладка по номеру, `Ctrl+Alt+←/→` — соседняя, `Ctrl+Alt+↓` — следующая ждущая, `Ctrl+Alt+K`/`⌘K` — палитра (`palette.ts`). Голый `Ctrl+K` не занимать: это «стереть до конца строки» в оболочке.
 - Очередь ждущих (`.th-tabs-queue`) — счётчик `bellUnseen` без текущей сессии; источник тот же, что у 🔔.
