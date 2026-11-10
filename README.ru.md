@@ -156,6 +156,35 @@ npx termhub service uninstall
 даёт свежую сессию; вернуться в существующую — `tml` (выбор из списка) или `tm <имя>`
 (присоединиться, а если её нет — создать).
 
+### Локальный доступ: `localhost`
+
+Основной сертификат агента выпущен на внешнее имя (LAN или Tailscale), поэтому на
+`https://localhost:<порт>` браузер покажет ошибку имени сертификата. На самой машине агента
+есть два способа открыть TermHub без предупреждений — можно включить оба.
+
+**Обычный HTTP на loopback.** Допишите в `~/.termhub/config.json` и перезапустите агента:
+
+```json
+"localHttpPort": 7711
+```
+
+Откройте `http://localhost:7711`. Вход слушает только `127.0.0.1` и наружу не смотрит;
+`http://localhost` браузеры считают защищённым контекстом, так что service worker и буфер
+обмена работают. Пароль тот же.
+
+**Свой сертификат для localhost.** Нужен `openssl` и уже настроенный `tls` в конфиге:
+
+```bash
+npx termhub local-cert
+```
+
+Команда выпускает сертификат для `localhost`, `127.0.0.1` и `::1`, прописывает его в конфиг
+(`tlsExtra`) и печатает одну команду, которой вы доверяете его центру сертификации (спросит
+пароль). После перезапуска агента `https://localhost:<порт>` открывается чисто, а внешнее имя
+получает прежний сертификат — агент выбирает по имени из запроса. Центр годен только для
+localhost: это ограничение зашито в него самого. Сертификат живёт 800 дней, продление — той же
+командой. Подробности — [docs/security.ru.md](docs/security.ru.md).
+
 ### Сессии Codex
 
 При создании веб-сессии выберите пресет `codex`. TermHub запускает этот процесс Codex
@@ -183,6 +212,7 @@ npx termhub share          # одноразовый код пейринга (+ Q
 npx termhub pair|connect   # CLI-клиент: сопряжение и «ssh через relay»
 npx termhub devices|revoke # список/отзыв допущенных устройств
 npx termhub doctor         # диагностика: конфиг, git/svn/hg, tmux, агент, relay
+npx termhub local-cert     # сертификат для https://localhost (см. «Локальный доступ»)
 ```
 
 ---
@@ -255,6 +285,8 @@ npx tsc -p packages/web/tsconfig.json --noEmit   # web не типизирует
 ## Документация
 
 - [docs/remote.ru.md](docs/remote.ru.md) — удалённый доступ: relay, пейринг, Tailscale
+- [docs/throttling.ru.md](docs/throttling.ru.md) — сети, где провайдер душит соединение: как
+  устроен фильтр и как настроить обходы
 - [docs/security.ru.md](docs/security.ru.md) — модель угроз и криптография
 - [docs/notifications.ru.md](docs/notifications.ru.md) — звук, push, HTTPS
 - [docs/manual-test-checklist.ru.md](docs/manual-test-checklist.ru.md) — чек-лист ручной проверки

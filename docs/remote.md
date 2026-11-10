@@ -140,72 +140,17 @@ the agent. On a successful connection, the agent log shows the line
 
 ## Networks where the provider throttles each connection
 
-Symptom: the relay page opens as a blank screen (the HTML arrives, the bundle hangs), the agent
-keeps losing its link, yet everything looks healthy from the server. This is a filter that lets
-through about 25 server packets per connection and then goes silent. To check:
+If the relay page opens as a blank screen and the agent keeps losing its link although the
+server looks healthy, there may be a filter on the path that lets through about 25 packets per
+connection and then goes silent. To check:
 
 ```bash
 curl -m 20 -o /dev/null -w '%{size_download}\n' https://relay.example.com/assets/<bundle name>.js
 ```
 
-If the download freezes at 14–17 KB, that is it. There are three workarounds, all opt-in
-(analysis and measurements: `docs/adr/0034-throttled-networks-short-flows-and-disguise.md`).
-
-**1. Browser: chunked bundle and the short-request transport.** In the relay environment:
-
-```yaml
-environment:
-  RELAY_CHUNKED: "1"                # bundle in 8 KB chunks, assembled by the service worker
-  RELAY_CLIENT_TRANSPORT: "poll"    # short HTTP requests instead of a WebSocket
-```
-
-and in Caddy, HTTP/1.1 only with the connection closed after every response (a ready block is
-commented out in `Caddyfile.example`). Without it the browser multiplexes everything over one
-connection, which then dies. A single device can pick the transport by hand:
-`localStorage['termhub.relayTransport'] = 'poll'` (or `'ws'`, `'rtc'`).
-
-**2. Agent and CLI: disguise.** The filter decides on the client's first packet and lets
-through connections that start like SSH, RDP or DNS. The relay opens a port that strips such a
-preface:
-
-```yaml
-environment:
-  DISGUISE_PORT: "9444"
-  DISGUISE_UPSTREAM: "caddy:443"    # where the stream goes after the preface (the TLS proxy)
-ports:
-  - "9444:9444"
-```
-
-and in the agent's `~/.termhub/config.json`:
-
-```json
-"relayConnect": "relay.example.com:9444",
-"relayDisguise": "ssh"
-```
-
-`relayUrl` stays as it was: it supplies the TLS name and the path. `relayDisguise` is one of
-`ssh`, `rdp`, `dns`. For the CLI client on another machine use the `TERMHUB_RELAY_CONNECT` and
-`TERMHUB_RELAY_DISGUISE` environment variables.
-
-**3. Agent and CLI: without an extra port.** Either short requests — `"relayTransport": "poll"`
-(`TERMHUB_RELAY_TRANSPORT=poll`), slower but needing nothing on the server beyond step 1 — or
-your own tunnel: `ssh -N -L 19443:127.0.0.1:443 user@relay.example.com` plus
-`"relayConnect": "127.0.0.1:19443"` with no disguise.
-
-**4. Browser: WebRTC instead of short requests.** A real long-lived stream, so the echo is
-faster than with short requests. It needs UDP to the relay:
-
-```yaml
-environment:
-  RELAY_CLIENT_TRANSPORT: "rtc"     # if the channel does not open the browser falls back to poll
-  RTC_PORT_RANGE: "9450-9457"       # one port per simultaneous connection
-  RTC_PUBLIC_IP: "203.0.113.10"     # public address when the relay is behind NAT (Docker)
-ports:
-  - "9450-9457:9450-9457/udp"
-```
-
-The agent log shows the chosen way in its startup line:
-`Relay bridge enabled: wss://… (websocket, disguised as ssh, via relay.example.com:9444)`.
+If the download freezes at 14–17 KB, that is it. The workarounds for the browser (chunked
+bundle, WebRTC, short requests) and for the agent (disguise, own tunnel) are opt-in; how they
+work and how to set them up is in a separate document: [throttling.md](throttling.md).
 
 ## Pairing a new device
 

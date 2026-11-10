@@ -280,6 +280,8 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 
 ## Обход удушения потока (ADR 0034)
 
+Пользовательское описание и настройка — `docs/throttling.ru.md` / `docs/throttling.md` (держать синхронными); в `docs/remote*.md` осталась только отсылка.
+
 Фильтр на пути к relay пропускает ~25 пакетов сервера на соединение и дальше молчит; лимит — на поток, судьбу потока решает первый пакет клиента. Три обхода, все настройкой, по умолчанию выключены.
 
 - `packages/protocol/src/pollsock.ts` — «сокет поверх коротких запросов»: `PollSocket` (клиент, интерфейс WebSocket, только `fetch` — годится браузеру и Node), кодек потока (`encodePollMessage`, `PollDecoder`), пределы `POLL_DOWN_CHUNK` 8 КБ / `POLL_UP_CHUNK` 16 КБ. Веб тянет его из `@termhub/protocol/pollsock` — корневой экспорт несёт libsodium.

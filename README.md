@@ -156,6 +156,36 @@ rule: `MyProject`; if that name is taken — `MyProject1`, then `MyProject2`, an
 without arguments always gives a fresh session; to get back into an existing one, use `tml`
 (pick from the list) or `tm <name>` (attach, or create if missing).
 
+### Local access: `localhost`
+
+The agent's main certificate is issued for an external name (LAN or Tailscale), so
+`https://localhost:<port>` shows a certificate name error. On the agent's own machine there are
+two ways to open TermHub without warnings — you can enable both.
+
+**Plain HTTP on loopback.** Add to `~/.termhub/config.json` and restart the agent:
+
+```json
+"localHttpPort": 7711
+```
+
+Open `http://localhost:7711`. The entrance listens on `127.0.0.1` only and is never exposed;
+browsers treat `http://localhost` as a secure context, so the service worker and clipboard work.
+The password is the same.
+
+**A certificate of its own for localhost.** Requires `openssl` and `tls` already set in the
+config:
+
+```bash
+npx termhub local-cert
+```
+
+The command issues a certificate for `localhost`, `127.0.0.1` and `::1`, adds it to the config
+(`tlsExtra`) and prints the one command with which you trust its certificate authority (it asks
+for your password). After an agent restart `https://localhost:<port>` opens cleanly while the
+external name keeps its certificate — the agent picks by the requested name. The authority is
+valid for localhost only: the constraint is built into it. The certificate lives 800 days; renew
+with the same command. Details: [docs/security.md](docs/security.md).
+
 ### Codex sessions
 
 Choose the `codex` preset when creating a web session. TermHub starts that Codex process
@@ -182,6 +212,7 @@ npx termhub share          # one-time pairing code (+ QR) for a new device
 npx termhub pair|connect   # CLI client: pairing and "ssh over relay"
 npx termhub devices|revoke # list/revoke authorized devices
 npx termhub doctor         # diagnostics: config, git/svn/hg, tmux, agent, relay
+npx termhub local-cert     # certificate for https://localhost (see "Local access")
 ```
 
 ---
@@ -254,6 +285,8 @@ How to contribute — [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Documentation
 
 - [docs/remote.md](docs/remote.md) — remote access: relay, pairing, Tailscale
+- [docs/throttling.md](docs/throttling.md) — networks where the provider throttles each
+  connection: how the filter works and how to set up the workarounds
 - [docs/security.md](docs/security.md) — threat model and cryptography
 - [docs/notifications.md](docs/notifications.md) — sound, push, HTTPS
 - [docs/manual-test-checklist.md](docs/manual-test-checklist.md) — manual test checklist
