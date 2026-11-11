@@ -177,7 +177,14 @@ async function boot(): Promise<void> {
   // Роутер подключаем только после инициализации транспорта — до этого render()
   // не должен запускаться (иначе lanTransport ещё null).
   window.addEventListener('hashchange', render);
-  onLangChange(render);
+  // Смена языка перерисовывает всё, включая живое рабочее пространство сессии: роутер его
+  // переиспользует, и без пересборки экран сессии оставался на прежнем языке — выглядело
+  // так, будто язык обратно не переключается.
+  onLangChange(() => {
+    workspace?.teardown();
+    workspace = null;
+    render();
+  });
   render();
 }
 

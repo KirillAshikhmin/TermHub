@@ -189,14 +189,21 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   panel.className = 'th-spanel';
   const sheet = document.createElement('div');
   sheet.className = 'th-spanel__sheet';
+  // Шапка окна: название, порядок и крестик. Окно закрывается без выбора сессии —
+  // крестиком, Esc или кликом по затемнению под ним.
   const sortBar = document.createElement('div');
-  sortBar.className = 'th-spanel__toolbar';
+  sortBar.className = 'th-spanel__head';
+  const panelTitle = document.createElement('h2');
+  panelTitle.className = 'th-spanel__title';
+  panelTitle.textContent = t('term.tabs');
   sortBar.append(
+    panelTitle,
     sortSelect(readSortMode(), (mode) => {
       sortMode = mode;
       buildPanelRows();
       render(latest); // полоса вкладок идёт в том же порядке
     }),
+    iconButton('close', t('common.close'), () => closePanel()),
   );
   const list = document.createElement('div');
   list.className = 'th-spanel__list th-grid';

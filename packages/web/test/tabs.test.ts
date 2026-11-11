@@ -454,6 +454,21 @@ describe('mountSessionTabs', () => {
     tabs.teardown();
   });
 
+  it('у окна сессий своя шапка, и крестик закрывает его без выбора сессии', async () => {
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);
+    const onSwitch = vi.fn();
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'a', onSwitch });
+    await vi.advanceTimersByTimeAsync(0);
+    const panel = tabs.el.querySelector<HTMLElement>('.th-spanel')!;
+    tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
+    expect(panel.classList.contains('is-open')).toBe(true);
+    expect(panel.querySelector('.th-spanel__head .th-spanel__title')!.textContent).toBe(t('term.tabs'));
+    panel.querySelector<HTMLButtonElement>('.th-spanel__head .th-iconbtn')!.click();
+    expect(panel.classList.contains('is-open')).toBe(false);
+    expect(onSwitch).not.toHaveBeenCalled();
+    tabs.teardown();
+  });
+
   it('панель и полоса идут в выбранном порядке (по имени)', async () => {
     localStorage.setItem('termhub.sessionSort', 'name');
     const { transport } = stubTransport([
