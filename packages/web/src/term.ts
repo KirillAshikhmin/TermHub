@@ -953,11 +953,28 @@ export function mountTerminal(
     }
     doFit();
   };
+  // Досылка размера. Смена видимой области (клавиатура телефона, поворот, показ вкладки)
+  // идёт серией событий, и одна потерянная или обогнанная в пути просьба оставляет агенту
+  // прежний размер: tmux рисует в меньшую область, а ниже остаётся старая картинка. Через
+  // треть секунды после последнего события размер меряется заново и уходит ещё раз — даже
+  // если с точки зрения клиента он уже был отправлен. Повтор безвреден: тот же размер
+  // агент применяет без последствий.
+  let resendTimer: ReturnType<typeof setTimeout> | undefined;
+  const resendSoon = (): void => {
+    if (resendTimer) clearTimeout(resendTimer);
+    resendTimer = setTimeout(() => {
+      resendTimer = undefined;
+      if (disposed || !connected) return;
+      doFit();
+      sendResize();
+    }, 350);
+  };
   const scheduleFit = (): void => {
     if (rafId) return;
     rafId = requestAnimationFrame(() => {
       rafId = 0;
       reposition();
+      resendSoon();
     });
   };
   const ro = new ResizeObserver(scheduleFit);
@@ -975,6 +992,7 @@ export function mountTerminal(
       disposed = true;
       offPrefs();
       if (rafId) cancelAnimationFrame(rafId);
+      if (resendTimer) clearTimeout(resendTimer);
       ro.disconnect();
       window.removeEventListener('resize', scheduleFit);
       vv?.removeEventListener('resize', scheduleFit);

@@ -1811,11 +1811,14 @@ select.th-input {
   font-size: 1.05rem;
   font-weight: 650;
 }
-/* Карточки сеткой, как на главной (раскладку колонок даёт .th-grid). */
+/* Карточки сеткой, как на главной (раскладку колонок даёт .th-grid). Строки — строго по
+   содержимому: список зажат высотой окна и прокручивается, и «авто»-строки сетка в таком
+   случае сжимает до минимальной высоты карточки — содержимое вылезало поверх соседей. */
 .th-spanel__list {
   overflow-y: auto;
   padding: 14px 16px;
   align-content: start;
+  grid-auto-rows: max-content;
 }
 /* Телефон: две колонки и карточки плотнее — иначе в окно влезает две-три сессии. */
 @media (max-width: 600px) {
@@ -1825,9 +1828,13 @@ select.th-input {
     padding: 10px;
   }
   .th-spanel__list .th-card {
-    min-height: 0;
+    min-height: auto;
     gap: 6px;
     padding: 10px;
+  }
+  /* Шапка окна в одну строку: подпись «Сортировка» на телефоне лишняя. */
+  .th-spanel__head .th-sort__label {
+    display: none;
   }
   .th-spanel__list .th-card__name {
     font-size: 0.88rem;
