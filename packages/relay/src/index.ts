@@ -52,6 +52,12 @@ export interface RelayOptions {
    *  последний IP из XFF (его дописал сам прокси), иначе — req.socket.remoteAddress
    *  (защита от спуфинга). */
   trustProxy?: boolean;
+  /** Пускать только по HTTPS. Со своим `tls` иначе и не бывает; за прокси запрос обязан
+   *  нести `X-Forwarded-Proto: https` от доверенного прокси (`trustProxy`), остальным —
+   *  перенаправление на https (GET) или отказ. Без `tls` и без доверенного прокси relay
+   *  не запускается. `/healthz` открыт всегда (проверка контейнера ходит мимо прокси).
+   *  По умолчанию — env RELAY_REQUIRE_HTTPS==='1'. */
+  requireHttps?: boolean;
   /** Заглушить stdout-логирование (тесты). */
   silent?: boolean;
   /** Раздавать бандл кусками через service worker (сети, где поток душат после пары
@@ -105,7 +111,7 @@ interface ConnState {
 }
 
 /** Поднимает relay и возвращает дескриптор для остановки. */
-export function startRelay(opts: RelayOptions): Promise<RelayHandle> {
+export async function startRelay(opts: RelayOptions): Promise<RelayHandle> {
   return new RelayServer(opts).listen();
 }
 
@@ -125,9 +131,11 @@ class RelayServer {
   private readonly chunked: boolean;
   private readonly clientTransport: 'ws' | 'poll' | 'rtc';
   private readonly rtc?: RtcHub;
+  private readonly requireHttps: boolean;
 
   constructor(opts: RelayOptions) {
     this.opts = opts;
+    this.requireHttps = opts.requireHttps ?? process.env.RELAY_REQUIRE_HTTPS === '1';
     this.chunked = opts.chunked ?? process.env.RELAY_CHUNKED === '1';
     this.clientTransport = opts.clientTransport ?? transportFromEnv();
     // Тот же путь, что у WebSocket: клиенту хватает одного адреса relay на оба способа.
@@ -153,6 +161,9 @@ class RelayServer {
     this.pairTtl = opts.pairTtlMs ?? DEFAULT_PAIR_TTL;
     this.rateCfg = opts.rateLimit ?? DEFAULT_RATE_LIMIT;
     this.trustProxy = opts.trustProxy ?? process.env.RELAY_TRUST_PROXY === '1';
+    if (this.requireHttps && !opts.tls && !this.trustProxy) {
+      throw new Error('HTTPS is required, but the relay has neither a TLS certificate nor a trusted proxy in front of it');
+    }
     // Периодический sweep протухших окон: иначе rate-Map росла бы вечно по
     // записи на каждый когда-либо виденный IP (ротация IPv6 → OOM).
     this.rateSweep = setInterval(() => sweepRateWindows(this.rate, Date.now(), this.rateCfg.windowMs), this.rateCfg.windowMs);
@@ -222,6 +233,17 @@ class RelayServer {
       res.end(buf);
       return;
     }
+    if (!this.isSecure(req)) {
+      const host = req.headers.host;
+      // Перенаправляем только чтение страницы: остальное (короткие запросы, сигнализация)
+      // шлёт код приложения, и ему нужен ясный отказ, а не переезд.
+      if ((method === 'GET' || method === 'HEAD') && host && /^[\w.-]+(:\d{1,5})?$/.test(host)) {
+        res.writeHead(308, { Location: `https://${host}${req.url ?? '/'}`, 'Content-Length': 0, Connection: 'close' });
+        res.end();
+        return;
+      }
+      return this.sendJson(res, 403, { error: 'https required' });
+    }
     if (this.rtc?.handle(req, res, url)) return;
     if (this.poll.handle(req, res, url)) return;
     if (method === 'GET' && pathname === '/api/mode') {
@@ -272,6 +294,11 @@ class RelayServer {
       socket.destroy();
       return;
     }
+    if (!this.isSecure(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     const ip = this.clientIp(req);
     if (!this.rateAllow(ip)) {
       socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
@@ -301,6 +328,17 @@ class RelayServer {
       if (last && net.isIP(last)) return last;
     }
     return req.socket.remoteAddress ?? 'unknown';
+  }
+
+  /** Пришёл ли запрос по HTTPS (когда это требуется): свой TLS либо слово доверенного
+   *  прокси. Как и с адресом клиента, берём последнее значение заголовка — его дописал
+   *  сам прокси; от прямого клиента заголовку не верим вовсе. */
+  private isSecure(req: IncomingMessage): boolean {
+    if (!this.requireHttps || this.opts.tls) return true;
+    if (!this.trustProxy) return false;
+    const xfp = req.headers['x-forwarded-proto'];
+    const raw = Array.isArray(xfp) ? xfp.join(',') : xfp;
+    return raw?.split(',').pop()?.trim().toLowerCase() === 'https';
   }
 
   /** Простое фиксированное окно на новые соединения с одного IP. */

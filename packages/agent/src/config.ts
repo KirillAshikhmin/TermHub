@@ -54,7 +54,13 @@ export interface TermhubConfig {
   /** Свой relay на этой машине (см. local-relay.ts): порт, адрес привязки (по умолчанию
    *  все интерфейсы) и сертификат (по умолчанию — `tls` агента, null — обычный HTTP).
    *  Поля может не быть — своего relay нет. */
-  localRelay?: { port: number; host?: string; tls?: { cert: string; key: string } | null };
+  localRelay?: {
+    port: number;
+    host?: string;
+    tls?: { cert: string; key: string } | null;
+    /** Без сертификата relay не запускать. */
+    requireHttps?: boolean;
+  };
   vapid: { publicKey: string; privateKey: string; subject: string };
   locale: null | 'ru' | 'en';
   /** Способ подключения терминала к tmux. Поля может не быть — это `control`;

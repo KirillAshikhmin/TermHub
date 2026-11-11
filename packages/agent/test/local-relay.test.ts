@@ -30,6 +30,17 @@ describe('readLocalRelay', () => {
     expect(readLocalRelay({ port: 7710, tls: TLS, localRelay: { port: 7720, tls: own } })?.tls).toEqual(own);
   });
 
+  it('requireHttps: без сертификата relay не поднимается, с ним — флаг едет в окружение', () => {
+    const log = vi.fn();
+    expect(readLocalRelay({ port: 7710, tls: null, localRelay: { port: 7720, requireHttps: true } }, log)).toBeNull();
+    expect(readLocalRelay({ port: 7710, tls: TLS, localRelay: { port: 7720, tls: null, requireHttps: true } }, log)).toBeNull();
+    expect(log).toHaveBeenCalledTimes(2);
+    const cfg = readLocalRelay({ port: 7710, tls: TLS, localRelay: { port: 7720, requireHttps: true } });
+    expect(cfg?.requireHttps).toBe(true);
+    expect(localRelayEnv(cfg!, {}).RELAY_REQUIRE_HTTPS).toBe('1');
+    expect(localRelayEnv({ port: 7720, host: '0.0.0.0', tls: TLS }, { RELAY_REQUIRE_HTTPS: '1' }).RELAY_REQUIRE_HTTPS).toBeUndefined();
+  });
+
   it('битое значение relay не поднимает и говорит об этом', () => {
     const log = vi.fn();
     const bad = [{ port: 0 }, { port: '80' }, { port: 7710 }, { port: 7720, tls: { cert: 1 } }, 'on'];

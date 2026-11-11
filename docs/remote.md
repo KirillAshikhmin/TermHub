@@ -158,6 +158,7 @@ changes without it):
 | `port` | Relay port. Must differ from the agent port. |
 | `host` | Bind address, `0.0.0.0` by default. |
 | `tls` | `{ "cert": path, "key": path }` — the relay certificate. Absent — the agent's certificate (`tls`) is used. `null` — plain HTTP. |
+| `requireHttps` | `true` — the relay does not start without a certificate (a guard against accidental plain HTTP). |
 
 Restart the agent after the change. What happens:
 
@@ -181,6 +182,8 @@ restart the agent after renewal. Without TLS (`"tls": null`, e.g. on port 80) th
 opens, but the application code travels in clear text: anyone on the path can replace it
 and take the device key. Service worker and PWA install do not work without HTTPS either.
 Plain HTTP is for testing only.
+
+For a relay on a VPS the same requirement is `RELAY_REQUIRE_HTTPS=1`: behind a proxy the relay accepts only requests carrying `X-Forwarded-Proto: https` from a trusted proxy (`RELAY_TRUST_PROXY=1`), redirects plain HTTP to https, and does not start with neither a certificate nor a trusted proxy. `/healthz` is always open.
 
 The local relay state is shown in the connection details window ("Local relay" row) and in
 `/api/diag` (`localRelay`).

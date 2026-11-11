@@ -17,6 +17,9 @@ export interface LocalRelayConfig {
   port: number;
   host: string;
   tls: { cert: string; key: string } | null;
+  /** Не запускать relay без сертификата (страховка от случайного `tls: null` или
+   *  пропавшего сертификата агента). */
+  requireHttps?: boolean;
 }
 
 const RESTART_START_MS = 1000;
@@ -37,7 +40,7 @@ export function readLocalRelay(
     log('[config] localRelay must be an object like {"port": 7720}, ignored');
     return null;
   }
-  const r = raw as { port?: unknown; host?: unknown; tls?: unknown };
+  const r = raw as { port?: unknown; host?: unknown; tls?: unknown; requireHttps?: unknown };
   if (typeof r.port !== 'number' || !Number.isInteger(r.port) || r.port < 1 || r.port > 65535) {
     log(`[config] localRelay.port "${String(r.port)}" is not a port number, local relay is off`);
     return null;
@@ -57,6 +60,13 @@ export function readLocalRelay(
     tls = { cert: t.cert, key: t.key };
   }
   const host = typeof r.host === 'string' && r.host.length > 0 ? r.host : '0.0.0.0';
+  if (r.requireHttps === true) {
+    if (!tls) {
+      log('[config] localRelay.requireHttps is set, but there is no certificate (localRelay.tls or tls), local relay is off');
+      return null;
+    }
+    return { port: r.port, host, tls, requireHttps: true };
+  }
   return { port: r.port, host, tls };
 }
 
@@ -76,6 +86,8 @@ export function localRelayEnv(cfg: LocalRelayConfig, base: NodeJS.ProcessEnv = p
   delete env.STATIC_DIR;
   // Прокси перед этим relay нет: адрес клиента берётся с сокета, заголовку верить нельзя.
   delete env.RELAY_TRUST_PROXY;
+  delete env.RELAY_REQUIRE_HTTPS;
+  if (cfg.requireHttps) env.RELAY_REQUIRE_HTTPS = '1';
   if (cfg.tls) {
     env.TLS_CERT = cfg.tls.cert;
     env.TLS_KEY = cfg.tls.key;
