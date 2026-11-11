@@ -82,6 +82,7 @@ interface FilesCtl {
   uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void>;
 }
 import { attachTerminal, type TerminalHandle } from './bridge.js';
+import { parseSize } from './pty-common.js';
 import { defaultPtyPool, PtyUnavailableError, type PtyPool } from './pty-pool.js';
 import { runRepoAction } from './vcs.js';
 import { sanitizeDeviceName } from './safe-text.js';
@@ -801,9 +802,10 @@ export class RelayLink {
           if (!scope.write) return;
           break;
         case FrameType.Resize:
-          // Размер общий для всех клиентов сессии: гость «только для просмотра» не
-          // должен перекраивать окно владельцу.
-          if (!scope.write) return;
+          // Размер общий для всех клиентов сессии: гость «только для просмотра» не должен
+          // перекраивать окно владельцу. Кадр при этом пропускается: терминал такого гостя
+          // открыт зрителем (`passive` в doOpen) и размер окна не задаёт вовсе, а свой
+          // размер ему нужен — в режиме attach по нему рисуется его собственный pty.
           break;
         case FrameType.FilesList:
         case FrameType.FileRead:
@@ -839,14 +841,16 @@ export class RelayLink {
       case FrameType.Resize: {
         const t = s.terminals.get(frame.channel);
         if (!t) return;
-        let dims: { cols: number; rows: number; claim?: unknown };
+        let body: { claim?: unknown };
         try {
-          dims = frameJson<{ cols: number; rows: number; claim?: unknown }>(frame);
+          body = frameJson<{ claim?: unknown }>(frame);
         } catch {
           return; // битый RESIZE игнорируем, сессию не рвём
         }
+        const dims = parseSize(body);
+        if (!dims) return; // не объект с числами (в том числе `null`) — не размер
         // Поля `claim` у старого клиента нет — он забирал размер всегда, так и остаётся.
-        t.resize(dims.cols, dims.rows, dims.claim !== false);
+        t.resize(dims.cols, dims.rows, body.claim !== false);
         return;
       }
       case FrameType.Close: {
@@ -1296,13 +1300,13 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'too-many-terminals', message: 'too many terminals' }));
       return;
     }
-    let req: { session?: unknown; mode?: unknown };
+    let req: { session?: unknown; mode?: unknown; resume?: unknown };
     try {
-      req = frameJson<{ session?: unknown; mode?: unknown }>(frame);
+      req = frameJson<{ session?: unknown; mode?: unknown; resume?: unknown }>(frame);
     } catch {
       return;
     }
-    if (typeof req.session !== 'string') return;
+    if (typeof req !== 'object' || req === null || typeof req.session !== 'string') return;
     const session = req.session;
     // Просьба клиента о способе подключения едет в OPEN: терминал relay открывает здесь,
     // до первого RESIZE, и позже выбор режима уже не пересматривается.
@@ -1345,6 +1349,10 @@ export class RelayLink {
         },
         // Терминал создаётся на OPEN с размером по умолчанию: снимок ждёт RESIZE клиента.
         awaitFirstResize: true,
+        // Экран клиента уже жил (пере-OPEN после обрыва) — ему нужен экран, а не история.
+        resume: req.resume === true,
+        // Гость без права ввода — зритель: размер окна сессии он не задаёт.
+        passive: s.scope !== undefined && !s.scope.write,
         onExit: () => {
           this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
           s.terminals.delete(channel);

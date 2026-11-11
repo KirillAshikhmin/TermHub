@@ -3,7 +3,7 @@
 // (верный/неверный секрет), hello незнакомца → ERROR, и полный happy-path
 // hello→hello-ok→hello-fin→secretstream→LIST.
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -972,10 +972,19 @@ describe('RelayLink — вкладка Gradle через relay', () => {
 
   /** Терминал-пустышка: OPEN не должен спавнить настоящий pty — проверяем решение
    *  о доступе, а не работу tmux. */
-  const fakeAttach = (opts: { session: string }): TerminalHandle => {
+  const fakeAttach = (opts: { session: string; passive?: boolean; resume?: boolean }): TerminalHandle => {
     openedSessions.push(opts.session);
-    return { write: () => {}, resize: () => {}, pause: () => {}, resume: () => {}, dispose: () => {} };
+    openedOpts.push({ passive: opts.passive, resume: opts.resume });
+    return {
+      write: () => {},
+      resize: (c: number, r: number, claim?: boolean) => void resizes.push([c, r, claim]),
+      pause: () => {},
+      resume: () => {},
+      dispose: () => {},
+    };
   };
+  let openedOpts: Array<{ passive?: boolean; resume?: boolean }> = [];
+  let resizes: Array<[number, number, boolean | undefined]> = [];
 
   beforeAll(() => {
     projectDir = path.join(root, 'gradle-proj');
@@ -1014,6 +1023,8 @@ describe('RelayLink — вкладка Gradle через relay', () => {
   beforeEach(() => {
     openedSessions = [];
     openedHostPaths = [];
+    openedOpts = [];
+    resizes = [];
   });
 
   interface Client {
@@ -1068,6 +1079,45 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     expect(r.id).toBe(8);
     return r;
   }
+
+  async function openTerm(c: Client, payload: Record<string, unknown>): Promise<void> {
+    c.ws.send(c.enc.push(jsonFrame(FrameType.Open, 5, payload)), { binary: true });
+    expect((await nextFrame(c)).type).toBe(FrameType.OpenOk);
+  }
+
+  it('гость «только для просмотра» открывает терминал зрителем: размер окна он не задаёт', async () => {
+    const readOnly = await guestClient({ session: GUEST_SESSION, write: false, files: false });
+    await openTerm(readOnly, { session: GUEST_SESSION });
+    expect(openedOpts).toEqual([{ passive: true, resume: false }]);
+    // Свой размер ему всё равно нужен (в режиме attach по нему рисуется его pty) — кадр
+    // доходит до терминала, а зритель на стороне tmux размера окна не касается.
+    readOnly.ws.send(readOnly.enc.push(jsonFrame(FrameType.Resize, 5, { cols: 120, rows: 40 })), { binary: true });
+    await vi.waitFor(() => expect(resizes).toEqual([[120, 40, true]]));
+    readOnly.ws.close();
+  });
+
+  it('гость с правом ввода и владелец — не зрители; пере-OPEN несёт признак переподключения', async () => {
+    const writer = await guestClient({ session: GUEST_SESSION, write: true, files: false });
+    await openTerm(writer, { session: GUEST_SESSION, resume: true });
+    writer.ws.close();
+    const owner = await guestClient();
+    await openTerm(owner, { session: GUEST_SESSION, resume: 'yes' }); // мусор — не признак
+    expect(openedOpts).toEqual([
+      { passive: false, resume: true },
+      { passive: false, resume: false },
+    ]);
+    owner.ws.close();
+  });
+
+  it('тело RESIZE `null` и не-размер по relay терминал не трогают и клиента не рвут', async () => {
+    const owner = await guestClient();
+    await openTerm(owner, { session: GUEST_SESSION });
+    owner.ws.send(owner.enc.push(jsonFrame(FrameType.Resize, 5, null)), { binary: true });
+    owner.ws.send(owner.enc.push(jsonFrame(FrameType.Resize, 5, { cols: 'wide', rows: 3 })), { binary: true });
+    owner.ws.send(owner.enc.push(jsonFrame(FrameType.Resize, 5, { cols: 90, rows: 30, claim: false })), { binary: true });
+    await vi.waitFor(() => expect(resizes).toEqual([[90, 30, false]]));
+    owner.ws.close();
+  });
 
   it('open-host через relay требует write и повторно ограничивает путь shared-сессией', async () => {
     const readOnly = await guestClient({ session: GUEST_SESSION, write: false, files: true });

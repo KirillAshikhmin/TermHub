@@ -680,7 +680,9 @@ export function mountTerminal(
         forgetAgentState();
         // Терминал открыл человек, который сейчас смотрит на эту страницу, — это его
         // действие; переподключение вкладки в фоне им не является.
-        if (document.hasFocus()) noteAction();
+        // Терминал, смонтированный невидимым (другая вкладка сессии), действием не
+        // считается: его раскладку ещё не измерить, и заявка ушла бы с размером 80×24.
+        if (document.hasFocus() && host.clientWidth > 0) noteAction();
         banner.classList.remove('is-shown');
         doFit();
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.

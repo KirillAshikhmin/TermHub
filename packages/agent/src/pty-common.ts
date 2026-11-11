@@ -13,6 +13,16 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.trunc(value)));
 }
 
+/** Тело кадра RESIZE: объект с числовыми cols и rows. Что угодно другое (в том числе
+ *  законный JSON `null`) — не размер: обращение к его полям уронило бы обработчик. */
+export function parseSize(value: unknown): { cols: number; rows: number } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { cols, rows } = value as { cols?: unknown; rows?: unknown };
+  if (typeof cols !== 'number' || typeof rows !== 'number') return undefined;
+  if (!Number.isFinite(cols) || !Number.isFinite(rows)) return undefined;
+  return { cols, rows };
+}
+
 export function clampCols(value: number): number {
   return clamp(value, MIN_COLS, MAX_COLS);
 }

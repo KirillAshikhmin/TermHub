@@ -12,6 +12,7 @@ vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')
 
 let root: HTMLElement;
 let focused = true;
+let visibleWidth = 800;
 
 beforeEach(() => {
   localStorage.clear();
@@ -22,6 +23,9 @@ beforeEach(() => {
   document.body.append(root);
   focused = true;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+  // happy-dom раскладку не считает: терминал с нулевой шириной выглядел бы скрытым.
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => visibleWidth);
+  visibleWidth = 800;
 });
 
 afterEach(() => {
@@ -38,6 +42,15 @@ describe('заявка размера окна', () => {
     const handle = mountTerminal(root, 'work', transport);
     opened[0]!.opts.onStatus?.('connected');
     expect(claims).toEqual([true]);
+    handle.teardown();
+  });
+
+  it('терминал смонтирован невидимым (другая вкладка сессии): открытие — не действие', () => {
+    visibleWidth = 0;
+    const { transport, opened, claims } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onStatus?.('connected');
+    expect(claims).toEqual([false]);
     handle.teardown();
   });
 

@@ -83,6 +83,9 @@ function options(over: Partial<SessionLinkOptions> = {}): SessionLinkOptions {
   return { cols: 80, rows: 24, onData: noop, onExit: noop, log: noop, ...over };
 }
 
+/** Режимы оболочки без приложения: всё выключено, перенос строк и курсор включены. */
+const MODES_PLAIN = '\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[4l\x1b[?25h';
+
 // Флаг у приветствия ноль, у ответов на наши команды — единица: так отвечает живой tmux.
 const GREETING = '%begin 1 0 0\n%end 1 0 0\n';
 
@@ -544,7 +547,8 @@ describe('снимок экрана', () => {
     // Курсор в столбце 5 строки 0 панели высотой 3; включены клавиши курсора и вставка в скобках.
     fake.feed(reply(4, 'TH-STATE,5,0,3,0,0,2,1,1,0,0,0,0,0,1,1,0'));
     expect(dec.decode(await pending)).toBe(
-      'history\r\nrow0\r\nrow1\r\nrow2\x1b[0m\r\x1b[2A\x1b[5C\x1b[?1h\x1b[?2004h',
+      '\x1b[?1049lhistory\r\nrow0\r\nrow1\r\nrow2\x1b[0m\r\x1b[2A\x1b[5C' +
+        '\x1b[?1h\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004h\x1b[?7h\x1b[4l\x1b[?25h',
     );
   });
 
@@ -552,7 +556,9 @@ describe('снимок экрана', () => {
     const state = parsePaneState('TH-STATE,7,2,6,1,1,4,0,0,0,1,0,0,1,,1,0');
     expect(state?.bracket_paste_flag).toBeUndefined(); // поле, которого старый tmux не знает
     expect(renderSnapshot(['a', 'b'], state)).toBe(
-      '\x1b[?1049h\x1b[Ha\r\nb\x1b[0m\x1b[2;5r\x1b[3;8H\x1b[?1000h\x1b[?1006h\x1b[?25l',
+      // вставка в скобках этому tmux неизвестна — её не трогаем, остальное названо явно
+      '\x1b[?1049h\x1b[Ha\r\nb\x1b[0m\x1b[2;5r\x1b[3;8H' +
+        '\x1b[?1l\x1b>\x1b[?1000h\x1b[?1002l\x1b[?1003l\x1b[?1006h\x1b[?7h\x1b[4l\x1b[?25l',
     );
     expect(parsePaneState('pane is gone')).toBeUndefined();
     expect(renderSnapshot(['a'], undefined)).toBe('a');
@@ -594,8 +600,7 @@ describe('снимок экрана', () => {
     await tick();
     await tick();
     // Режимы названы все и явно: переключения, пришедшие на время захвата, клиенту не шли.
-    const modesOff = '\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[4l\x1b[?25h';
-    expect(chunks).toEqual([`\x1b[?1049l\x1b[0m\x1b[r\x1b[H\x1b[2Jrow0\r\nrow1\x1b[0m\x1b[2;4H${modesOff}`, 'after']);
+    expect(chunks).toEqual([`\x1b[?1049l\x1b[0m\x1b[r\x1b[H\x1b[2Jrow0\r\nrow1\x1b[0m\x1b[2;4H${MODES_PLAIN}`, 'after']);
     fake.feed('%output %0 live\n');
     expect(chunks.at(-1)).toBe('live');
   });
@@ -624,11 +629,13 @@ describe('снимок экрана', () => {
     expect(out).not.toContain('\x1b[?25');
   });
 
-  it('снимок для нового экрана называет только отличия от свежего терминала', () => {
+  it('снимок называет буфер и каждый режим явно: экран клиента мог пережить переподключение', () => {
     const plain = parsePaneState('TH-STATE,0,0,10,0,0,9,1,0,0,0,0,0,0,0,1,0');
-    expect(renderSnapshot(['x'], plain)).toBe('x\x1b[0m\r\x1b[9A');
+    expect(renderSnapshot(['x'], plain)).toBe(`\x1b[?1049lx\x1b[0m\r\x1b[9A${MODES_PLAIN}`);
     const busy = parsePaneState('TH-STATE,0,0,10,0,0,9,0,1,0,1,0,0,1,1,0,0');
-    expect(renderSnapshot(['x'], busy)).toBe('x\x1b[0m\r\x1b[9A\x1b[?1h\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[?7l\x1b[?25l');
+    expect(renderSnapshot(['x'], busy)).toBe(
+      '\x1b[?1049lx\x1b[0m\r\x1b[9A\x1b[?1h\x1b>\x1b[?1000h\x1b[?1002l\x1b[?1003l\x1b[?1006h\x1b[?2004h\x1b[?7l\x1b[4l\x1b[?25l',
+    );
   });
 
   it('придержанный вывод переполнился: он уходит клиенту, а устаревшая картинка — нет', async () => {
@@ -728,6 +735,44 @@ describe('снимок экрана', () => {
     await tick();
     await tick();
     expect(chunks.join('')).toContain('\x1b[H\x1b[2Jother pane');
+  });
+
+  describe('зритель', () => {
+    it('подключается с ignore-size и размера не просит ни при открытии, ни потом', async () => {
+      const fake = makeFakePty();
+      stubSpawns(fake);
+      const link = open('sess', options({ passive: true }));
+      expect(mockSpawn.mock.calls[0]![1]).toEqual(['-CC', 'attach', '-f', 'ignore-size', '-t', '=sess:']);
+      fake.feed(GREETING);
+      fake.feed(reply(1, '%0 @0 0 100 30')); // первая же команда — запрос панели, просьбы размера нет
+      await link.ready;
+      link.resize(60, 20, true);
+      link.resize(61, 21);
+      expect(fake.commands().some((c) => c.startsWith('refresh-client') || c.startsWith('switch-client'))).toBe(false);
+    });
+
+    it('в режиме attach зритель меняет размер только своему pty', async () => {
+      const fake = makeFakePty();
+      stubSpawns(fake);
+      const link = open('sess', options({ passive: true, requestedMode: 'attach' }));
+      await link.ready;
+      expect(mockSpawn.mock.calls[0]![1]).toEqual(['attach', '-f', 'ignore-size', '-t', '=sess:']);
+      link.resize(60, 20);
+      expect(fake.commands().at(-1)).toBe('<resize 60x20>');
+    });
+  });
+
+  it('экран для переподключившегося клиента: только видимое, со стиранием и режимами — без истории', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const link = open('sess', options());
+    await bringUp(fake, link, '%0');
+    const pending = link.screen();
+    await tick();
+    expect(fake.commands().at(-2)).toBe('capture-pane -t %0 -p -e'); // без -S: истории нет
+    fake.feed(reply(3, 'row0', 'row1'));
+    fake.feed(reply(4, 'TH-STATE,3,1,24,0,0,23,1,0,0,0,0,0,0,0,1,0'));
+    expect(dec.decode(await pending)).toBe(`\x1b[?1049l\x1b[0m\x1b[r\x1b[H\x1b[2Jrow0\r\nrow1\x1b[0m\x1b[2;4H${MODES_PLAIN}`);
   });
 
   describe('заявка размера', () => {
@@ -961,7 +1006,7 @@ describe('жизненный цикл', () => {
     fake.emitExit();
     link.dispose();
     expect(exits).toBe(1);
-    expect(fake.isDestroyed()).toBe(false); // вышедший клиент второй раз не убивают
+    expect(fake.isDestroyed()).toBe(true); // pty вышедшего клиента отпускается: master иначе остался бы открытым
     expect(() => open('next', options({ ptyPool: pool }))).not.toThrow();
   });
 });

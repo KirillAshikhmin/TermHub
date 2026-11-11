@@ -142,4 +142,37 @@ describe.skipIf(!tmuxAvailable).each(['live', 'sprut.app'])('SessionLink — н�
       b?.dispose();
     }
   }, 90000);
+
+  it('зритель размер окна не задаёт: ни подключением, ни просьбой — и видит размер владельца', async () => {
+    const paneSize = (): string => tmux(['display-message', '-p', '-t', `=${sessionName}:`, '#{pane_width}x#{pane_height}']).trim();
+    const seen: string[] = [];
+    const owner = open(sessionName, { socketName, cols: 100, rows: 30, onData: () => {}, onExit: () => {}, log: () => {} });
+    let guest: ReturnType<typeof open> | undefined;
+    try {
+      expect(await owner.ready).toBe('control');
+      expect(await waitFor(() => paneSize() === '100x30', 15000), `панель: ${paneSize()}`).toBe(true);
+      // Гость «только для просмотра» открывает ту же сессию позже и с другим размером.
+      guest = open(sessionName, {
+        socketName,
+        cols: 60,
+        rows: 20,
+        passive: true,
+        onData: () => {},
+        onExit: () => {},
+        onPaneSize: (c, r) => seen.push(`${c}x${r}`),
+        log: () => {},
+      });
+      expect(await guest.ready).toBe('control');
+      guest.resize(50, 15, true);
+      // Зритель узнаёт размер панели владельца и получает её снимок.
+      expect(await waitFor(() => seen.includes('100x30'), 15000), `гость видел: ${seen.join(',')}`).toBe(true);
+      expect((await guest.snapshot()).length).toBeGreaterThan(0);
+      // Окно владельца за всё это время не шелохнулось.
+      await new Promise((r) => setTimeout(r, 700));
+      expect(paneSize()).toBe('100x30');
+    } finally {
+      owner.dispose();
+      guest?.dispose();
+    }
+  }, 90000);
 });

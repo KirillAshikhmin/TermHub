@@ -102,12 +102,20 @@ interface TermEntry {
   opts: TermChannelOpts;
   /** true после OPEN_OK; сбрасывается на реконнекте (пере-OPEN). */
   opened: boolean;
+  /** Терминал уже открывался: экран клиента несёт прежнее содержимое. */
+  everOpened?: boolean;
 }
 
 /** Полезная нагрузка OPEN. Просьба о режиме едет именно здесь: терминал relay
  *  создаётся на OPEN, и к первому RESIZE решение агентом уже принято. */
-function openPayload(entry: TermEntry): { session: string; mode?: TerminalMode } {
-  return entry.opts.mode ? { session: entry.session, mode: entry.opts.mode } : { session: entry.session };
+function openPayload(entry: TermEntry): { session: string; mode?: TerminalMode; resume?: true } {
+  return {
+    session: entry.session,
+    ...(entry.opts.mode ? { mode: entry.opts.mode } : {}),
+    // Пере-OPEN после обрыва: агент пришлёт только видимый экран, а не снимок с историей —
+    // она у клиента уже есть и иначе удваивалась бы на каждом обрыве.
+    ...(entry.everOpened ? { resume: true as const } : {}),
+  };
 }
 
 /** Ожидающий LIST_RESULT (FIFO — за раз в полёте обычно один). */
@@ -823,6 +831,7 @@ export class RelayTransport implements Transport {
         const entry = this.terminals.get(frame.channel);
         if (entry && !entry.opened) {
           entry.opened = true;
+          entry.everOpened = true;
           entry.opts.onStatus('connected');
         }
         return;

@@ -233,6 +233,23 @@ describe('RelayTransport — способ подключения термина�
     expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work' });
   });
 
+  it('пере-OPEN терминала, который уже открывался, помечен: экран клиента жил, история ему не нужна', () => {
+    vi.useFakeTimers();
+    const { transport, ws, agentIdentity, agentEnc, agentDec, firstEncrypted } = streaming();
+    transport.openTerm('work', noopOpts());
+    const open = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work' }); // первое открытие — без пометки
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.OpenOk, open.channel, {})));
+
+    ws.close();
+    vi.advanceTimersByTime(1000); // backoff реконнекта
+    const ws2 = sockets[1]!;
+    const again = restream(ws2, agentIdentity);
+    const reopen = decodeFrame(again.agentDec.pull(ws2.sent[again.firstEncrypted] as Uint8Array));
+    expect(reopen.type).toBe(FrameType.Open);
+    expect(frameJson<Record<string, unknown>>(reopen)).toEqual({ session: 'work', resume: true });
+  });
+
   it('после обрыва re-OPEN снова несёт просьбу: агент выбирает режим заново на каждое открытие', () => {
     vi.useFakeTimers();
     const { transport, ws, agentIdentity } = streaming();

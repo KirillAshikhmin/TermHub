@@ -19,6 +19,11 @@ export interface SessionLinkOptions {
   configMode?: TerminalMode;
   /** Просьба клиента из первого кадра RESIZE; незнакомое значение игнорируется. */
   requestedMode?: string;
+  /** Зритель: клиент подключается с флагом tmux `ignore-size` и размер окна не задаёт
+   *  вовсе — ни подключением, ни просьбой, ни заявкой. Гость «только для просмотра»
+   *  иначе сжимал бы окно владельцу до своих 80×24 одним фактом открытия: последний
+   *  подключившийся control-клиент для tmux и есть хозяин размера. */
+  passive?: boolean;
   /** Байты активной панели (control mode) или сырой поток tmux (attach). */
   onData: (bytes: Uint8Array) => void;
   /** Клиент tmux завершился: терминал мёртв, слот пула уже освобождён. */
@@ -50,6 +55,10 @@ export interface Link {
   /** Снимок экрана с историей: `capture-pane -p -e -S -<lines>`, строки склеены CRLF
    *  и готовы к записи в терминал. В режиме attach снимка нет — придёт пусто. */
   snapshot(lines?: number): Promise<Uint8Array>;
+  /** Только видимый экран, с чистого листа (стирание, картинка, режимы) — для клиента,
+   *  у которого экран уже жил: переподключение. Историю клиента не трогает и своей не
+   *  несёт: снимок с историей лёг бы под уже показанный текст вторым экземпляром. */
+  screen(): Promise<Uint8Array>;
   pause(): void;
   resume(): void;
   dispose(): void;
@@ -149,7 +158,7 @@ export function renderScreen(lines: string[], state: PaneState | undefined): str
   // Режимы ставятся и снимаются явно: вывод, пришедший на время захвата, клиенту не идёт
   // (он уже внутри картинки), и вместе с ним терялись бы переключения режимов — курсор,
   // спрятанный перед перерисовкой и показанный после, так и остался бы спрятанным.
-  return out + regionAndCursor(state) + modes(state, true);
+  return out + regionAndCursor(state) + modes(state);
 }
 
 type PaneState = Record<StateField, number | undefined>;
@@ -179,19 +188,16 @@ const MODE_SEQUENCES: ReadonlyArray<readonly [StateField, string, string]> = [
   ['insert_flag', '\x1b[4h', '\x1b[4l'],
   ['cursor_flag', '\x1b[?25h', '\x1b[?25l'],
 ];
-/** Значения свежего терминала: снимку для нового экрана их повторять незачем. */
-const MODE_DEFAULTS: Partial<Record<StateField, number>> = { wrap_flag: 1, cursor_flag: 1 };
-
-/** Режимы приложения. `explicit` — назвать каждый известный режим (экран клиента уже жил
- *  и мог запомнить другое); иначе — только отличия от свежего терминала. Поле, которого
- *  этот tmux не знает, пропускается: угадывать режим хуже, чем не трогать. */
-function modes(state: PaneState, explicit: boolean): string {
+/** Режимы приложения — каждый известный назван явно, включён он или выключен. Экран
+ *  клиента не обязан быть свежим: он переживает переподключение и помнит режимы того,
+ *  что было в панели раньше (мышь и альтернативный экран полноэкранного приложения над
+ *  уже вернувшейся оболочкой). Поле, которого этот tmux не знает, пропускается:
+ *  угадывать режим хуже, чем не трогать. */
+function modes(state: PaneState): string {
   let out = '';
   for (const [field, on, off] of MODE_SEQUENCES) {
     const value = state[field];
-    if (value === undefined) continue;
-    if (!explicit && value === (MODE_DEFAULTS[field] ?? 0)) continue;
-    out += value === 1 ? on : off;
+    if (value !== undefined) out += value === 1 ? on : off;
   }
   return out;
 }
@@ -214,7 +220,9 @@ export function renderSnapshot(lines: string[], state: PaneState | undefined): s
   const y = state.cursor_y ?? 0;
   const rows = state.pane_height ?? 0;
   const alt = state.alternate_on === 1;
-  let out = alt ? `\x1b[?1049h\x1b[H${body}` : body;
+  // Буфер назван явно в обе стороны: экран клиента мог остаться в альтернативном от
+  // приложения, которое с тех пор вышло.
+  let out = alt ? `\x1b[?1049h\x1b[H${body}` : `\x1b[?1049l${body}`;
   out += '\x1b[0m'; // цвет последней строки снимка не должен протечь в живой вывод
   if (alt) out += regionAndCursor(state);
   else {
@@ -223,8 +231,7 @@ export function renderSnapshot(lines: string[], state: PaneState | undefined): s
     if (up > 0) out += `\x1b[${up}A`;
     if (x > 0) out += `\x1b[${x}C`;
   }
-  // Режимы, включённые приложением до подключения клиента.
-  return out + modes(state, false);
+  return out + modes(state);
 }
 
 /** Вход в альтернативный экран — `ESC [ ? 1 0 4 9 h`, выход — тот же префикс и `l`. */
@@ -381,7 +388,8 @@ class SessionLink implements Link {
   private spawnClient(control: boolean): PtyClient {
     const socket = this.opts.socketName ? ['-L', this.opts.socketName] : [];
     // Завершающее ':' отделяет имя сессии: иначе точка в sprut.app трактуется как панель.
-    const args = [...socket, ...(control ? ['-CC'] : []), 'attach', '-t', `=${this.session}:`];
+    const passive = this.opts.passive ? ['-f', 'ignore-size'] : [];
+    const args = [...socket, ...(control ? ['-CC'] : []), 'attach', ...passive, '-t', `=${this.session}:`];
     const generation = this.generation;
     const child = spawnPty('tmux', args, {
       cols: this.cols,
@@ -643,6 +651,7 @@ class SessionLink implements Link {
   /** Просит у tmux свой размер окна. Одна и та же просьба дважды не уходит; промис —
    *  конец отправленной просьбы (undefined — слать было нечего). */
   private askSize(): Promise<void> | undefined {
+    if (this.opts.passive) return undefined; // зритель размера не просит
     const size = `${this.cols}x${this.rows}`;
     if (size === this.askedSize) return undefined;
     this.askedSize = size;
@@ -722,9 +731,10 @@ class SessionLink implements Link {
       this.fallback('control client exited before any output');
       return;
     }
-    // Уничтожать нечего: клиент уже вышел сам, остаётся только отпустить своё.
+    // Клиент уже вышел сам, но его pty ещё наш: чтение могло стоять на паузе, и тогда
+    // конец потока никто не прочтёт — master так и остался бы открытым.
     this.disposed = true;
-    this.detachChild();
+    this.killChild();
     this.rejectPending('terminal exited');
     this.lease?.release();
     this.opts.onExit();
@@ -826,7 +836,7 @@ class SessionLink implements Link {
       return;
     }
     // До приветственного блока команду слать нельзя: размер уйдёт вместе с init.
-    if (!this.greeted) return;
+    if (!this.greeted || this.opts.passive) return;
     const size = `${this.cols}x${this.rows}`;
     // Размер окна tmux отдаёт «последнему» клиенту, а среди control-клиентов последним
     // навсегда остаётся подключившийся позже: просьбы остальных он просто не слушает
@@ -871,6 +881,18 @@ class SessionLink implements Link {
       return encoder.encode(renderSnapshot(shot.lines, shot.state));
     } catch (err) {
       // Пустой снимок честнее выдуманного: экран заполнится первым же выводом.
+      this.log(`session ${this.session}: capture-pane failed (${String(err)})`);
+      return EMPTY;
+    }
+  }
+
+  async screen(): Promise<Uint8Array> {
+    const mode = await this.ready;
+    if (mode !== 'control' || this.disposed || this.activePane === undefined) return EMPTY;
+    try {
+      const shot = await this.capture(this.activePane, '');
+      return encoder.encode(renderScreen(shot.lines, shot.state));
+    } catch (err) {
       this.log(`session ${this.session}: capture-pane failed (${String(err)})`);
       return EMPTY;
     }

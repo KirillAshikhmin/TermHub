@@ -141,6 +141,14 @@ export function spawnPty(file: string, args: string[], opts: SpawnPtyOptions): P
   // EIO прилетает на смерти клиента: это штатный конец, а не сбой потока.
   master.on('error', () => {});
   const writes = new WriteQueue(pair.master);
+  // Поток закрыл fd сам (EIO на смерти клиента) раньше, чем пришёл exit: номер fd с
+  // этого мига ничей и может достаться другому pty — писать в него и менять ему размер
+  // по сохранённому номеру больше нельзя.
+  let fdClosed = false;
+  master.on('close', () => {
+    fdClosed = true;
+    writes.close();
+  });
 
   const exitCbs = new Set<() => void>();
   let exited = false;
@@ -176,7 +184,7 @@ export function spawnPty(file: string, args: string[], opts: SpawnPtyOptions): P
       writes.push(data);
     },
     resize(cols: number, rows: number): void {
-      if (destroyed) return;
+      if (destroyed || fdClosed) return;
       try {
         ptyNative.resize(pair.master, cols, rows);
       } catch {

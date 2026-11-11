@@ -20,8 +20,20 @@ export function dataFrame(payload: Uint8Array): Uint8Array {
  *  агент не спавнит pty. На нём же едет просьба о способе подключения (`mode`):
  *  в LAN это первый кадр, которым клиент открывает терминал, и к следующим
  *  ресайзам решение агентом уже принято. */
-export function resizeFrame(cols: number, rows: number, mode?: TerminalMode, claim?: boolean): Uint8Array {
-  return jsonFrame(FrameType.Resize, LAN_CHANNEL, resizePayload(cols, rows, mode, claim));
+export function resizeFrame(
+  cols: number,
+  rows: number,
+  mode?: TerminalMode,
+  claim?: boolean,
+  resume?: boolean,
+): Uint8Array {
+  // `resume` — экран этого клиента уже жил (переподключение): агент пришлёт не снимок с
+  // историей, а только видимый экран — иначе история удваивалась бы на каждом обрыве.
+  // Едет первым кадром подключения, как и `mode`.
+  return jsonFrame(FrameType.Resize, LAN_CHANNEL, {
+    ...resizePayload(cols, rows, mode, claim),
+    ...(resume ? { resume: true } : {}),
+  });
 }
 
 /** Тело RESIZE — одно на оба провода. `claim: false` — «размер пересчитался сам, человек

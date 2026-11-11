@@ -9,6 +9,7 @@ import type { WebSocket, RawData } from 'ws';
 import { encodeFrame, jsonFrame, frameJson, decodeFrame, FrameType } from '@termhub/protocol';
 import type { TerminalMode } from '@termhub/protocol';
 import { open as openSession } from './session-link.js';
+import { parseSize } from './pty-common.js';
 import { defaultPtyPool, PtyUnavailableError, type PtyPool } from './pty-pool.js';
 
 /** Байт BEL: его появление в выводе → колокольчик. */
@@ -80,6 +81,11 @@ export function attachTerminal(opts: {
    *  терминал создаётся на OPEN с размером по умолчанию, а настоящий размер клиента
    *  приезжает следующим кадром: снимок, снятый раньше, был бы разложен под 80×24. */
   awaitFirstResize?: boolean;
+  /** Экран клиента уже жил (переподключение): вместо снимка с историей — только видимый
+   *  экран с чистого листа, иначе история клиента удваивалась бы на каждом обрыве. */
+  resume?: boolean;
+  /** Зритель: размер окна не задаёт (см. SessionLinkOptions.passive). */
+  passive?: boolean;
   /** Общий budget назначается bridge-обвязкой; прямой вызов остаётся тестируемым без него. */
   ptyPool?: PtyPool;
 }): TerminalHandle {
@@ -91,6 +97,8 @@ export function attachTerminal(opts: {
   let streaming = false;
   const backlog: Uint8Array[] = [];
   let backlogBytes = 0;
+  /** Вывод, пришедший до отправки захвата: tmux его уже применил, он внутри снимка. */
+  let early: Uint8Array[] = [];
 
   // Скан на «звонок» с переносом состояния между чанками: BEL (0x07) считается
   // звонком, только если он НЕ терминатор OSC-последовательности. Shell ставит
@@ -137,6 +145,10 @@ export function attachTerminal(opts: {
   const flush = (): void => {
     clearHold();
     streaming = true;
+    // Ранний вывод ещё здесь — значит, снимок, в котором он должен был оказаться, до
+    // клиента не дошёл (отказ или срок): тогда он идёт сам, первым.
+    for (const part of early) opts.onData(part);
+    early = [];
     for (const part of backlog) opts.onData(part);
     backlog.length = 0;
     backlogBytes = 0;
@@ -148,6 +160,7 @@ export function attachTerminal(opts: {
     rows: opts.rows,
     configMode: opts.configMode,
     requestedMode: opts.requestedMode,
+    passive: opts.passive,
     onData: (bytes: Uint8Array): void => {
       if (disposed) return;
       if (scanBell(bytes)) opts.onBell(opts.session);
@@ -201,10 +214,21 @@ export function attachTerminal(opts: {
       // держит вывод панели, поэтому дважды на экран он не попадёт.
       if (mode === 'control') await resized;
       if (disposed) return;
-      const shot = mode === 'control' ? await link.snapshot() : EMPTY;
+      // Вывод, пришедший до отправки захвата, tmux уже применил к панели — он внутри
+      // снимка. Отданный следом из придержанного, он лёг бы на экран вторым экземпляром
+      // (через relay окно до захвата — до 700 мс ожидания размера). Между этой строкой и
+      // отправкой команды событий ввода-вывода нет: команда уходит на следующей микрозадаче.
+      if (mode === 'control' && !streaming) {
+        early = backlog.splice(0);
+        backlogBytes = 0;
+      }
+      const shot = mode === 'control' ? await (opts.resume ? link.screen() : link.snapshot()) : EMPTY;
       if (disposed) return;
       // Звонок по снимку не бьём: в истории он уже отзвонил, когда случился.
-      if (!streaming && shot.length > 0) opts.onData(shot);
+      if (!streaming && shot.length > 0) {
+        early = []; // снимок дошёл — ранний вывод уже в нём
+        opts.onData(shot);
+      }
       flush();
     })
     .catch((err: unknown): void => {
@@ -305,12 +329,17 @@ export function wireTerminalWs(opts: {
         return; // битый фрейм — игнорируем
       }
       if (frame.type === FrameType.Resize) {
-        let dims: { cols: number; rows: number; mode?: string; claim?: unknown };
+        let body: { mode?: unknown; claim?: unknown; resume?: unknown };
         try {
-          dims = frameJson<{ cols: number; rows: number; mode?: string; claim?: unknown }>(frame);
+          body = frameJson<{ mode?: unknown; claim?: unknown; resume?: unknown }>(frame);
         } catch {
           return;
         }
+        // Тело обязано быть объектом с числами: `null` — законный JSON, и обращение к
+        // его полям уронило бы обработчик сообщения, а с ним весь агент.
+        const size = parseSize(body);
+        if (!size) return;
+        const dims = { ...body, ...size };
         if (handle) {
           // Поля `claim` у старого клиента нет — он забирал размер всегда, так и остаётся.
           handle.resize(dims.cols, dims.rows, dims.claim !== false);
@@ -329,6 +358,7 @@ export function wireTerminalWs(opts: {
             configMode: opts.configMode,
             // Та же проверка, что у relay в doOpen: чужой JSON не обязан класть сюда строку.
             requestedMode: typeof dims.mode === 'string' ? dims.mode : undefined,
+            resume: dims.resume === true,
             onData: (b) => send(encodeFrame({ type: FrameType.Data, channel: LAN_CHANNEL, payload: b })),
             onBell: (s) => send(jsonFrame(FrameType.Bell, LAN_CHANNEL, { session: s })),
             onMode: (m) => {

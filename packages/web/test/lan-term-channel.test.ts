@@ -119,7 +119,10 @@ describe('LAN-канал: просьба о способе подключени�
     second.triggerOpen();
     channel.resize(80, 24);
 
-    expect(payload(second, 0)).toEqual({ cols: 80, rows: 24, mode: 'attach' });
+    // Второе подключение помечено: экран клиента уже жил, история ему не нужна.
+    expect(payload(second, 0)).toEqual({ cols: 80, rows: 24, mode: 'attach', resume: true });
+    channel.resize(100, 30);
+    expect(payload(second, 1)).toEqual({ cols: 100, rows: 30 }); // только первым кадром
     channel.close();
   });
 });

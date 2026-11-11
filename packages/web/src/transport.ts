@@ -155,6 +155,10 @@ class LanTermChannel implements TermChannel {
   /** Просьба о режиме ещё не ушла на этом соединении. Каждое подключение создаёт
    *  агенту новый терминал, поэтому просьба повторяется после каждого реконнекта. */
   private modePending = false;
+  /** Соединение уже поднималось: экран клиента несёт прежнее содержимое. */
+  private everConnected = false;
+  /** Признак переподключения ещё не ушёл на этом соединении (едет первым RESIZE). */
+  private resumePending = false;
   private readonly url: string;
 
   constructor(
@@ -204,6 +208,8 @@ class LanTermChannel implements TermChannel {
     if (this.disposed) return;
     this.dropStaleSocket();
     this.modePending = !!this.opts.mode;
+    // Второе и следующие подключения застают экран с прежним содержимым.
+    this.resumePending = this.everConnected;
     const sock = new WebSocket(this.url);
     sock.binaryType = 'arraybuffer';
     this.ws = sock;
@@ -213,6 +219,7 @@ class LanTermChannel implements TermChannel {
         sock.close();
         return;
       }
+      this.everConnected = true;
       this.opts.onStatus('connected');
       // Backoff сбрасываем только когда соединение прожило STABLE_MS.
       this.stableTimer = setTimeout(() => {
@@ -276,8 +283,10 @@ class LanTermChannel implements TermChannel {
   resize(cols: number, rows: number, claim?: boolean): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const mode = this.modePending ? this.opts.mode : undefined;
+    const resume = this.resumePending;
     this.modePending = false;
-    this.ws.send(resizeFrame(cols, rows, mode, claim));
+    this.resumePending = false;
+    this.ws.send(resizeFrame(cols, rows, mode, claim, resume));
   }
 
   close(): void {

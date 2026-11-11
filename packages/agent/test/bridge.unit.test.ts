@@ -281,7 +281,7 @@ describe('attachTerminal', () => {
     expect(fake.resumedCount()).toBe(1);
   });
 
-  it('onExit идемпотентен: dispose после выхода не зовёт onExit повторно и не уничтожает pty', () => {
+  it('onExit идемпотентен: dispose после выхода не зовёт onExit повторно; pty вышедшего клиента отпущен', () => {
     const fake = makeFakePty();
     stubSpawn(() => fake.pty);
     let exits = 0;
@@ -298,7 +298,9 @@ describe('attachTerminal', () => {
     fake.emitExit();
     handle.dispose();
     expect(exits).toBe(1);
-    expect(fake.isDestroyed()).toBe(false); // pty уже вышел — повторного destroy нет
+    // Клиент вышел сам, но master ещё наш: без destroy он остался бы открытым, если
+    // чтение стояло на паузе.
+    expect(fake.isDestroyed()).toBe(true);
   });
 
   it('dispose живого pty закрывает master-FD через destroy; write/resize после dispose — no-op', () => {
@@ -526,15 +528,61 @@ describe('attachTerminal в control mode', () => {
     const dec = new TextDecoder();
     attachTerminal({ ...base, onData: (b) => chunks.push(dec.decode(b)) });
     await handshake(fake);
-    // Вывод пришёл после готовности, но до ответа на capture-pane: на экране он должен
-    // оказаться ПОСЛЕ снимка, поверх которого его и напечатали.
-    fake.emitData(Buffer.from('%output %0 live\r\n'));
+    // Вывод, пришедший до отправки захвата, tmux уже применил к панели: он внутри снимка
+    // и вторым экземпляром на экран не идёт. Пришедший после конца захвата — идёт, и
+    // строго ПОСЛЕ снимка, поверх которого его напечатали.
+    fake.emitData(Buffer.from('%output %0 early\r\n'));
     await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
     fake.emitData(blockFor(3, ['screen']));
+    fake.emitData(Buffer.from('%output %0 live\r\n'));
     fake.emitData(blockFor(4)); // ответ на запрос состояния панели: пусто — снимок как есть
     await vi.waitFor(() => expect(chunks.length).toBe(2));
     expect(chunks[0]).toBe('screen');
     expect(chunks[1]).toBe('live');
+  });
+
+  it('переподключение (resume): вместо снимка с историей — только видимый экран', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const chunks: string[] = [];
+    const dec = new TextDecoder();
+    attachTerminal({ ...base, resume: true, onData: (b) => chunks.push(dec.decode(b)) });
+    await handshake(fake);
+    await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
+    const sent = Buffer.concat(fake.writes).toString();
+    expect(sent).toContain('capture-pane -t %0 -p -e\n');
+    expect(sent).not.toContain(' -S -');
+    fake.emitData(blockFor(3, ['screen']));
+    fake.emitData(blockFor(4));
+    await vi.waitFor(() => expect(chunks.length).toBe(1));
+    expect(chunks[0]).toBe('\x1b[0m\x1b[r\x1b[H\x1b[2Jscreen\x1b[0m'); // стирание и картинка
+  });
+
+  it('снимок не дошёл (отказ tmux): ранний вывод ни в чём не содержится и идёт клиенту сам', async () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const chunks: string[] = [];
+    const dec = new TextDecoder();
+    attachTerminal({ ...base, onData: (b) => chunks.push(dec.decode(b)) });
+    await handshake(fake);
+    fake.emitData(Buffer.from('%output %0 early\r\n'));
+    await vi.waitFor(() => expect(Buffer.concat(fake.writes).toString().includes('capture-pane')).toBe(true));
+    fake.emitData(Buffer.from('%begin 1 3 1\r\nno such pane\r\n%error 1 3 1\r\n'));
+    fake.emitData(blockFor(4));
+    await vi.waitFor(() => expect(chunks).toEqual(['early']));
+  });
+
+  it('тело RESIZE `null` и прочий не-размер терминал не роняют и не открывают', () => {
+    const fake = makeFakePty();
+    stubSpawn(() => fake.pty);
+    const { ws, emit } = makeFakeWs();
+    wire()(ws as never, 'sess');
+    expect(() => emit('message', msg(jsonFrame(FrameType.Resize, 0, null)))).not.toThrow();
+    expect(() => emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 'x', rows: 24 })))).not.toThrow();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    emit('message', resizeFrame(80, 24)); // настоящий размер терминал открывает
+    expect(() => emit('message', msg(jsonFrame(FrameType.Resize, 0, null)))).not.toThrow();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
 
   it('сообщает выбранный режим и смену альтернативного экрана', async () => {
