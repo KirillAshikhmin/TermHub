@@ -463,6 +463,16 @@ describe('mountSessionTabs', () => {
     tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
     expect(panel.classList.contains('is-open')).toBe(true);
     expect(panel.querySelector('.th-spanel__head .th-spanel__title')!.textContent).toBe(t('term.tabs'));
+    // Под шапкой — полоса действий: всё меню главной одним рядом, без «⋯».
+    const tools = panel.querySelector('.th-spanel__tools .th-menu--strip')!;
+    expect(tools.querySelectorAll('.th-menu__row .th-menu__item').length).toBeGreaterThan(3);
+    expect(tools.querySelector('.th-menu__pop')).toBeNull();
+    // Действие с собственным окном закрывает окно сессий, сессию при этом не меняя.
+    [...tools.querySelectorAll<HTMLButtonElement>('.th-menu__item')].find((b) => b.title === t('termview.title'))!.click();
+    expect(panel.classList.contains('is-open')).toBe(false);
+    document.querySelector('.th-overlay')?.remove();
+    tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
+    expect(panel.querySelectorAll('.th-spanel__tools .th-menu').length).toBe(1); // полоса одна, не копится
     panel.querySelector<HTMLButtonElement>('.th-spanel__head .th-iconbtn')!.click();
     expect(panel.classList.contains('is-open')).toBe(false);
     expect(onSwitch).not.toHaveBeenCalled();

@@ -580,8 +580,10 @@ type AddItem = (
 ) => HTMLButtonElement;
 
 /** Раскладка меню: `menu` — всё в выпадающем списке под «⋯» (шапка главной); `bar` —
- *  частые действия рядом иконками, редкие остаются под «⋯» (шапка сессии). */
-export type MenuLayout = 'menu' | 'bar';
+ *  частые действия рядом иконками, редкие остаются под «⋯» (шапка сессии); `strip` — все
+ *  действия одним рядом иконок, без «⋯» (полоса в окне сессий: на телефоне в шапке сессии
+ *  этим кнопкам нет места). */
+export type MenuLayout = 'menu' | 'bar' | 'strip';
 
 /** Меню «⋯»: тема и язык — всегда; при связи с агентом (transport) добавляются
  *  уведомления, «не давать засыпать», устройства и «поделиться доступом». Гостю
@@ -593,7 +595,7 @@ function buildMenu(
   layout: MenuLayout = 'menu',
 ): { el: HTMLElement; teardown: () => void } {
   const wrap = document.createElement('div');
-  wrap.className = layout === 'bar' ? 'th-menu th-menu--bar' : 'th-menu';
+  wrap.className = layout === 'menu' ? 'th-menu' : `th-menu th-menu--${layout}`;
   // Ряд частых действий (только раскладка `bar`).
   const row = document.createElement('div');
   row.className = 'th-menu__row';
@@ -622,11 +624,13 @@ function buildMenu(
     item.append(svgIcon(iconName), menuLabel(label));
     // Подсказка нужна там, где пункт показан одной иконкой (ряд в шапке сессии).
     item.title = label;
+    // Тумблер, меняющий вид на месте: окно вокруг него закрывать не нужно.
+    if (opts.keepOpen) item.dataset.keep = '';
     item.addEventListener('click', () => {
       if (!opts.keepOpen) closeMenu();
       onClick(item);
     });
-    (layout === 'bar' && opts.primary ? row : pop).append(item);
+    (layout === 'strip' || (layout === 'bar' && opts.primary) ? row : pop).append(item);
     return item;
   };
   /** Частое действие: в раскладке `bar` встаёт иконкой в ряд. */
@@ -635,7 +639,7 @@ function buildMenu(
 
   /** Граница группы — в списке и в ряду. Пустых и двойных границ не ставит. */
   const addSep = (): void => {
-    for (const target of layout === 'bar' ? [row, pop] : [pop]) {
+    for (const target of layout === 'bar' ? [row, pop] : layout === 'strip' ? [row] : [pop]) {
       const last = target.lastElementChild;
       if (!last || last.classList.contains('th-menu__sep')) continue;
       const sep = document.createElement('div');
@@ -690,8 +694,8 @@ function buildMenu(
   // Ряд не должен кончаться границей.
   if (row.lastElementChild?.classList.contains('th-menu__sep')) row.lastElementChild.remove();
 
-  if (layout === 'bar') wrap.append(row);
-  wrap.append(trigger, pop);
+  if (layout !== 'menu') wrap.append(row);
+  if (layout !== 'strip') wrap.append(trigger, pop);
   const onDocClick = (e: MouseEvent): void => {
     if (!wrap.contains(e.target as Node)) closeMenu();
   };

@@ -1444,6 +1444,10 @@ select.th-input {
   :root[data-side-tabs] .th-ws-view .th-tabs > .th-group:first-child {
     margin-top: 0;
   }
+  /* Те же действия уже стоят в общей шапке — полоса окна сессий здесь лишняя. */
+  :root[data-side-tabs] .th-spanel__tools {
+    display: none;
+  }
   /* Шапка без вкладок: слева текущая сессия, справа кнопки. */
   :root[data-side-tabs] .th-ws-view .th-tabs-current {
     display: flex;
@@ -1810,6 +1814,26 @@ select.th-input {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 650;
+}
+/* Полоса действий окна сессий: всё меню главной одним рядом иконок. */
+.th-spanel__tools {
+  flex: none;
+  display: flex;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.th-spanel__tools::-webkit-scrollbar {
+  display: none;
+}
+.th-spanel__tools .th-menu__row {
+  gap: 4px;
+}
+.th-spanel__tools .th-menu__item {
+  flex: none;
+  width: 40px;
+  min-height: 40px;
 }
 /* Карточки сеткой, как на главной (раскладку колонок даёт .th-grid). Строки — строго по
    содержимому: список зажат высотой окна и прокручивается, и «авто»-строки сетка в таком

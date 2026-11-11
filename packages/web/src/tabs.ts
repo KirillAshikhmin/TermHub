@@ -219,7 +219,24 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     closePanel();
     opts.onCreate();
   });
-  sheet.append(sortBar, list, createBtn);
+  // Полоса действий под шапкой окна: поиск по лентам, расход, настройки, уведомления и
+  // остальное из меню главной. На телефоне в шапке сессии этим кнопкам нет места (там
+  // только стрелка, настройки и связь), а в боковом режиме на десктопе они уже в шапке —
+  // там полосу прячет CSS. Строится при первом открытии окна: пункты спрашивают агента.
+  const panelTools = document.createElement('div');
+  panelTools.className = 'th-spanel__tools';
+  let panelMenu: { el: HTMLElement; teardown: () => void } | null = null;
+  const ensurePanelMenu = (): void => {
+    if (panelMenu) return;
+    panelMenu = renderMenu(opts.transport, undefined, 'strip');
+    // Действие открывает своё окно — окно сессий под ним закрываем; тумблеры оставляют.
+    panelMenu.el.addEventListener('click', (e) => {
+      const item = e.target instanceof Element ? e.target.closest<HTMLElement>('.th-menu__item') : null;
+      if (item && !('keep' in item.dataset)) closePanel();
+    });
+    panelTools.append(panelMenu.el);
+  };
+  sheet.append(sortBar, panelTools, list, createBtn);
   panel.append(sheet);
   panel.inert = true; // стартовое состояние — закрыта
   panel.addEventListener('click', (e) => {
@@ -384,6 +401,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   }
   function openPanel(): void {
     panelOpen = true;
+    ensurePanelMenu();
     buildPanelRows();
     // Превью бесед читаем, только пока панель открыта: закрытой они не нужны.
     void refreshPreviews(opts.transport, latest, () => {
@@ -578,6 +596,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       unsubscribeBell();
       unsubscribePrefs();
       sideMenu?.teardown();
+      panelMenu?.teardown();
       window.clearInterval(timer);
       document.removeEventListener('keydown', onKeyDown, true);
     },
