@@ -49,16 +49,19 @@ describe('quickkeys — раскладка и удержание', () => {
     t,
   };
 
-  it('первый ряд — Esc, Tab, ⇧Tab, стрелки и Enter справа; шрифта и отдельной ^C нет', () => {
+  it('первый ряд — Esc, Tab, стрелки и Enter справа; шрифта и отдельной ^C нет', () => {
     setLang('ru');
     const panel = mountQuickKeys({ ...base, onKey: () => {} });
     const row = [...panel.querySelectorAll('.th-qk__row--keys .th-qk__key')].map((b) =>
       [...b.classList].find((c) => c.startsWith('th-qk__key--'))!.replace('th-qk__key--', ''),
     );
-    expect(row).toEqual(['esc', 'tab', 'shiftTab', 'shiftLeft', 'left', 'up', 'down', 'right', 'enter']);
+    expect(row).toEqual(['esc', 'tab', 'left', 'up', 'down', 'right', 'enter']);
+    // Сочетания с Shift — во втором ряду, слева, перед инструментами.
+    const second = [...panel.querySelectorAll('.th-qk__row--tools .th-qk__key')].slice(0, 2);
+    expect(second.map((b) => b.getAttribute('aria-label'))).toEqual(['Shift + Tab', t('quickkeys.shiftLeft')]);
     expect(panel.textContent).not.toContain('A+');
-    // Выбор «Enter отправляет / переносит» уехал в настройки: тумблеров четыре.
-    expect(panel.querySelectorAll('.th-qk__row--tools .th-qk__key').length).toBe(4);
+    // Выбор «Enter отправляет / переносит» уехал в настройки: тумблеров три.
+    expect(panel.querySelectorAll('.th-qk__row--tools .th-qk__toggle').length).toBe(3);
     expect(panel.querySelector('.th-qk__enter')).toBeNull();
     expect(panel.querySelector('.th-qk__key--enter .th-qk__hold')!.textContent).toBe('⇧');
     expect(panel.querySelector('.th-qk__key--esc .th-qk__hold')!.textContent).toBe('^C');

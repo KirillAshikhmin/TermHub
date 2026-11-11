@@ -1,7 +1,7 @@
 // Панель быстрых клавиш терминала: крупные тач-кнопки, которые шлют управляющие
-// последовательности в pty. Два ряда: первый — клавиши (Esc, Tab, ⇧Tab, стрелки, Enter;
-// на телефоне он обязан помещаться в одну строку), второй — инструменты (выделение,
-// поиск, тумблеры). Ctrl+C — удержание Esc: отдельной кнопки у него нет, и случайным
+// последовательности в pty. Два ряда: первый — клавиши (Esc, Tab, стрелки, Enter; на
+// телефоне он обязан помещаться в одну строку), второй — сочетания с Shift (⇧Tab, ⇧←)
+// слева и инструменты (выделение, поиск, тумблеры). Ctrl+C — удержание Esc: отдельной кнопки у него нет, и случайным
 // тапом команду не оборвать; Shift+Enter (перенос строки) — удержание Enter. Размер
 // шрифта и выбор «Enter отправляет / переносит» — в окне настроек.
 // Карта кнопка→байты вынесена чистой структурой (SEND_KEYS) — её и покрывает тест;
@@ -25,6 +25,9 @@ export interface QuickKey {
   holdOf?: string;
   /** Мелкая пометка на кнопке-хозяине: что даёт удержание. */
   holdMark?: string;
+  /** Клавиша второго ряда (слева, перед инструментами): сочетания с Shift нужны реже, а
+   *  первый ряд на телефоне обязан помещаться в одну строку. */
+  second?: true;
 }
 
 /** Сколько держать кнопку, чтобы сработало действие удержания. */
@@ -35,9 +38,9 @@ export const SEND_KEYS: readonly QuickKey[] = [
   { id: 'esc', glyph: 'Esc', send: '\x1b' },
   // ↹ — значок с клавиши Tab: две встречные стрелки с упорами. Shift+Tab — он же с ⇧.
   { id: 'tab', glyph: '↹', send: '\t', aria: 'Tab' },
-  { id: 'shiftTab', glyph: '⇧↹', send: '\x1b[Z', aria: 'Shift + Tab' },
+  { id: 'shiftTab', glyph: '⇧↹', send: '\x1b[Z', aria: 'Shift + Tab', second: true },
   // Shift+← — «назад» в вопросах Codex (xterm-форма стрелки с модификатором Shift).
-  { id: 'shiftLeft', glyph: '⇧←', send: '\x1b[1;2D', ariaKey: 'quickkeys.shiftLeft' },
+  { id: 'shiftLeft', glyph: '⇧←', send: '\x1b[1;2D', ariaKey: 'quickkeys.shiftLeft', second: true },
   { id: 'left', glyph: '←', send: '\x1b[D', ariaKey: 'quickkeys.left' },
   { id: 'up', glyph: '↑', send: '\x1b[A', ariaKey: 'quickkeys.up' },
   { id: 'down', glyph: '↓', send: '\x1b[B', ariaKey: 'quickkeys.down' },
@@ -170,9 +173,12 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
   panel.setAttribute('role', 'toolbar');
   panel.setAttribute('aria-label', h.t('quickkeys.title'));
 
-  // Первый ряд — клавиши: Esc, Tab, ⇧Tab, стрелки и Enter справа.
+  // Первый ряд — клавиши: Esc, Tab, стрелки и Enter справа. Второй — сочетания с Shift
+  // слева, за ними инструменты.
   const keys = document.createElement('div');
   keys.className = 'th-qk__row th-qk__row--keys';
+  const tools = document.createElement('div');
+  tools.className = 'th-qk__row th-qk__row--tools';
   for (const key of SEND_KEYS) {
     if (key.holdOf) continue; // действие удержания — не кнопка
     const held = SEND_KEYS.find((k) => k.holdOf === key.id);
@@ -181,13 +187,9 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
     btn.classList.add(`th-qk__key--${key.id}`);
     btn.title = name;
     if (held) wireHold(btn, held, h);
-    keys.append(btn);
+    (key.second ? tools : keys).append(btn);
   }
   panel.append(keys);
-
-  // Второй ряд — инструменты.
-  const tools = document.createElement('div');
-  tools.className = 'th-qk__row th-qk__row--tools';
 
   // Режим выделения (тач-драг → выделение) + копирование выделенного.
   const selectGroup = document.createElement('div');
