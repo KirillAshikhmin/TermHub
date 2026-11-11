@@ -5,7 +5,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { Caffeinate } from '../src/caffeinate.js';
-import { LidAwake, parseClamshell, sudoersInstallCommand, sudoersRule, type RunCommand } from '../src/lid-awake.js';
+import { allowsWithoutPassword, LidAwake, parseClamshell, sudoersInstallCommand, sudoersRule, type RunCommand } from '../src/lid-awake.js';
+
+const RULE_CMDS = '/usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1';
 
 let dir: string;
 let marker: string;
@@ -22,6 +24,9 @@ function world(init: { allowed?: boolean; closed?: boolean } = {}) {
     const line = `${cmd} ${args.join(' ')}`;
     w.calls.push(line);
     if (cmd === 'ioreg') return { code: 0, stdout: `  |   "AppleClamshellState" = ${w.closed ? 'Yes' : 'No'}\n` };
+    // Список правил: у владельца-админа он есть всегда, разрешение — отдельной строкой.
+    if (args.join(' ') === '-n -l')
+      return { code: 0, stdout: `    (ALL) ALL\n${w.allowed ? `    (root) NOPASSWD: ${RULE_CMDS}\n` : ''}` };
     return { code: w.allowed ? 0 : 1, stdout: '' };
   };
   const lid = new LidAwake({ platform: 'darwin', run, markerFile: marker, pollMs: 1_000_000, log: () => {} });
@@ -90,6 +95,27 @@ describe('LidAwake', () => {
     expect(await lid.set(true)).toBe(false);
     expect(lid.state()).toEqual({ lidSupported: false, lidReady: false, lid: false });
     expect(calls).toEqual([]);
+  });
+
+  it('разрешение читается по списку правил: нужны обе команды без пароля, чужое правило не в счёт', () => {
+    expect(allowsWithoutPassword(`    (ALL) ALL\n    (root) NOPASSWD: ${RULE_CMDS}\n`)).toBe(true);
+    expect(allowsWithoutPassword('    (ALL) NOPASSWD: ALL\n')).toBe(true);
+    // Без терминала sudo переносит правило на 80-й колонке — так оно и приходит агенту.
+    expect(
+      allowsWithoutPassword(
+        '    (ALL) ALL\n    (root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a\n        disablesleep 1\n',
+      ),
+    ).toBe(true);
+    // Наше правило не должно «дотянуться» до команд следующей записи.
+    expect(
+      allowsWithoutPassword('    (root) NOPASSWD: /usr/bin/pmset -a disablesleep 0\n    (root) /usr/bin/pmset -a disablesleep 1\n'),
+    ).toBe(false);
+    // Обычный админ: всё можно, но с паролем.
+    expect(allowsWithoutPassword('    (ALL) ALL\n')).toBe(false);
+    // Чужое правило без пароля — не наше разрешение.
+    expect(allowsWithoutPassword('    (ALL) ALL\n    (root) NOPASSWD: /usr/bin/true\n')).toBe(false);
+    // Только одна из двух команд — выключить режим было бы нечем.
+    expect(allowsWithoutPassword('    (root) NOPASSWD: /usr/bin/pmset -a disablesleep 1\n')).toBe(false);
   });
 
   it('состояние крышки читается из ioreg; незнакомый вывод — «не узнать»', () => {

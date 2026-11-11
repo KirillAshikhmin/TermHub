@@ -46,6 +46,22 @@ export function sudoersInstallCommand(user: string): string {
   );
 }
 
+/** Разрешены ли без пароля обе команды, по выводу `sudo -n -l`: правило с NOPASSWD называет
+ *  обе (или разрешает всё). Без терминала sudo переносит длинное правило на 80-й колонке,
+ *  поэтому разбор идёт по сплошному тексту: правило тянется от своего `NOPASSWD:` до
+ *  следующей записи вида `(кто)`. */
+export function allowsWithoutPassword(listing: string): boolean {
+  const flat = listing.replace(/\s+/g, ' ');
+  return flat
+    .split('NOPASSWD:')
+    .slice(1)
+    .some((rest) => {
+      const cmds = rest.split(/ \([^)]*\) /)[0];
+      if (/(^|[\s,])ALL\s*(,|$)/.test(cmds)) return true;
+      return cmds.includes(`${PMSET} -a disablesleep 0`) && cmds.includes(`${PMSET} -a disablesleep 1`);
+    });
+}
+
 /** Закрыта ли крышка, по выводу `ioreg -r -k AppleClamshellState`; undefined — не узнать
  *  (настольный Mac, незнакомый вывод). */
 export function parseClamshell(stdout: string): boolean | undefined {
@@ -104,15 +120,17 @@ export class LidAwake {
     return { lidSupported: this.supported, lidReady: this.ready, lid: this.active };
   }
 
-  /** Проверка разрешения sudoers: `sudo -n -l <команда>` отвечает кодом 0, если её можно
-   *  выполнить без пароля. Саму настройку проверка не трогает. */
+  /** Проверка разрешения sudoers по списку правил (`sudo -n -l`). Спросить про одну команду
+   *  (`sudo -n -l <команда>`) мало: стоит у пользователя появиться любому правилу NOPASSWD,
+   *  и такой вопрос отвечает «можно» про всё, что разрешено с паролем (замер на macOS).
+   *  Саму настройку проверка не трогает. */
   refreshReady(force = false): Promise<void> {
     if (!this.supported) return Promise.resolve();
     if (this.readyCheck) return this.readyCheck;
     if (!force && Date.now() - this.readyAt < READY_TTL_MS) return Promise.resolve();
-    this.readyCheck = this.run('sudo', ['-n', '-l', PMSET, '-a', 'disablesleep', '1'])
-      .then(({ code }) => {
-        this.ready = code === 0;
+    this.readyCheck = this.run('sudo', ['-n', '-l'])
+      .then(({ code, stdout }) => {
+        this.ready = code === 0 && allowsWithoutPassword(stdout);
         this.readyAt = Date.now();
       })
       .finally(() => {
