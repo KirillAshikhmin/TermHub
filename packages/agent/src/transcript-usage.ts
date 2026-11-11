@@ -35,6 +35,9 @@ export interface UsagePage {
   /** Первая и последняя метка времени беседы, epoch ms; ноль — меток не было. */
   started: number;
   last: number;
+  /** Проверки Guardian этого потока Codex: отдельные потоки со своим расходом, в `total`
+   *  и `today` не входят. Нет поля — проверок не было (или агент не Codex). */
+  reviews?: { count: number; total: UsageTotals; today: UsageTotals };
 }
 
 /** Память процессов сессии в байтах приклеивает `sessionUsage` — и к расходу, и к отказу:
@@ -65,6 +68,33 @@ const running = new Map<string, Promise<unknown>>();
 /** Сбросить память подсчёта (тесты). */
 export function clearUsageCache(): void {
   states.clear();
+}
+
+/** Расход проверок Guardian по их файлам: сумма по всем, что удалось прочитать. */
+export async function readReviewsUsage(
+  files: string[],
+  now: number = Date.now(),
+): Promise<NonNullable<UsagePage['reviews']> | undefined> {
+  const total = empty();
+  const today = empty();
+  let count = 0;
+  for (const file of files) {
+    const res = await readUsage(file, 'codex', now);
+    if (!res.ok) continue;
+    count += 1;
+    add(total, res.total);
+    add(today, res.today);
+  }
+  return count ? { count, total, today } : undefined;
+}
+
+function add(into: UsageTotals, from: UsageTotals): void {
+  into.input += from.input;
+  into.cached += from.cached;
+  into.cacheWrite += from.cacheWrite;
+  into.output += from.output;
+  into.turns += from.turns;
+  into.activeMs += from.activeMs;
 }
 
 function empty(): UsageTotals {

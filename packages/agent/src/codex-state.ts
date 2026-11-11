@@ -70,3 +70,77 @@ export async function readCodexThreads(home: string, cwd: string): Promise<Codex
     db.close();
   }
 }
+
+/** Сколько читать из начала файла проверки: поля родителя стоят в `session_meta` первыми,
+ *  задолго до текста инструкций. */
+const REVIEW_HEAD_BYTES = 4096;
+/** Чей это файл проверки: идентификаторы беседы и родительского потока. Заголовок файла
+ *  не меняется, поэтому ответ помнится навсегда. */
+const reviewOwners = new Map<string, string[]>();
+
+async function reviewOwnersOf(file: string): Promise<string[]> {
+  const known = reviewOwners.get(file);
+  if (known) return known;
+  const handle = await fsp.open(file, 'r');
+  let head: string;
+  try {
+    const buf = Buffer.alloc(REVIEW_HEAD_BYTES);
+    const { bytesRead } = await handle.read(buf, 0, REVIEW_HEAD_BYTES, 0);
+    head = buf.toString('utf8', 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+  const owners: string[] = [];
+  for (const key of ['session_id', 'parent_thread_id']) {
+    const m = new RegExp(`"${key}":"([^"]+)"`).exec(head);
+    if (m) owners.push(m[1]);
+  }
+  reviewOwners.set(file, owners);
+  return owners;
+}
+
+/** Файлы проверок Guardian, которые Codex запускал для потока с этим файлом беседы. Это
+ *  отдельные потоки со своим расходом: в базе они с родителем не связаны (только общий
+ *  каталог), связь стоит в `session_meta` самого файла проверки — `session_id` и
+ *  `parent_thread_id`. Базы нет, поток в ней не найден, схема незнакома — пустой список. */
+export async function codexReviewFiles(home: string, rolloutPath: string): Promise<string[]> {
+  const file = await codexStateDb(home);
+  if (!file) return [];
+  const { DatabaseSync } = await import('node:sqlite');
+  let candidates: string[];
+  let id: string;
+  let db;
+  try {
+    db = new DatabaseSync(file, { readOnly: true });
+  } catch {
+    return [];
+  }
+  try {
+    const own = db.prepare('select id, cwd from threads where rollout_path = ?').get(rolloutPath) as
+      | { id: unknown; cwd: unknown }
+      | undefined;
+    if (!own || typeof own.id !== 'string' || typeof own.cwd !== 'string') return [];
+    id = own.id;
+    const rows = db
+      .prepare("select rollout_path as rolloutPath from threads where cwd = ? and thread_source = 'guardian_review'")
+      .all(own.cwd) as unknown as Array<{ rolloutPath: unknown }>;
+    candidates = rows.map((r) => r.rolloutPath).filter((v): v is string => typeof v === 'string');
+  } catch (err) {
+    if (/no such (table|column)/i.test(err instanceof Error ? err.message : String(err))) return [];
+    throw err;
+  } finally {
+    db.close();
+  }
+  // База чужая: файл берётся, только если он лежит в каталоге сессий Codex.
+  const root = path.join(home, '.codex', 'sessions') + path.sep;
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.startsWith(root) || !candidate.endsWith('.jsonl')) continue;
+    try {
+      if ((await reviewOwnersOf(candidate)).includes(id)) out.push(candidate);
+    } catch {
+      // Файл проверки мог уйти — остальные считаются без него.
+    }
+  }
+  return out;
+}

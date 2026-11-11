@@ -1,4 +1,7 @@
 // Память сессии: tmux и ps подменены — проверяется счёт по дереву процессов.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { sessionUsage } from '../src/session-feed.js';
@@ -65,5 +68,50 @@ describe('память сессии', () => {
       memory: async () => undefined,
     });
     expect(bare).toEqual({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' });
+  });
+
+  it('проверки Guardian потока Codex едут отдельным полем и в расход беседы не входят', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-reviews-'));
+    const count = (total: number): string =>
+      JSON.stringify({
+        timestamp: '2026-11-12T10:00:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'token_count', info: { total_token_usage: { input_tokens: total, output_tokens: 10 } } },
+      }) + '\n';
+    const main = path.join(dir, 'main.jsonl');
+    const r1 = path.join(dir, 'r1.jsonl');
+    const r2 = path.join(dir, 'r2.jsonl');
+    fs.writeFileSync(main, count(1000));
+    fs.writeFileSync(r1, count(200));
+    fs.writeFileSync(r2, count(300));
+    const sources = {
+      activePane: async () => 'work:@0.%0',
+      resolve: async () => ({ ok: true as const, agent: 'codex' as const, files: [main], complete: true, live: true }),
+      memory: async () => undefined,
+    };
+    try {
+      const res = await sessionUsage('work', {
+        ...sources,
+        codexReviews: async () => [r1, r2, path.join(dir, 'gone.jsonl')],
+      });
+      if (!res.ok) throw new Error(res.detail);
+      expect(res.total.input).toBe(1000);
+      expect(res.reviews?.count).toBe(2);
+      expect(res.reviews?.total.input).toBe(500);
+      expect(res.reviews?.total.output).toBe(20);
+      // Проверок нет или их подсчёт сорвался — поля нет, расход сессии на месте.
+      const none = await sessionUsage('work', { ...sources, codexReviews: async () => [] });
+      expect(none.ok && none.reviews).toBeUndefined();
+      const broken = await sessionUsage('work', {
+        ...sources,
+        codexReviews: async () => {
+          throw new Error('db locked');
+        },
+      });
+      expect(broken.ok && broken.total.input).toBe(1000);
+      expect(broken.ok && broken.reviews).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

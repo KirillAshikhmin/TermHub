@@ -22,6 +22,8 @@ export interface UsagePage {
   today: UsageTotals;
   started: number;
   last: number;
+  /** Проверки Guardian потока Codex: отдельные потоки, в `total` и `today` не входят. */
+  reviews?: { count: number; total: UsageTotals; today: UsageTotals };
 }
 
 /** Память процессов сессии в байтах едет и с расходом, и с отказом: у сессии без агента
@@ -161,6 +163,18 @@ export function openUsage(transport: Transport): void {
           ]),
         );
         rows += 1;
+        // Проверки Guardian — отдельной строкой под сессией: расход их, а не беседы.
+        if (res.ok && res.reviews) {
+          today.push(res.reviews.today);
+          total.push(res.reviews.total);
+          tbody.append(
+            row(
+              'td',
+              [t('usage.reviews', { n: res.reviews.count }), '', ...cells(res.reviews.today), ...cells(res.reviews.total)],
+              'th-usage__sub',
+            ),
+          );
+        }
       }
       if (!box.isConnected) return;
       if (rows === 0) {

@@ -68,6 +68,29 @@ describe('расход по сессиям', () => {
     expect(rows[3]).toEqual(['Итого', '2.1 ГБ', '—', '1.0k', '1.0k', '2 ч 0 мин', '4.0k', '4.0k']);
   });
 
+  it('проверки Guardian — отдельной строкой под сессией и в итоге', async () => {
+    const transport = {
+      list: async () => [{ name: 'x', title: '' }],
+      feed: async () => ({
+        ok: true,
+        agent: 'codex',
+        total: totals(2000),
+        today: totals(500),
+        started: 1,
+        last: 2,
+        reviews: { count: 3, total: totals(1000), today: totals(100) },
+      }),
+    } as unknown as Transport;
+    openUsage(transport);
+    await vi.waitFor(() => expect(document.querySelector('.th-usage__sum')).not.toBeNull());
+    const trs = [...document.querySelectorAll('.th-usage__table tbody tr')];
+    expect(trs.map((tr) => tr.children[0]!.textContent)).toEqual(['x', '↳ Проверки Guardian (3)', 'Итого']);
+    expect(trs[1]!.className).toBe('th-usage__sub');
+    expect(trs[1]!.children[1]!.textContent).toBe('');
+    const all = (i: number): string | null => trs[i]!.children[7]!.textContent;
+    expect([all(0), all(1), all(2)]).toEqual([formatTokens(2000), formatTokens(1000), formatTokens(3000)]);
+  });
+
   it('старый агент память не называет — в колонке прочерк, расход на месте', async () => {
     const transport = {
       list: async () => [{ name: 'a', title: '' }],

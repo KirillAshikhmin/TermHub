@@ -46,7 +46,8 @@ import {
   type FeedPage,
 } from './transcript-feed.js';
 import { sessionMemory } from './session-memory.js';
-import { readUsage, type UsageResult } from './transcript-usage.js';
+import { codexReviewFiles } from './codex-state.js';
+import { readReviewsUsage, readUsage, type UsageResult } from './transcript-usage.js';
 
 /** Ответ ленты: страница `readFeed` плюс `complete` и `live` — как их отдал определитель,
  *  без пересчёта. Отказ — те же причины, что у определителя, плюс `cursor-stale`. */
@@ -65,6 +66,8 @@ export interface SessionFeedSources {
   resolve(pane: string): Promise<TranscriptResult>;
   /** Память процессов сессии в байтах (session-memory); undefined — не посчитать. */
   memory(session: string): Promise<number | undefined>;
+  /** Файлы проверок Guardian потока Codex с этим файлом беседы (codex-state). */
+  codexReviews(file: string): Promise<string[]>;
   /** Файлы каталога сессий Codex со всеми подкаталогами: по их именам ищется родитель.
    *  Обход считаный — один на запрос и только когда лента дошла до границы файла. */
   sessionFiles(dir: string): Promise<string[]>;
@@ -118,7 +121,17 @@ export async function sessionUsage(
   if (!located.ok) return withMemory(located);
   if (located.found.agent === 'opencode')
     return withMemory(fail('unknown-format', 'usage is not available for opencode sessions'));
-  return withMemory(await readUsage(located.file, located.found.agent, now));
+  const usage = await readUsage(located.file, located.found.agent, now);
+  if (!usage.ok || located.found.agent !== 'codex') return withMemory(usage);
+  // Проверки Guardian — отдельные потоки: их расход едет рядом, а не в сумме беседы. Сбой
+  // их подсчёта расход самой сессии не отменяет.
+  let reviews: Awaited<ReturnType<typeof readReviewsUsage>>;
+  try {
+    reviews = await readReviewsUsage(await src.codexReviews(located.file), now);
+  } catch {
+    reviews = undefined;
+  }
+  return withMemory(reviews ? { ...usage, reviews } : usage);
 }
 
 type Located =
@@ -251,6 +264,7 @@ function withDefaults(over?: Partial<SessionFeedSources>): SessionFeedSources {
     socketName,
     activePane: over?.activePane ?? ((session) => activePaneOf(session, socketName)),
     memory: over?.memory ?? ((session) => sessionMemory(session, { socketName })),
+    codexReviews: over?.codexReviews ?? ((file) => codexReviewFiles(home, file)),
     resolve: over?.resolve ?? ((pane) => resolvePane(pane, { home, socketName })),
     sessionFiles: over?.sessionFiles ?? sessionFilesOf,
   };
