@@ -43,7 +43,6 @@ import type { TerminalMode, TermChannel, TermConnState, Transport } from './tran
 import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, svgIcon, toast, wireToolbar } from './ui';
 
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
-const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
 // Потолок очереди ввода до подключения (см. sendData): не влезающий чанк отбрасывается целиком.
 const INPUT_QUEUE_MAX = 8 * 1024;
 
@@ -109,23 +108,6 @@ function readKeyboardEnabled(): boolean {
 function writeKeyboardEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(KEYBOARD_LS_KEY, enabled ? '1' : '0');
-  } catch {
-    // Персист состояния необязателен.
-  }
-}
-
-/** «Отправлять по Enter» из localStorage (по умолчанию включено — Enter отправляет). */
-function readEnterSends(): boolean {
-  try {
-    return localStorage.getItem(ENTER_SENDS_LS_KEY) !== '0';
-  } catch {
-    return true;
-  }
-}
-
-function writeEnterSends(enabled: boolean): void {
-  try {
-    localStorage.setItem(ENTER_SENDS_LS_KEY, enabled ? '1' : '0');
   } catch {
     // Персист состояния необязателен.
   }
@@ -281,7 +263,7 @@ export function mountTerminal(
   const viewBtn = document.createElement('button');
   viewBtn.type = 'button';
   viewBtn.className = 'th-termbar__view';
-  viewBtn.append(svgIcon('sliders'));
+  viewBtn.append(svgIcon('gear'));
   viewBtn.title = t('termview.title');
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -736,7 +718,8 @@ export function mountTerminal(
   // cancel(), браузер порождает keypress, и _keyPress xterm шлёт \r через onData — одно
   // нажатие давало перенос И отправку. Гасим keydown сами, а keypress Enter подавляем
   // ещё и явно — страховка от второго \r и от \n в скрытой textarea.
-  let enterSends = readEnterSends();
+  // Выбор живёт в настройках (term-prefs) и меняется на месте — см. onTermPrefsChange.
+  let enterSends = prefs.enterSends;
   term.attachCustomKeyEventHandler((e) => {
     if (!copyController.keyEvent(e)) return false;
     const action = enterAction(e, enterSends);
@@ -787,6 +770,7 @@ export function mountTerminal(
   // терминал перестраивается здесь.
   const offPrefs = onTermPrefsChange((next) => {
     prefs = next;
+    enterSends = next.enterSends;
     term.options.fontFamily = termFontFamily(next.font, cssVar('--font-mono', 'monospace'));
     term.options.fontSize = next.fontSize;
     term.options.lineHeight = next.lineHeight;
@@ -935,11 +919,6 @@ export function mountTerminal(
     selectEnabled: false,
     onSelectToggle: (enabled) => applySelectMode(enabled),
     onSearch: openSearch,
-    enterSendsEnabled: enterSends,
-    onEnterSendsToggle: (enabled) => {
-      enterSends = enabled;
-      writeEnterSends(enabled);
-    },
     composeEnabled: composeOpen,
     onComposeToggle: (enabled) => {
       composeOpen = enabled;

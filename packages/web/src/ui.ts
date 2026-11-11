@@ -4,10 +4,9 @@
 import type { GradleProject } from '@termhub/protocol/frames';
 
 import { ApiError } from './api';
-import { getLang, setLang, t } from './i18n';
+import { t } from './i18n';
 import { notificationsSupported, permissionState, requestNotificationPermission } from './notify';
 import { enablePush } from './push';
-import { currentTheme, toggleTheme } from './theme';
 import { openDiag } from './diag';
 import { openFeedSearch } from './feed-search-all';
 import { openTermSettings } from './term-settings';
@@ -47,6 +46,7 @@ const ICONS: Record<string, string> = {
   chart: '<path d="M3 21h18M7 21V11M12 21V4M17 21v-7"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
   lang: '<path d="M3 5h9M7.5 3v2M5 9c1.2 2.6 3.4 4.6 6 5.6M10.5 5c-.6 4-2.8 7.4-6.5 9.5"/><path d="M13 21l4-10 4 10M14.5 17.5h5"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
   // Ползунки — параметры отображения (окно «Вид терминала»).
   sliders: '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/><circle cx="16" cy="6" r="2.2"/><circle cx="10" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
@@ -669,28 +669,8 @@ function buildMenu(
     addSep();
   }
 
-  // — Вид: параметры терминала, тема (тумблер: иконка и подпись говорят, куда
-  //   переключит клик), язык. setLang перерисует приложение (onLangChange) — меню
-  //   пересоберётся уже на новом языке, обновлять пункт на месте не нужно.
-  addPrimary('sliders', t('termview.title'), () => openTermSettings());
-  const themeLabel = (): string => (currentTheme() === 'dark' ? t('header.themeToLight') : t('header.themeToDark'));
-  const themeIcon = (): string => (currentTheme() === 'dark' ? 'moon' : 'sun');
-  const themeItem = addPrimary(
-    themeIcon(),
-    themeLabel(),
-    () => {
-      toggleTheme();
-      themeItem.replaceChildren(svgIcon(themeIcon()), menuLabel(themeLabel()));
-      themeItem.title = themeLabel();
-    },
-    { keepOpen: true },
-  );
-  addItem(
-    'lang',
-    `${t('header.language')}: ${getLang().toUpperCase()}`,
-    () => setLang(getLang() === 'ru' ? 'en' : 'ru'),
-    { keepOpen: true },
-  );
+  // — Настройки: вид, раскладка, ввод, язык — одним окном (term-settings).
+  addPrimary('gear', t('termview.title'), () => openTermSettings());
   addSep();
 
   // — Агент и связь: уведомления и «не давать засыпать» — только при связи с агентом и

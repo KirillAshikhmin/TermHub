@@ -16,6 +16,7 @@ const EXPECTED: Record<string, number[]> = {
   right: [0x1b, 0x5b, 0x43],
   enter: [0x0d],
   ctrlC: [0x03],
+  shiftEnter: [0x1b, 0x0d],
 };
 
 describe('quickkeys — байт-последовательности', () => {
@@ -45,8 +46,6 @@ describe('quickkeys — раскладка и удержание', () => {
     composeEnabled: false,
     onSearch: () => {},
     selectEnabled: false,
-    onEnterSendsToggle: () => {},
-    enterSendsEnabled: true,
     t,
   };
 
@@ -58,7 +57,10 @@ describe('quickkeys — раскладка и удержание', () => {
     );
     expect(row).toEqual(['esc', 'tab', 'shiftTab', 'shiftLeft', 'left', 'up', 'down', 'right', 'enter']);
     expect(panel.textContent).not.toContain('A+');
-    expect(panel.querySelectorAll('.th-qk__row--tools .th-qk__key').length).toBe(5);
+    // Выбор «Enter отправляет / переносит» уехал в настройки: тумблеров четыре.
+    expect(panel.querySelectorAll('.th-qk__row--tools .th-qk__key').length).toBe(4);
+    expect(panel.querySelector('.th-qk__enter')).toBeNull();
+    expect(panel.querySelector('.th-qk__key--enter .th-qk__hold')!.textContent).toBe('⇧');
     expect(panel.querySelector('.th-qk__key--esc .th-qk__hold')!.textContent).toBe('^C');
     expect(panel.querySelector('.th-qk__key--tab')!.getAttribute('aria-label')).toBe('Tab');
   });
@@ -77,6 +79,13 @@ describe('quickkeys — раскладка и удержание', () => {
     esc.dispatchEvent(new Event('pointerup'));
     esc.click();
     expect(sent).toEqual([[0x1b], [0x03]]);
+    // Enter: тап — отправка, удержание — перенос строки (ESC+CR).
+    const enter = panel.querySelector<HTMLButtonElement>('.th-qk__key--enter')!;
+    enter.click();
+    enter.dispatchEvent(new Event('pointerdown'));
+    vi.advanceTimersByTime(HOLD_MS + 1);
+    enter.click();
+    expect(sent.slice(2)).toEqual([[0x0d], [0x1b, 0x0d]]);
     vi.useRealTimers();
   });
 });
@@ -91,16 +100,14 @@ describe('quickkeys — чекбокс клавиатуры', () => {
     composeEnabled: false,
     onSearch: () => {},
     selectEnabled: false,
-    onEnterSendsToggle: () => {},
-    enterSendsEnabled: true,
     t,
     ...over,
   });
 
-  // Клавиатурный тумблер — не выделение (th-qk__select) и не «Отправлять по Enter» (th-qk__enter).
+  // Клавиатурный тумблер — не выделение (th-qk__select) и не строка ввода (th-qk__compose).
   const keyboardToggle = (panel: HTMLElement) =>
     panel.querySelector<HTMLButtonElement>(
-      '.th-qk__toggle:not(.th-qk__select):not(.th-qk__enter):not(.th-qk__compose)',
+      '.th-qk__toggle:not(.th-qk__select):not(.th-qk__compose)',
     )!;
 
   it('рендерит переключатель клавиатуры с aria-pressed по начальному состоянию', () => {
@@ -137,8 +144,6 @@ describe('quickkeys — выделение и копирование', () => {
     composeEnabled: false,
     onSearch: () => {},
     selectEnabled: false,
-    onEnterSendsToggle: () => {},
-    enterSendsEnabled: true,
     t,
     ...over,
   });
@@ -162,16 +167,5 @@ describe('quickkeys — выделение и копирование', () => {
     expect(toggle).not.toBeNull();
     toggle.click();
     expect(onComposeToggle).toHaveBeenCalledWith(true);
-  });
-
-  it('тумблер «Отправлять по Enter» зовёт onEnterSendsToggle с инвертированным состоянием', () => {
-    setLang('ru');
-    const onEnterSendsToggle = vi.fn();
-    const panel = mountQuickKeys(handlers({ enterSendsEnabled: true, onEnterSendsToggle }));
-    const toggle = panel.querySelector<HTMLButtonElement>('.th-qk__enter')!;
-    expect(toggle.getAttribute('aria-pressed')).toBe('true');
-    toggle.click();
-    expect(onEnterSendsToggle).toHaveBeenCalledWith(false);
-    expect(toggle.getAttribute('aria-pressed')).toBe('false');
   });
 });

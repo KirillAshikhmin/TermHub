@@ -1,6 +1,7 @@
-// Окно «Вид терминала»: шрифт, межстрочный интервал, фон. Меняет вид сразу — открытый
-// терминал слушает term-prefs и перестраивается под окном.
-import { t } from './i18n';
+// Окно «Настройки» — одно на всё приложение: вид (тема, шрифт, интервал, фон), раскладка
+// на десктопе, ввод (что делает Enter) и язык. Меняет всё сразу — открытый терминал
+// слушает term-prefs и перестраивается под окном.
+import { getLang, setLang, t, type Lang } from './i18n';
 import {
   FONT_MAX,
   FONT_MIN,
@@ -166,15 +167,55 @@ export function openTermSettings(): void {
       (value) => (prefs = setTermPrefs({ sideTabs: value })),
     );
 
+    // Ввод: что делает Enter. Кнопка Enter на панели клавиш при этом всегда отправляет,
+    // а её удержание — всегда перенос строки.
+    const enter = segment<boolean>(
+      t('termview.enter'),
+      [
+        { value: true, label: t('termview.enterSend') },
+        { value: false, label: t('termview.enterNewline') },
+      ],
+      prefs.enterSends,
+      (value) => (prefs = setTermPrefs({ enterSends: value })),
+    );
+    const enterHint = document.createElement('p');
+    enterHint.className = 'th-settings__hint';
+    enterHint.textContent = t('termview.enterHint');
+
+    // Язык: смена перерисовывает приложение, и окно закрывается вместе с экраном под ним.
+    const lang = segment<Lang>(
+      t('termview.lang'),
+      [
+        { value: 'ru', label: 'Русский' },
+        { value: 'en', label: 'English' },
+      ],
+      getLang(),
+      (value) => setLang(value),
+    );
+
+    const section = (name: string, ...rows: HTMLElement[]): HTMLElement => {
+      const wrap = document.createElement('section');
+      wrap.className = 'th-settings__section';
+      const h = document.createElement('h3');
+      h.className = 'th-settings__name';
+      h.textContent = name;
+      wrap.append(h, ...rows);
+      return wrap;
+    };
+
     box.append(
       head,
-      field(t('termview.fontSize'), stepper),
-      field(t('termview.font'), fontSelect),
-      line,
-      scheme,
-      bg,
-      holo,
-      side,
+      section(
+        t('termview.secView'),
+        scheme,
+        field(t('termview.fontSize'), stepper),
+        field(t('termview.font'), fontSelect),
+        line,
+        bg,
+      ),
+      section(t('termview.secLayout'), side, holo),
+      section(t('termview.secInput'), enter, enterHint),
+      section(t('termview.secLang'), lang),
     );
     return box;
   });

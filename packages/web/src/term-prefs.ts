@@ -27,6 +27,8 @@ export interface TermPrefs {
   holoAuto: boolean;
   /** Вкладки сессий на десктопе — столбцом слева с группировкой по проекту. */
   sideTabs: boolean;
+  /** Enter отправляет (по умолчанию) или переносит строку; Shift+Enter — наоборот. */
+  enterSends: boolean;
 }
 
 export const FONT_MIN = 10;
@@ -43,6 +45,7 @@ const BG_LS_KEY = 'termhub.termBg';
 const FONT_FAMILY_LS_KEY = 'termhub.termFont';
 const HOLO_AUTO_LS_KEY = 'termhub.holoAuto';
 const SIDE_TABS_LS_KEY = 'termhub.sideTabs';
+const ENTER_SENDS_LS_KEY = 'termhub.enterSends';
 
 function read(key: string): string | null {
   try {
@@ -85,6 +88,7 @@ export function readTermPrefs(): TermPrefs {
     font: (Object.keys(TERM_FONTS) as TermFont[]).find((v) => v === read(FONT_FAMILY_LS_KEY)) ?? 'system',
     holoAuto: read(HOLO_AUTO_LS_KEY) === '1',
     sideTabs: read(SIDE_TABS_LS_KEY) === '1',
+    enterSends: read(ENTER_SENDS_LS_KEY) !== '0',
   };
 }
 
@@ -131,6 +135,7 @@ export function setTermPrefs(patch: Partial<TermPrefs>): TermPrefs {
   if (patch.font !== undefined) write(FONT_FAMILY_LS_KEY, patch.font);
   if (patch.holoAuto !== undefined) write(HOLO_AUTO_LS_KEY, patch.holoAuto ? '1' : '0');
   if (patch.sideTabs !== undefined) write(SIDE_TABS_LS_KEY, patch.sideTabs ? '1' : '0');
+  if (patch.enterSends !== undefined) write(ENTER_SENDS_LS_KEY, patch.enterSends ? '1' : '0');
   // Поверх прочитанного кладём patch: при недоступном localStorage вид всё равно
   // должен смениться хотя бы на этот сеанс.
   const prefs = { ...readTermPrefs(), ...patch };

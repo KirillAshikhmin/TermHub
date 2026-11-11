@@ -2126,6 +2126,30 @@ select.th-input {
   flex-direction: column;
   gap: 16px;
 }
+/* Окно настроек: разделы с заголовком. */
+.th-settings__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.th-settings__section + .th-settings__section {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.th-settings__name {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.th-settings__hint {
+  margin: -4px 0 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
 .th-termview__stepper {
   display: flex;
   align-items: center;
@@ -2554,7 +2578,7 @@ main.th-gradle {
   flex-grow: 1.6;
 }
 /* Кнопка с действием по удержанию: мелкая пометка в углу и ход удержания заливкой. */
-.th-qk__key--esc {
+.th-qk__key--hold {
   position: relative;
 }
 .th-qk__hold {
@@ -2564,14 +2588,26 @@ main.th-gradle {
   font-size: 0.56rem;
   font-weight: 700;
   line-height: 1;
-  color: var(--danger);
+  color: var(--accent);
   pointer-events: none;
 }
 .th-qk__key.is-holding {
-  background: linear-gradient(var(--danger-tint), var(--danger-tint)) no-repeat left / 0% 100%, var(--bg-elev-2);
+  background: linear-gradient(var(--accent-tint), var(--accent-tint)) no-repeat left / 0% 100%, var(--bg-elev-2);
   animation: th-qk-hold 450ms linear forwards;
 }
 .th-qk__key.is-held {
+  background: var(--accent-tint);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* Ctrl+C обрывает команду — пометка и ход удержания красные. */
+.th-qk__key--esc .th-qk__hold {
+  color: var(--danger);
+}
+.th-qk__key--esc.is-holding {
+  background: linear-gradient(var(--danger-tint), var(--danger-tint)) no-repeat left / 0% 100%, var(--bg-elev-2);
+}
+.th-qk__key--esc.is-held {
   background: var(--danger-tint);
   color: var(--danger);
   border-color: var(--danger);

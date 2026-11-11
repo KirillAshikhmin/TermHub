@@ -39,7 +39,7 @@ export function mountSplit(root: HTMLElement, sessions: string[], transport: Tra
   const viewBtn = document.createElement('button');
   viewBtn.type = 'button';
   viewBtn.className = 'th-termbar__view';
-  viewBtn.append(svgIcon('sliders'));
+  viewBtn.append(svgIcon('gear'));
   viewBtn.title = t('termview.title');
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('click', () => openTermSettings());

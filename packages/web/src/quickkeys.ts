@@ -2,7 +2,8 @@
 // последовательности в pty. Два ряда: первый — клавиши (Esc, Tab, ⇧Tab, стрелки, Enter;
 // на телефоне он обязан помещаться в одну строку), второй — инструменты (выделение,
 // поиск, тумблеры). Ctrl+C — удержание Esc: отдельной кнопки у него нет, и случайным
-// тапом команду не оборвать. Размер шрифта отсюда убран — он в окне вида терминала.
+// тапом команду не оборвать; Shift+Enter (перенос строки) — удержание Enter. Размер
+// шрифта и выбор «Enter отправляет / переносит» — в окне настроек.
 // Карта кнопка→байты вынесена чистой структурой (SEND_KEYS) — её и покрывает тест;
 // DOM-монтаж отделён и от него не зависит.
 
@@ -19,8 +20,11 @@ export interface QuickKey {
   ariaKey?: string;
   /** Подпись для aria-label словом, когда глиф — значок (Tab, Enter). */
   aria?: string;
-  /** Не кнопка, а действие по удержанию названной кнопки (Ctrl+C — удержание Esc). */
+  /** Не кнопка, а действие по удержанию названной кнопки (Ctrl+C — удержание Esc,
+   *  Shift+Enter — удержание Enter). */
   holdOf?: string;
+  /** Мелкая пометка на кнопке-хозяине: что даёт удержание. */
+  holdMark?: string;
 }
 
 /** Сколько держать кнопку, чтобы сработало действие удержания. */
@@ -39,7 +43,9 @@ export const SEND_KEYS: readonly QuickKey[] = [
   { id: 'down', glyph: '↓', send: '\x1b[B', ariaKey: 'quickkeys.down' },
   { id: 'right', glyph: '→', send: '\x1b[C', ariaKey: 'quickkeys.right' },
   { id: 'enter', glyph: '↵', send: '\r', aria: 'Enter' },
-  { id: 'ctrlC', glyph: '^C', send: '\x03', holdOf: 'esc' },
+  { id: 'ctrlC', glyph: '^C', send: '\x03', holdOf: 'esc', holdMark: '^C', aria: 'Ctrl+C' },
+  // Перенос строки: ESC+CR — голый \n агенты принимают за отправку.
+  { id: 'shiftEnter', glyph: '⇧↵', send: '\x1b\r', holdOf: 'enter', holdMark: '⇧', aria: 'Shift+Enter' },
 ];
 
 const encoder = new TextEncoder();
@@ -62,10 +68,6 @@ export interface QuickKeysHandlers {
   onSearch: () => void;
   /** Начальное состояние тумблера выделения. */
   selectEnabled: boolean;
-  /** Тумблер «Отправлять по Enter» (выкл — Enter переносит строку). */
-  onEnterSendsToggle: (enabled: boolean) => void;
-  /** Начальное состояние тумблера «Отправлять по Enter». */
-  enterSendsEnabled: boolean;
   /** Тумблер строки ввода (compose bar): нативное поле для свайпа/подсказок. */
   onComposeToggle: (enabled: boolean) => void;
   /** Начальное состояние строки ввода. */
@@ -119,9 +121,10 @@ function toggleButton(
 function wireHold(btn: HTMLButtonElement, held: QuickKey, h: Pick<QuickKeysHandlers, 'onKey' | 't'>): void {
   const mark = document.createElement('span');
   mark.className = 'th-qk__hold';
-  mark.textContent = held.glyph;
+  mark.textContent = held.holdMark ?? held.glyph;
   btn.append(mark);
-  const label = h.t('quickkeys.hold', { key: btn.getAttribute('aria-label') ?? '', held: 'Ctrl+C' });
+  btn.classList.add('th-qk__key--hold');
+  const label = h.t('quickkeys.hold', { key: btn.getAttribute('aria-label') ?? '', held: held.aria ?? held.glyph });
   btn.setAttribute('aria-label', label);
   btn.title = label;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -196,11 +199,6 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
     quickKeyButton('⌕', h.t('quickkeys.search'), () => h.onSearch()),
   );
   tools.append(selectGroup);
-
-  // Тумблер «Отправлять по Enter» (выкл — Enter переносит строку).
-  const enterToggle = toggleButton('⏎', h.t('quickkeys.enterSends'), h.enterSendsEnabled, h.onEnterSendsToggle);
-  enterToggle.classList.add('th-qk__enter');
-  tools.append(enterToggle);
 
   // Экранная клавиатура.
   const keyboardToggle = toggleButton('⌨', h.t('quickkeys.keyboard'), h.keyboardEnabled, h.onKeyboardToggle);

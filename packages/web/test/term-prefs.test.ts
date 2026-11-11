@@ -62,7 +62,7 @@ describe('term prefs', () => {
     expect(readTermPrefs().fontSize).toBe(13);
     expect(document.querySelector('.th-termview__value')!.textContent).toBe('13 px');
     const segments = document.querySelectorAll('.th-termview .th-segment');
-    // Порядок сегментов: интервал, тема, фон, полоса разделов.
+    // Порядок сегментов: тема, интервал, фон, вкладки, полоса разделов, Enter, язык.
     segments[2]!.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
     expect(readTermPrefs().bg).toBe('contrast');
     const font = document.querySelector<HTMLSelectElement>('.th-termview__select')!;
@@ -73,13 +73,27 @@ describe('term prefs', () => {
 
   it('theme choice in the window switches the whole app, not just the terminal', () => {
     openTermSettings();
-    const theme = document.querySelectorAll('.th-termview .th-segment')[1]!;
+    const theme = document.querySelectorAll('.th-termview .th-segment')[0]!;
     theme.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[2]!.click();
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
     expect(termIsLight()).toBe(true);
     theme.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
     expect(termIsLight()).toBe(false);
+  });
+
+  it('settings window has sections and the Enter behaviour, shared with the terminal', () => {
+    const seen: boolean[] = [];
+    const off = onTermPrefsChange((p) => seen.push(p.enterSends));
+    expect(readTermPrefs().enterSends).toBe(true);
+    openTermSettings();
+    expect(document.querySelectorAll('.th-settings__section').length).toBe(4);
+    const enter = document.querySelectorAll('.th-termview .th-segment')[5]!;
+    enter.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
+    expect(readTermPrefs().enterSends).toBe(false);
+    expect(localStorage.getItem('termhub.enterSends')).toBe('0');
+    expect(seen).toEqual([false]);
+    off();
   });
 
   it('puts the chosen font ahead of the base stack and ignores unknown ones', () => {
