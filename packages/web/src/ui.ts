@@ -783,8 +783,10 @@ function addCaffeineItem(addItem: AddItem, transport: Transport): () => void {
   const failed = (err: unknown): void => {
     if (!(err instanceof ApiError && err.status === 401)) toast(t('header.keepAwakeError'), 'error');
   };
-  /** Нажатие: обычное удержание сна. */
+  /** Нажатие: обычное удержание сна. Пока включён режим крышки, нажатие выключает его:
+   *  мигающую кнопку жмут, чтобы погасить, и «переключить другой режим» тут не ждут. */
   const toggle = async (): Promise<void> => {
+    if (state.lid === true) return toggleLid();
     item.disabled = true;
     try {
       state = await transport.setCaffeinate(!state.active);

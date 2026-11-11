@@ -37,7 +37,9 @@ export interface UsagePage {
   last: number;
 }
 
-export type UsageResult = UsagePage | FeedFailure;
+/** Память процессов сессии в байтах приклеивает `sessionUsage` — и к расходу, и к отказу:
+ *  у сессии без агента токенов нет, а память есть. Нет поля — посчитать не удалось. */
+export type UsageResult = (UsagePage | FeedFailure) & { memory?: number };
 
 /** Расход сессии по её имени — подменяемый шов транспортов, как `FeedReader`. */
 export type UsageReader = (session: string) => Promise<UsageResult>;

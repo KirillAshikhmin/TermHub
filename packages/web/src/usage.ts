@@ -24,7 +24,9 @@ export interface UsagePage {
   last: number;
 }
 
-export type UsageResult = UsagePage | FeedFailure;
+/** Память процессов сессии в байтах едет и с расходом, и с отказом: у сессии без агента
+ *  токенов нет, а память есть. Нет поля — агент её не посчитал (или он старше). */
+export type UsageResult = (UsagePage | FeedFailure) & { memory?: number };
 
 /** Расход одной сессии. Отказ — значение `{ok:false}`, исключение — только сбой связи. */
 export function sessionUsage(transport: Transport, session: string): Promise<UsageResult> {
@@ -42,6 +44,13 @@ export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
+}
+
+/** Память: мегабайты до гигабайта, дальше гигабайты с одним знаком. */
+export function formatMemory(bytes: number | undefined): string {
+  if (bytes === undefined) return '—';
+  const mb = bytes / (1024 * 1024);
+  return mb >= 1024 ? t('usage.gb', { n: (mb / 1024).toFixed(1) }) : t('usage.mb', { n: Math.round(mb) });
 }
 
 export function formatDuration(ms: number): string {
@@ -96,14 +105,14 @@ export function openUsage(transport: Transport): void {
     table.className = 'th-usage__table';
     const thead = document.createElement('thead');
     const groups = document.createElement('tr');
-    for (const [text, span] of [['', 1], [t('usage.today'), 3], [t('usage.total'), 3]] as const) {
+    for (const [text, span] of [['', 2], [t('usage.today'), 3], [t('usage.total'), 3]] as const) {
       const th = document.createElement('th');
       th.colSpan = span;
       th.textContent = text;
       groups.append(th);
     }
     const cols = [t('usage.time'), t('usage.output'), t('usage.all')];
-    thead.append(groups, row('th', [t('usage.session'), ...cols, ...cols]));
+    thead.append(groups, row('th', [t('usage.session'), t('usage.memory'), ...cols, ...cols]));
     const tbody = document.createElement('tbody');
     table.append(thead, tbody);
     box.append(head, status, table);
@@ -118,6 +127,9 @@ export function openUsage(transport: Transport): void {
       }
       const today: UsageTotals[] = [];
       const total: UsageTotals[] = [];
+      let memory = 0;
+      let memoryKnown = false;
+      let rows = 0;
       for (const s of sessions) {
         if (!box.isConnected) return;
         let res: UsageResult;
@@ -126,20 +138,42 @@ export function openUsage(transport: Transport): void {
         } catch {
           continue; // обрыв на одной сессии сводку по остальным не срывает
         }
-        // Сессии без агента (обычная оболочка) в сводку не идут: считать там нечего.
-        if (!res.ok) continue;
-        today.push(res.today);
-        total.push(res.total);
+        // Сессия без агента (обычная оболочка): токенов нет, но память она занимает —
+        // строка с прочерками. Нет ни того, ни другого — показывать нечего.
+        if (!res.ok && res.memory === undefined) continue;
+        if (res.memory !== undefined) {
+          memory += res.memory;
+          memoryKnown = true;
+        }
         const text = sessionTitleText(s.title);
         const name = text && text !== s.name ? `${text} · ${s.name}` : s.name;
-        tbody.append(row('td', [name, ...cells(res.today), ...cells(res.total)]));
+        const dashes = ['—', '—', '—'];
+        if (res.ok) {
+          today.push(res.today);
+          total.push(res.total);
+        }
+        tbody.append(
+          row('td', [
+            name,
+            formatMemory(res.memory),
+            ...(res.ok ? cells(res.today) : dashes),
+            ...(res.ok ? cells(res.total) : dashes),
+          ]),
+        );
+        rows += 1;
       }
       if (!box.isConnected) return;
-      if (total.length === 0) {
+      if (rows === 0) {
         status.textContent = t('usage.none');
         return;
       }
-      tbody.append(row('td', [t('usage.sum'), ...cells(sum(today)), ...cells(sum(total))], 'th-usage__sum'));
+      tbody.append(
+        row(
+          'td',
+          [t('usage.sum'), formatMemory(memoryKnown ? memory : undefined), ...cells(sum(today)), ...cells(sum(total))],
+          'th-usage__sum',
+        ),
+      );
       status.textContent = t('usage.note');
     })();
     return box;

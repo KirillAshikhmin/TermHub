@@ -80,6 +80,23 @@ describe('не давать засыпать: нажатие и удержани
     menu.teardown();
   });
 
+  it('пока режим крышки включён, обычное нажатие выключает его, а не переключает другой режим', async () => {
+    const { state, transport } = host();
+    const menu = renderMenu(transport);
+    await vi.advanceTimersByTimeAsync(0);
+    const btn = coffee(menu.el);
+    await hold(btn);
+    expect(btn.classList.contains('is-lid')).toBe(true);
+    btn.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transport.setLidAwake).toHaveBeenLastCalledWith(false);
+    expect(transport.setCaffeinate).not.toHaveBeenCalled();
+    expect(state.lid).toBe(false);
+    expect(btn.classList.contains('is-lid')).toBe(false);
+    expect(toasts()).toContain(t('header.lidAwakeOffToast'));
+    menu.teardown();
+  });
+
   it('хост сам снял режим (крышку открыли) — мигание гаснет и приходит тост', async () => {
     const { state, transport } = host();
     const menu = renderMenu(transport);

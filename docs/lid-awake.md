@@ -12,8 +12,8 @@ Available only when the host is a Mac. It does not exist on Linux hosts or for g
 
 - **Tap** the cup button — the old behaviour: no idle sleep.
 - **Hold** the button (about 0.6 s) to turn on "stay awake with the lid closed too". The
-  button starts blinking yellow and keeps blinking while the mode is on. Hold again to
-  turn it off.
+  button starts blinking yellow and keeps blinking while the mode is on. Any press of the
+  blinking button — a tap or a hold — turns it off.
 - **Opening the lid turns it off.** You enable the mode before closing the laptop; once
   the lid has been closed and opened again, the mode has done its job.
 - Every switch — the regular mode, the lid mode and the automatic switch-off — is reported

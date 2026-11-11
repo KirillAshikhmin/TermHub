@@ -1649,7 +1649,7 @@ select.th-input {
 }
 /* Расход по сессиям */
 .th-overlay .th-modal:has(.th-usage__table) {
-  max-width: 760px;
+  max-width: 860px;
 }
 .th-usage {
   display: flex;

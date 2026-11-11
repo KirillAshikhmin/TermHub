@@ -45,6 +45,7 @@ import {
   type FeedOptions,
   type FeedPage,
 } from './transcript-feed.js';
+import { sessionMemory } from './session-memory.js';
 import { readUsage, type UsageResult } from './transcript-usage.js';
 
 /** Ответ ленты: страница `readFeed` плюс `complete` и `live` — как их отдал определитель,
@@ -62,6 +63,8 @@ export interface SessionFeedSources {
   activePane(session: string): Promise<string | undefined>;
   /** Определитель первого этапа: какой агент в панели и где файл его беседы. */
   resolve(pane: string): Promise<TranscriptResult>;
+  /** Память процессов сессии в байтах (session-memory); undefined — не посчитать. */
+  memory(session: string): Promise<number | undefined>;
   /** Файлы каталога сессий Codex со всеми подкаталогами: по их именам ищется родитель.
    *  Обход считаный — один на запрос и только когда лента дошла до границы файла. */
   sessionFiles(dir: string): Promise<string[]>;
@@ -107,10 +110,15 @@ export async function sessionUsage(
   sources?: Partial<SessionFeedSources>,
   now: number = Date.now(),
 ): Promise<UsageResult> {
-  const located = await locate(session, withDefaults(sources));
-  if (!located.ok) return located;
-  if (located.found.agent === 'opencode') return fail('unknown-format', 'usage is not available for opencode sessions');
-  return readUsage(located.file, located.found.agent, now);
+  const src = withDefaults(sources);
+  // Память считается при любом исходе: у сессии без агента токенов нет, а память есть —
+  // цифра едет и в отказе (поле `memory`), и окно расхода показывает такую сессию тоже.
+  const [located, memory] = await Promise.all([locate(session, src), src.memory(session)]);
+  const withMemory = (result: UsageResult): UsageResult => (memory === undefined ? result : { ...result, memory });
+  if (!located.ok) return withMemory(located);
+  if (located.found.agent === 'opencode')
+    return withMemory(fail('unknown-format', 'usage is not available for opencode sessions'));
+  return withMemory(await readUsage(located.file, located.found.agent, now));
 }
 
 type Located =
@@ -242,6 +250,7 @@ function withDefaults(over?: Partial<SessionFeedSources>): SessionFeedSources {
     home,
     socketName,
     activePane: over?.activePane ?? ((session) => activePaneOf(session, socketName)),
+    memory: over?.memory ?? ((session) => sessionMemory(session, { socketName })),
     resolve: over?.resolve ?? ((pane) => resolvePane(pane, { home, socketName })),
     sessionFiles: over?.sessionFiles ?? sessionFilesOf,
   };
