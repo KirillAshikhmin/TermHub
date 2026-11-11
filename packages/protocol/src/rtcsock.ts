@@ -27,6 +27,9 @@ export const RTC_CHUNK = 16 * 1024;
 /** Сколько держим в буфере канала: больше — ждём, пока уйдёт. */
 const RTC_HIGH_WATER = 1024 * 1024;
 const RTC_LOW_WATER = 256 * 1024;
+/** Сколько терпим состояние «связь пропала», прежде чем считать соединение мёртвым:
+ *  короткий провал сети браузер чинит сам, а после сна вкладки или смены сети — уже нет. */
+const RTC_DISCONNECT_GRACE_MS = 4_000;
 /** Канал не открылся за это время — способ здесь не работает (UDP закрыт, relay без него). */
 const RTC_OPEN_TIMEOUT_MS = 7_000;
 
@@ -37,6 +40,8 @@ export interface RtcPeerLike {
   setLocalDescription(description: { type: 'offer'; sdp: string }): Promise<unknown>;
   setRemoteDescription(description: { type: 'answer'; sdp: string }): Promise<unknown>;
   close(): unknown;
+  connectionState?: string;
+  onconnectionstatechange?: ((ev: never) => void) | null;
 }
 
 export interface RtcChannelLike {
@@ -60,6 +65,8 @@ export interface RtcSocketOpts {
   maxMessage?: number;
   /** Канал не открылся вовсе: вызывающий может запомнить это и выбрать другой способ. */
   onUnavailable?: () => void;
+  /** Канал открылся: способ в этой сети работает. */
+  onAvailable?: () => void;
 }
 
 type Listener<T> = ((ev: T) => void) | null;
@@ -95,6 +102,7 @@ export class RtcSocket {
   private opened = false;
   private openTimer?: ReturnType<typeof setTimeout>;
   private pumpTimer?: ReturnType<typeof setTimeout>;
+  private graceTimer?: ReturnType<typeof setTimeout>;
 
   constructor(url: string, opts: RtcSocketOpts = {}) {
     this.base = pollBase(url);
@@ -134,6 +142,9 @@ export class RtcSocket {
         ? this.opts.peer()
         : (new RTCPeerConnection({ iceServers: [] }) as unknown as RtcPeerLike);
       this.pc = pc;
+      // Канал сам о потере пути не сообщает: его событие закрытия приходит через десятки
+      // секунд, если приходит вообще. Состояние соединения узнаёт об этом раньше.
+      pc.onconnectionstatechange = () => this.onPeerState(pc.connectionState);
       const channel = pc.createDataChannel('relay', { ordered: true });
       this.channel = channel;
       channel.binaryType = 'arraybuffer';
@@ -167,7 +178,18 @@ export class RtcSocket {
     clearTimeout(this.openTimer);
     this.opened = true;
     this.readyState = RtcSocket.OPEN;
+    this.opts.onAvailable?.();
     this.onopen?.({});
+  }
+
+  private onPeerState(state: string | undefined): void {
+    if (this.readyState === RtcSocket.CLOSED) return;
+    clearTimeout(this.graceTimer);
+    this.graceTimer = undefined;
+    if (state === 'failed' || state === 'closed') this.finish(1006, '');
+    else if (state === 'disconnected') {
+      this.graceTimer = setTimeout(() => this.finish(1006, ''), RTC_DISCONNECT_GRACE_MS);
+    }
   }
 
   private onChunk(data: unknown): void {
@@ -236,6 +258,7 @@ export class RtcSocket {
     this.readyState = RtcSocket.CLOSED;
     clearTimeout(this.openTimer);
     clearTimeout(this.pumpTimer);
+    clearTimeout(this.graceTimer);
     this.queue = [];
     this.queued = 0;
     try {

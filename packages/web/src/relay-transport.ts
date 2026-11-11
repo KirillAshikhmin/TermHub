@@ -68,6 +68,14 @@ const GRADLE_TIMEOUT_MS = 190_000;
 /** Backoff реконнекта: старт 1 с, удвоение до потолка 15 с. */
 const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 15_000;
+/** Сколько ждём ответа на проверку связи. Мёртвое соединение не рвётся, а молчит:
+ *  после сна вкладки или смены сети сокет числится открытым, хотя по нему уже ничего
+ *  не придёт, — и без проверки транспорт ждал бы его вечно. */
+const PROBE_TIMEOUT_MS = 3_000;
+/** Тишина дольше этого на видимой странице — повод проверить связь. */
+const HEARTBEAT_MS = 15_000;
+/** Соединение, не дошедшее до потока за это время, бросаем и пробуем заново. */
+const CONNECT_TIMEOUT_MS = 12_000;
 /** Длина челленджа свежести; должна совпадать с CHALLENGE_BYTES агента. */
 const CHALLENGE_BYTES = 32;
 
@@ -300,6 +308,11 @@ export class RelayTransport implements Transport {
   private gradleReqId = 0;
   private backoff = BACKOFF_START_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  /** Когда по потоку последний раз что-то пришло (монотонные часы). */
+  private lastRx = 0;
+  private probeTimer?: ReturnType<typeof setTimeout>;
+  private connectTimer?: ReturnType<typeof setTimeout>;
+  private heartbeat?: ReturnType<typeof setInterval>;
   /** Был ли поток установлен хоть раз — влияет на статус (connecting vs reconnecting). */
   private everStreamed = false;
 
@@ -314,6 +327,12 @@ export class RelayTransport implements Transport {
     // Возврат PWA из фона (Android усыпляет WS) / вернулась сеть — реконнектим сразу.
     document.addEventListener('visibilitychange', this.onVisible);
     window.addEventListener('online', this.onVisible);
+    // pageshow — возврат страницы из кэша навигации (iOS): visibilitychange там не приходит.
+    window.addEventListener('pageshow', this.onVisible);
+    this.heartbeat = setInterval(() => {
+      if (this.stopped || document.visibilityState !== 'visible') return;
+      if (this.state === 'streaming' && performance.now() - this.lastRx >= HEARTBEAT_MS) this.probe();
+    }, HEARTBEAT_MS);
   }
 
   private onVisible = (): void => {
@@ -326,8 +345,23 @@ export class RelayTransport implements Transport {
       this.connect();
     } else if (dead) {
       this.connect();
+    } else {
+      // Сокет числится живым — но после сна вкладки это ничего не значит: проверяем.
+      this.probe();
     }
   };
+
+  /** Проверка связи: Ping агенту сквозь поток; любой входящий кадр — ответ. Молчание
+   *  дольше PROBE_TIMEOUT_MS — соединение мертво, бросаем его и подключаемся заново. */
+  private probe(): void {
+    if (this.state !== 'streaming' || this.probeTimer) return;
+    const ws = this.ws;
+    this.sendFrame(encodeFrame({ type: FrameType.Ping, channel: CONTROL_CHANNEL, payload: new Uint8Array(0) }));
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = undefined;
+      if (this.ws === ws) this.dropSocket();
+    }, PROBE_TIMEOUT_MS);
+  }
 
   // ── Соединение и хендшейк ─────────────────────────────────────────────────
 
@@ -342,6 +376,10 @@ export class RelayTransport implements Transport {
     ws.onmessage = (ev: MessageEvent): void => this.onMessage(ws, ev);
     ws.onclose = (): void => this.onClose(ws);
     ws.onerror = (): void => {}; // за onerror всегда идёт onclose
+    clearTimeout(this.connectTimer);
+    this.connectTimer = setTimeout(() => {
+      if (this.ws === ws && this.state !== 'streaming') this.dropSocket();
+    }, CONNECT_TIMEOUT_MS);
   }
 
   private onMessage(ws: WebSocket, ev: MessageEvent): void {
@@ -397,6 +435,12 @@ export class RelayTransport implements Transport {
     } catch {
       this.dropSocket(); // подделка/рассинхрон — переустановим соединение
       return;
+    }
+    // Расшифрованный кадр — доказательство живой связи (подделать его relay не может).
+    this.lastRx = performance.now();
+    if (this.probeTimer) {
+      clearTimeout(this.probeTimer);
+      this.probeTimer = undefined;
     }
     let frame: Frame;
     try {
@@ -497,6 +541,8 @@ export class RelayTransport implements Transport {
     );
     this.state = 'streaming';
     this.everStreamed = true;
+    this.lastRx = performance.now();
+    clearTimeout(this.connectTimer);
     this.backoff = BACKOFF_START_MS;
     this.onLink?.('online');
     this.onStreamReady();
@@ -847,6 +893,9 @@ export class RelayTransport implements Transport {
     this.state = 'closed';
     this.encryptor = undefined;
     this.decryptor = undefined;
+    clearTimeout(this.probeTimer);
+    this.probeTimer = undefined;
+    clearTimeout(this.connectTimer);
     for (const pending of [
       ...this.pendingList,
       ...this.pendingCreate,
@@ -924,7 +973,9 @@ export class RelayTransport implements Transport {
     }, delay);
   }
 
-  /** Закрывает текущий сокет (onClose подхватит реконнект, если не stopped). */
+  /** Бросает текущий сокет и сразу запускает реконнект (если не stopped). События
+   *  закрытия не ждём: у мёртвого соединения оно приходит через десятки секунд —
+   *  браузер сначала пытается закрыть его по-хорошему. */
   private dropSocket(): void {
     const ws = this.ws;
     if (!ws) return;
@@ -933,6 +984,7 @@ export class RelayTransport implements Transport {
     } catch {
       // уже закрыт — идемпотентно
     }
+    this.onClose(ws); // если close() уже вызвал onClose сам, это пустой вызов
   }
 
   // ── Отправка ──────────────────────────────────────────────────────────────
@@ -1357,6 +1409,10 @@ export class RelayTransport implements Transport {
     this.stopped = true;
     document.removeEventListener('visibilitychange', this.onVisible);
     window.removeEventListener('online', this.onVisible);
+    window.removeEventListener('pageshow', this.onVisible);
+    clearInterval(this.heartbeat);
+    clearTimeout(this.probeTimer);
+    clearTimeout(this.connectTimer);
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;

@@ -15,9 +15,13 @@ export type RelayTransportMode = 'ws' | 'poll' | 'rtc';
 const KEY = 'termhub.relayTransport';
 /** Сколько не пробуем WebRTC после неудачи: каждая попытка — секунды ожидания. */
 const RTC_RETRY_MS = 10 * 60 * 1000;
+/** То же, если WebRTC в этой сети уже работал: неудача тогда скорее случайна (сеть ещё
+ *  не поднялась после сна), и надолго уходить на медленный способ незачем. */
+const RTC_RETRY_KNOWN_MS = 20 * 1000;
 
 let hint: RelayTransportMode = 'ws';
 let rtcFailedAt: number | null = null;
+let rtcWorked = false;
 
 function isMode(value: unknown): value is RelayTransportMode {
   return value === 'ws' || value === 'poll' || value === 'rtc';
@@ -44,13 +48,24 @@ export function effectiveRelayTransport(now = Date.now()): RelayTransportMode {
   const mode = relayTransportMode();
   if (mode !== 'rtc') return mode;
   if (typeof RTCPeerConnection === 'undefined') return 'poll';
-  if (rtcFailedAt !== null && now - rtcFailedAt < RTC_RETRY_MS) return 'poll';
+  if (rtcFailedAt !== null && now - rtcFailedAt < (rtcWorked ? RTC_RETRY_KNOWN_MS : RTC_RETRY_MS)) return 'poll';
   return 'rtc';
 }
 
 /** Для тестов: забыть неудачу WebRTC. */
 export function resetRelayTransportState(): void {
   rtcFailedAt = null;
+  rtcWorked = false;
+}
+
+/** Для тестов: исход попытки WebRTC, как его сообщает сокет. */
+export function noteRtcOutcome(ok: boolean, now = Date.now()): void {
+  if (ok) {
+    rtcWorked = true;
+    rtcFailedAt = null;
+  } else {
+    rtcFailedAt = now;
+  }
 }
 
 /** Открывает соединение с relay. PollSocket и RtcSocket повторяют ту часть WebSocket,
@@ -59,10 +74,10 @@ export function openRelaySocket(url: string): WebSocket {
   const mode = effectiveRelayTransport();
   if (mode === 'poll') return new PollSocket(url) as unknown as WebSocket;
   if (mode === 'rtc') {
-    const onUnavailable = (): void => {
-      rtcFailedAt = Date.now();
-    };
-    return new RtcSocket(url, { onUnavailable }) as unknown as WebSocket;
+    return new RtcSocket(url, {
+      onUnavailable: () => noteRtcOutcome(false),
+      onAvailable: () => noteRtcOutcome(true),
+    }) as unknown as WebSocket;
   }
   return new WebSocket(url);
 }

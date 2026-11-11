@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   effectiveRelayTransport,
+  noteRtcOutcome,
   relayTransportMode,
   resetRelayTransportState,
   setRelayTransportHint,
@@ -38,5 +39,34 @@ describe('выбор транспорта relay в браузере', () => {
     expect(effectiveRelayTransport()).toBe('poll');
     vi.stubGlobal('RTCPeerConnection', class {});
     expect(effectiveRelayTransport()).toBe('rtc');
+  });
+});
+
+describe('откат WebRTC после неудачи', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetRelayTransportState();
+    setRelayTransportHint('rtc');
+    vi.stubGlobal('RTCPeerConnection', class {});
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('ни разу не открывался — уступает коротким запросам на 10 минут', () => {
+    noteRtcOutcome(false, 1_000_000);
+    expect(effectiveRelayTransport(1_000_000 + 9 * 60_000)).toBe('poll');
+    expect(effectiveRelayTransport(1_000_000 + 10 * 60_000)).toBe('rtc');
+  });
+
+  it('уже работал в этой сети — неудача после сна стоит 20 секунд, а не 10 минут', () => {
+    noteRtcOutcome(true, 1_000_000);
+    noteRtcOutcome(false, 2_000_000);
+    expect(effectiveRelayTransport(2_000_000 + 19_000)).toBe('poll');
+    expect(effectiveRelayTransport(2_000_000 + 20_000)).toBe('rtc');
+  });
+
+  it('успех снимает откат сразу', () => {
+    noteRtcOutcome(false, 1_000_000);
+    noteRtcOutcome(true, 1_000_500);
+    expect(effectiveRelayTransport(1_001_000)).toBe('rtc');
   });
 });
