@@ -29,8 +29,9 @@ export const HOLD_MS = 450;
 // Порядок = порядок в панели (см. бриф Task 8).
 export const SEND_KEYS: readonly QuickKey[] = [
   { id: 'esc', glyph: 'Esc', send: '\x1b' },
-  { id: 'tab', glyph: '⇥', send: '\t', aria: 'Tab' },
-  { id: 'shiftTab', glyph: '⇤', send: '\x1b[Z', aria: 'Shift + Tab' },
+  // ↹ — значок с клавиши Tab: две встречные стрелки с упорами. Shift+Tab — он же с ⇧.
+  { id: 'tab', glyph: '↹', send: '\t', aria: 'Tab' },
+  { id: 'shiftTab', glyph: '⇧↹', send: '\x1b[Z', aria: 'Shift + Tab' },
   // Shift+← — «назад» в вопросах Codex (xterm-форма стрелки с модификатором Shift).
   { id: 'shiftLeft', glyph: '⇧←', send: '\x1b[1;2D', ariaKey: 'quickkeys.shiftLeft' },
   { id: 'left', glyph: '←', send: '\x1b[D', ariaKey: 'quickkeys.left' },
