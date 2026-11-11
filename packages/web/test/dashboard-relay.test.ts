@@ -73,6 +73,10 @@ class ScriptedTransport implements Transport {
     return Promise.resolve({ active: false, supported: false });
   }
 
+  setLidAwake(_on: boolean): Promise<CaffeinateState> {
+    return Promise.resolve({ active: false, supported: false });
+  }
+
   vapidKey(): Promise<string> {
     return Promise.resolve('');
   }

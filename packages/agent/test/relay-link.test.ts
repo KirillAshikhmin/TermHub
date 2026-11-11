@@ -1291,6 +1291,8 @@ describe('RelayLink — лента сессии через relay', () => {
   let feedLink: RelayLink;
   let asked: { session: string; opts: Record<string, unknown> }[] = [];
   const usageAsked: string[] = [];
+  /** Режим закрытой крышки подставного контроллера сна. */
+  let lidOn = false;
   /** Подставная лента бросает вместо ответа: сорванное чтение обязано доехать телом. */
   let crash = false;
 
@@ -1311,6 +1313,15 @@ describe('RelayLink — лента сессии через relay', () => {
       usage: async (session) => {
         usageAsked.push(session);
         return USAGE_PAGE;
+      },
+      caffeinate: {
+        supported: true,
+        isActive: () => false,
+        set: () => {},
+        state: () => ({ active: false, supported: true, lidSupported: true, lidReady: true, lid: lidOn }),
+        apply: async (req) => {
+          if (typeof req.lid === 'boolean') lidOn = req.lid;
+        },
       },
     });
     feedLink.start();
@@ -1400,6 +1411,17 @@ describe('RelayLink — лента сессии через relay', () => {
     const refused = await c.next();
     expect(frameJson<{ ok: boolean; reason: string }>(refused!).reason).toBe('forbidden');
     expect(usageAsked).toEqual([OWN_SESSION]);
+  }, 25000);
+
+  it('кадр Caffeinate {lid}: режим закрытой крышки тем же телом, что POST /api/caffeinate', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Caffeinate, 0, { lid: true }));
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CaffeinateResult);
+    expect(td.decode(frame!.payload)).toBe('{"active":false,"supported":true,"lidSupported":true,"lidReady":true,"lid":true}');
+    // Пустой запрос — только состояние.
+    c.send(jsonFrame(FrameType.Caffeinate, 0, {}));
+    expect(td.decode((await c.next())!.payload)).toBe('{"active":false,"supported":true,"lidSupported":true,"lidReady":true,"lid":true}');
   }, 25000);
 
   it('пустые значения в запросе равносильны отсутствующим, как и в URL §9', async () => {

@@ -276,7 +276,9 @@ How to contribute — [CONTRIBUTING.md](CONTRIBUTING.md).
   the "Diagnostics" page (is the agent registered). A common cause — the Mac went to sleep or
   the agent isn't running.
 - **The Mac falls asleep** — disable sleep in System Settings, or `caffeinate -di`, or the
-  "Keep Mac awake" toggle in the web menu.
+  "Keep Mac awake" toggle in the web menu. Closing the lid still puts a laptop to sleep —
+  hold that button to stay awake with the lid closed too
+  ([docs/lid-awake.md](docs/lid-awake.md)).
 - **Fallback channel** — enable Remote Login (SSH) and do `tmux -L termhub attach -t <name>`,
   where `<name>` is the session name — the folder name, e.g. `MyProject` (see `tmux -L termhub ls`).
 
@@ -289,6 +291,7 @@ How to contribute — [CONTRIBUTING.md](CONTRIBUTING.md).
   connection: how the filter works and how to set up the workarounds
 - [docs/security.md](docs/security.md) — threat model and cryptography
 - [docs/notifications.md](docs/notifications.md) — sound, push, HTTPS
+- [docs/lid-awake.md](docs/lid-awake.md) — keeping a Mac awake with the lid closed
 - [docs/manual-test-checklist.md](docs/manual-test-checklist.md) — manual test checklist
 - [docs/terminal-and-agents.ru.md](docs/terminal-and-agents.ru.md) — own terminal and agent
   UX: analysis, decisions, roadmap (Russian only)

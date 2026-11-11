@@ -44,6 +44,11 @@ export interface CreateSessionResult {
 export interface CaffeinateState {
   active: boolean;
   supported: boolean;
+  /** Режим «не спать при закрытой крышке» (хост на macOS): платформа умеет, разрешение на
+   *  хосте выдано (`termhub lid-awake`), режим включён. У другого хоста полей нет. */
+  lidSupported?: boolean;
+  lidReady?: boolean;
+  lid?: boolean;
 }
 
 /** Ограничение доступа гостя (шаринг одной сессии). */
@@ -251,6 +256,7 @@ export const api = {
   },
   caffeinate: () => request<CaffeinateState>('GET', '/api/caffeinate'),
   setCaffeinate: (active: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { active } }),
+  setLidAwake: (lid: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { lid } }),
   filesList: (root: string, path: string) =>
     request<{ entries: FileEntry[] }>(
       'GET',

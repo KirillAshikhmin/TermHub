@@ -343,6 +343,27 @@ button {
 .th-menu__item.is-on {
   color: var(--accent);
 }
+/* «Не спать при закрытой крышке»: режим рискованный (закрытый ноутбук греется), поэтому
+   кнопка не просто горит, а мигает жёлтым, пока он включён. */
+.th-menu__item.is-lid,
+.th-menu__row .th-menu__item.is-lid {
+  color: #e3b341;
+  animation: th-lid-blink 1.1s ease-in-out infinite;
+}
+@keyframes th-lid-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .th-menu__item.is-lid {
+    animation: none;
+  }
+}
 .th-menu__sep {
   height: 1px;
   margin: 5px 8px;

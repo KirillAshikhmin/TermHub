@@ -8,6 +8,8 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
+import type { LidAwake, LidAwakeState } from './lid-awake.js';
+
 /** Минимум, который нам нужен от дочернего процесса (для инъекции в тестах). */
 export interface CaffeinateProc {
   on(event: 'exit' | 'error', listener: (...args: unknown[]) => void): void;
@@ -46,6 +48,18 @@ export interface CaffeinateOpts {
   spawn?: SpawnCaffeinate;
   /** Поддержка платформы; по умолчанию — sleepInhibitSupported (macOS / Linux+systemd). */
   supported?: boolean;
+  /** Режим «не спать при закрытой крышке» (macOS); без него в состоянии его полей нет. */
+  lid?: LidAwake;
+}
+
+/** Состояние для интерфейса: обычное удержание сна плюс режим закрытой крышки. */
+export type CaffeinateState = { active: boolean; supported: boolean } & Partial<LidAwakeState>;
+
+/** Запрос интерфейса: `active` — обычное удержание, `lid` — режим закрытой крышки. Поля
+ *  независимы; не булево значение — поля нет. */
+export interface CaffeinateRequest {
+  active?: unknown;
+  lid?: unknown;
 }
 
 /** Держит систему бодрствующей, пока активно. Идемпотентно, безопасно к повторам. */
@@ -53,10 +67,25 @@ export class Caffeinate {
   readonly supported: boolean;
   private readonly spawnFn: SpawnCaffeinate;
   private proc: CaffeinateProc | null = null;
+  private readonly lid?: LidAwake;
 
   constructor(opts: CaffeinateOpts = {}) {
     this.spawnFn = opts.spawn ?? defaultSpawn;
     this.supported = opts.supported ?? sleepInhibitSupported(process.platform);
+    this.lid = opts.lid;
+  }
+
+  /** Полное состояние одним объектом — его же отдают оба транспорта, чтобы тело ответа
+   *  по LAN и через relay было одним. */
+  state(): CaffeinateState {
+    return { active: this.isActive(), supported: this.supported, ...this.lid?.state() };
+  }
+
+  /** Применить запрос интерфейса. Отказ режима крышки (нет разрешения sudoers) видно по
+   *  состоянию после: `lid` остался false. */
+  async apply(req: CaffeinateRequest): Promise<void> {
+    if (typeof req.active === 'boolean') this.set(req.active);
+    if (typeof req.lid === 'boolean' && this.lid) await this.lid.set(req.lid);
   }
 
   isActive(): boolean {

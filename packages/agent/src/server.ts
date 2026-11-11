@@ -41,6 +41,10 @@ export interface CaffeinateController {
   readonly supported: boolean;
   isActive(): boolean;
   set(on: boolean): void;
+  /** Полное состояние, включая режим закрытой крышки (см. Caffeinate.state). */
+  state?(): { active: boolean; supported: boolean; lid?: boolean; lidSupported?: boolean; lidReady?: boolean };
+  /** Запрос интерфейса `{active?, lid?}` (см. Caffeinate.apply). */
+  apply?(req: { active?: unknown; lid?: unknown }): Promise<void>;
 }
 
 const COOKIE_NAME = 'termhub';
@@ -696,17 +700,22 @@ export class AgentServer {
 
   /** Текущее состояние удержания сна: активно ли и поддерживается ли платформой. */
   private caffeinateState(): { active: boolean; supported: boolean } {
-    return {
-      active: this.caffeinate?.isActive() ?? false,
-      supported: this.caffeinate?.supported ?? false,
-    };
+    return (
+      this.caffeinate?.state?.() ?? {
+        active: this.caffeinate?.isActive() ?? false,
+        supported: this.caffeinate?.supported ?? false,
+      }
+    );
   }
 
   private async setCaffeinate(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const body = await this.readJson(req, res);
-    if (typeof body.active !== 'boolean') return this.sendJson(res, 422, { error: 'expected { active: boolean }' });
+    // `active` — обычное удержание сна, `lid` — режим закрытой крышки (macOS); хватит одного.
+    if (typeof body.active !== 'boolean' && typeof body.lid !== 'boolean')
+      return this.sendJson(res, 422, { error: 'expected { active: boolean } or { lid: boolean }' });
     if (!this.caffeinate?.supported) return this.sendJson(res, 503, { error: 'caffeinate unavailable' });
-    this.caffeinate.set(body.active);
+    if (this.caffeinate.apply) await this.caffeinate.apply(body);
+    else if (typeof body.active === 'boolean') this.caffeinate.set(body.active);
     this.sendJson(res, 200, this.caffeinateState());
   }
 

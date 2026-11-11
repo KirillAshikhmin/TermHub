@@ -86,6 +86,9 @@ export interface Transport {
   caffeinate(): Promise<CaffeinateState>;
   /** Переключить caffeinate; возвращает новое состояние. */
   setCaffeinate(active: boolean): Promise<CaffeinateState>;
+  /** Режим «не спать при закрытой крышке» (хост на macOS); отказ хоста виден по ответу:
+   *  `lid` остался false. Оба режима: LAN — REST, relay — тот же кадр Caffeinate. */
+  setLidAwake(on: boolean): Promise<CaffeinateState>;
   /** Объявление возможностей (ADR 0018): называем свои имена, получаем список агента.
    *  Агент, который этого не умеет, отвечает 404 (LAN) или молчит (relay) — обе дороги
    *  дают пустой список, а не ошибку прикладного уровня. */
@@ -325,6 +328,10 @@ export class LanTransport implements Transport {
 
   setCaffeinate(active: boolean): Promise<CaffeinateState> {
     return api.setCaffeinate(active);
+  }
+
+  setLidAwake(on: boolean): Promise<CaffeinateState> {
+    return api.setLidAwake(on);
   }
 
   capabilities(caps: string[]): Promise<string[]> {

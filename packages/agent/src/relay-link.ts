@@ -54,6 +54,10 @@ interface CaffeinateCtl {
   readonly supported: boolean;
   isActive(): boolean;
   set(on: boolean): void;
+  /** Полное состояние, включая режим закрытой крышки (см. Caffeinate.state). */
+  state?(): { active: boolean; supported: boolean; lid?: boolean; lidSupported?: boolean; lidReady?: boolean };
+  /** Запрос интерфейса `{active?, lid?}` (см. Caffeinate.apply). */
+  apply?(req: { active?: unknown; lid?: unknown }): Promise<void>;
 }
 
 /** Минимум для web-push из relay-моста (структурно совместим с PushService). */
@@ -949,25 +953,35 @@ export class RelayLink {
     this.sendFrameBytes(s, jsonFrame(FrameType.ListResult, 0, { sessions, scope: s.scope ?? null }));
   }
 
-  /** Caffeinate через relay: пустой payload — запрос состояния; `{active}` — установка.
-   *  Ответ всегда CaffeinateResult `{active, supported}`. Без контроллера — supported:false. */
+  /** Caffeinate через relay: пустой payload — запрос состояния; `{active}` — установка,
+   *  `{lid}` — режим закрытой крышки (macOS). Ответ всегда CaffeinateResult — то же тело,
+   *  что у `GET /api/caffeinate`. Без контроллера — supported:false. */
   private doCaffeinate(s: ClientSession, frame: Frame): void {
-    if (this.caffeinate?.supported) {
-      let req: { active?: boolean } = {};
-      try {
-        req = frameJson<{ active?: boolean }>(frame);
-      } catch {
-        req = {};
-      }
-      if (typeof req.active === 'boolean') this.caffeinate.set(req.active);
+    const reply = (): void =>
+      this.sendFrameBytes(
+        s,
+        jsonFrame(
+          FrameType.CaffeinateResult,
+          0,
+          this.caffeinate?.state?.() ?? {
+            active: this.caffeinate?.isActive() ?? false,
+            supported: this.caffeinate?.supported ?? false,
+          },
+        ),
+      );
+    if (!this.caffeinate?.supported) return reply();
+    let req: { active?: unknown; lid?: unknown } = {};
+    try {
+      req = frameJson<{ active?: unknown; lid?: unknown }>(frame);
+    } catch {
+      req = {};
     }
-    this.sendFrameBytes(
-      s,
-      jsonFrame(FrameType.CaffeinateResult, 0, {
-        active: this.caffeinate?.isActive() ?? false,
-        supported: this.caffeinate?.supported ?? false,
-      }),
-    );
+    if (!this.caffeinate.apply) {
+      if (typeof req.active === 'boolean') this.caffeinate.set(req.active);
+      return reply();
+    }
+    // Режим крышки применяется командой — ответ уходит после неё, с итоговым состоянием.
+    void this.caffeinate.apply(req).then(reply, reply);
   }
 
   /** VCS-операции (git/svn/hg) через relay. id — для сопоставления ответа; commit

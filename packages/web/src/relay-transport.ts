@@ -1277,8 +1277,12 @@ export class RelayTransport implements Transport {
     return this.requestCaffeinate({ active });
   }
 
+  setLidAwake(on: boolean): Promise<CaffeinateState> {
+    return this.requestCaffeinate({ lid: on });
+  }
+
   /** Пустой запрос — состояние; `{active}` — установка. Ждёт CAFFEINATE_RESULT. */
-  private requestCaffeinate(req: { active?: boolean }): Promise<CaffeinateState> {
+  private requestCaffeinate(req: { active?: boolean; lid?: boolean }): Promise<CaffeinateState> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
     return new Promise<CaffeinateState>((resolve, reject) => {
       const timer = setTimeout(() => {

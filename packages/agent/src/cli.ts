@@ -1,6 +1,7 @@
 // Роутер команд агента. Реализованы `setup`, `start`, `share`, `pair`, `connect`,
 // `devices`, `revoke`, `service`.
 
+import os from 'node:os';
 import { initCrypto } from '@termhub/protocol';
 import { runSetup } from './setup.js';
 import { readRelayDial, describeDial } from './relay-dial.js';
@@ -12,6 +13,7 @@ import { VcsService } from './vcs.js';
 import { AgentServer } from './server.js';
 import { PushService } from './push.js';
 import { Caffeinate } from './caffeinate.js';
+import { LidAwake, sudoersInstallCommand } from './lid-awake.js';
 import { wireTerminalWs } from './bridge.js';
 import { RelayLink } from './relay-link.js';
 import { runShare } from './share.js';
@@ -24,7 +26,7 @@ import { localUrls } from './local-urls.js';
 
 function usage(cmd: string | undefined): string {
   const header = cmd ? `Unknown command: ${cmd}` : 'No command specified';
-  return `${header}\nAvailable: setup, start, share, pair, connect, devices, revoke, service, doctor, local-cert`;
+  return `${header}\nAvailable: setup, start, share, pair, connect, devices, revoke, service, doctor, local-cert, lid-awake`;
 }
 
 /** Запуск агента: конфиг → SessionService → HTTP/WS-сервер (+ relay-мост). Не завершается. */
@@ -37,7 +39,11 @@ async function runStart(): Promise<number> {
   const vcs = new VcsService({ roots: config.sessionRoots });
   const push = new PushService(config);
 
-  const caffeinate = new Caffeinate();
+  // Режим «не спать при закрытой крышке» (macOS): настройка, оставшаяся включённой после
+  // падения прошлого запуска, возвращается сразу.
+  const lidAwake = new LidAwake();
+  void lidAwake.recover();
+  const caffeinate = new Caffeinate({ lid: lidAwake });
 
   // Relay-мост поднимается только если задан relayUrl (иначе агент — чисто LAN).
   let relayLink: RelayLink | undefined;
@@ -88,6 +94,7 @@ async function runStart(): Promise<number> {
   const shutdown = (): void => {
     sessions.stopPolling();
     caffeinate.set(false); // отпускаем удержание сна при остановке агента
+    lidAwake.release(); // и возвращаем сон по закрытой крышке
     void Promise.resolve(link?.stop()).finally(() => server.close().finally(() => process.exit(0)));
   };
   process.on('SIGINT', shutdown);
@@ -97,6 +104,30 @@ async function runStart(): Promise<number> {
 }
 
 /** Точка входа CLI. Возвращает код выхода процесса. */
+/** `termhub lid-awake`: проверяет разрешение на режим «не спать при закрытой крышке» и,
+ *  если его нет, печатает команду, которой владелец выдаёт его один раз. Сам агент
+ *  sudoers не трогает: права root выдаёт человек, видя, на что именно. */
+async function runLidAwake(): Promise<number> {
+  const lid = new LidAwake();
+  if (!lid.supported) {
+    console.log('Lid-close sleep prevention is available on macOS hosts only.');
+    return 0;
+  }
+  await lid.refreshReady(true);
+  if (lid.state().lidReady) {
+    console.log('Ready: the agent may switch lid-close sleep off and on.');
+    console.log('In the app, hold the "Keep awake" button to turn it on; opening the lid turns it off.');
+    return 0;
+  }
+  console.log('The agent needs permission to run two exact commands as root, without a password:');
+  console.log('  /usr/bin/pmset -a disablesleep 0');
+  console.log('  /usr/bin/pmset -a disablesleep 1');
+  console.log('\nGrant it once by running:\n');
+  console.log(`  ${sudoersInstallCommand(os.userInfo().username)}`);
+  console.log('\nTo revoke: sudo rm /etc/sudoers.d/termhub-lidawake');
+  return 0;
+}
+
 export async function main(argv: string[]): Promise<number> {
   const cmd = argv[0];
   if (cmd === 'setup') {
@@ -122,6 +153,7 @@ export async function main(argv: string[]): Promise<number> {
   if (cmd === 'service') return serviceCommand(argv.slice(1));
   if (cmd === 'doctor') return runDoctor();
   if (cmd === 'local-cert') return runLocalCert();
+  if (cmd === 'lid-awake') return runLidAwake();
   console.error(usage(cmd));
   return 1;
 }

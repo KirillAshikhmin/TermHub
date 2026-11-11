@@ -276,7 +276,9 @@ npx tsc -p packages/web/tsconfig.json --noEmit   # web не типизирует
   страницу «Диагностика» (зарегистрирован ли агент). Частая причина — Mac заснул или
   агент не запущен.
 - **Mac засыпает** — отключите сон в System Settings, либо `caffeinate -di`, либо тумблер
-  «Не давать Mac засыпать» в меню веба.
+  «Не давать Mac засыпать» в меню веба. Закрытая крышка усыпляет ноутбук всё равно —
+  удержание этой кнопки включает режим «не спать и с закрытой крышкой»
+  ([docs/lid-awake.ru.md](docs/lid-awake.ru.md)).
 - **Запасной канал** — включите Remote Login (SSH) и делайте `tmux -L termhub attach -t <имя>`,
   где `<имя>` — имя сессии, то есть имя папки, например `MyProject` (см. `tmux -L termhub ls`).
 
@@ -289,6 +291,7 @@ npx tsc -p packages/web/tsconfig.json --noEmit   # web не типизирует
   устроен фильтр и как настроить обходы
 - [docs/security.ru.md](docs/security.ru.md) — модель угроз и криптография
 - [docs/notifications.ru.md](docs/notifications.ru.md) — звук, push, HTTPS
+- [docs/lid-awake.ru.md](docs/lid-awake.ru.md) — Mac не спит при закрытой крышке
 - [docs/manual-test-checklist.ru.md](docs/manual-test-checklist.ru.md) — чек-лист ручной проверки
 - [docs/terminal-and-agents.ru.md](docs/terminal-and-agents.ru.md) — свой терминал и работа
   с агентами: разбор, вердикты, дорожная карта

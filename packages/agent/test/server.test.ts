@@ -57,7 +57,13 @@ async function start(opts: {
   sessions?: SessionService;
   onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
   push?: { subscribe(sub: unknown): Promise<void>; vapidPublicKey(): string };
-  caffeinate?: { readonly supported: boolean; isActive(): boolean; set(on: boolean): void };
+  caffeinate?: {
+    readonly supported: boolean;
+    isActive(): boolean;
+    set(on: boolean): void;
+    state?(): { active: boolean; supported: boolean; lid?: boolean; lidSupported?: boolean; lidReady?: boolean };
+    apply?(req: { active?: unknown; lid?: unknown }): Promise<void>;
+  };
   files?: FileService;
   socketName?: string;
   staticDir?: string;
@@ -460,6 +466,32 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ active: true, supported: true });
     expect(on).toBe(true);
+  });
+
+  it('POST /api/caffeinate {lid} включает режим закрытой крышки; тело — полное состояние контроллера', async () => {
+    const asked: unknown[] = [];
+    let lid = false;
+    const caffeinate = {
+      supported: true,
+      isActive: () => false,
+      set: () => {},
+      state: () => ({ active: false, supported: true, lidSupported: true, lidReady: true, lid }),
+      apply: async (req: { active?: unknown; lid?: unknown }) => {
+        asked.push(req);
+        if (typeof req.lid === 'boolean') lid = req.lid;
+      },
+    };
+    s = await start({ caffeinate });
+    const res = await fetch(`${s.base}/api/caffeinate`, {
+      method: 'POST',
+      headers: { cookie: authCookie(), origin: s.base, 'content-type': 'application/json' },
+      body: JSON.stringify({ lid: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('{"active":false,"supported":true,"lidSupported":true,"lidReady":true,"lid":true}');
+    expect(asked).toEqual([{ lid: true }]);
+    const get = await fetch(`${s.base}/api/caffeinate`, { headers: { cookie: authCookie() } });
+    expect(await get.text()).toBe('{"active":false,"supported":true,"lidSupported":true,"lidReady":true,"lid":true}');
   });
 
   it('POST /api/caffeinate без boolean active → 422; без auth → 401', async () => {

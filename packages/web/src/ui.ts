@@ -3,7 +3,7 @@
 
 import type { GradleProject } from '@termhub/protocol/frames';
 
-import { ApiError } from './api';
+import { ApiError, type CaffeinateState } from './api';
 import { t } from './i18n';
 import { notificationsSupported, permissionState, requestNotificationPermission } from './notify';
 import { enablePush } from './push';
@@ -743,42 +743,121 @@ function addNotificationsItem(addItem: AddItem, transport: Transport): void {
   if (permissionState() === 'granted') void enablePush(transport);
 }
 
+/** Сколько держать кнопку «не давать засыпать», чтобы включить режим закрытой крышки. */
+export const LID_HOLD_MS = 600;
+
 /** Пункт «не давать Mac засыпать» (caffeinate). Появляется, только когда агент
  *  подтвердил поддержку платформой (probe, в relay первый опрос может прийтись на
  *  ещё не поднятый поток — ретраим). Тумблер: галочка справа отражает состояние.
  *  Возвращает stop — снятие опроса при teardown меню. */
 function addCaffeineItem(addItem: AddItem, transport: Transport): () => void {
-  let active = false;
+  let state: CaffeinateState = { active: false, supported: false };
   let stopped = false;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let lidPoll: ReturnType<typeof setInterval> | undefined;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Удержание сработало: следующий клик — его хвост, а не нажатие. */
+  let held = false;
 
   const item = addItem('coffee', t('header.keepAwake'), () => void toggle(), { keepOpen: true });
   item.hidden = true; // до подтверждения поддержки платформой
   item.disabled = true;
 
   const sync = (): void => {
-    item.classList.toggle('is-on', active);
-    item.replaceChildren(svgIcon('coffee'), menuLabel(active ? t('header.keepAwakeOn') : t('header.keepAwake')));
-    if (active) item.append(svgIcon('check'));
-    item.setAttribute('aria-pressed', String(active));
+    const lid = state.lid === true;
+    item.classList.toggle('is-on', state.active && !lid);
+    item.classList.toggle('is-lid', lid);
+    const label = lid ? t('header.lidAwakeOn') : state.active ? t('header.keepAwakeOn') : t('header.keepAwake');
+    item.replaceChildren(svgIcon('coffee'), menuLabel(label));
+    if (state.active || lid) item.append(svgIcon('check'));
+    item.setAttribute('aria-pressed', String(state.active || lid));
+    // Подсказка про удержание — только там, где хост его умеет (macOS).
+    item.title = state.lidSupported ? `${label} · ${t('header.lidAwakeHint')}` : label;
+    // Пока режим крышки включён, следим за ним: хост снимает его сам, когда крышку открыли.
+    if (lid && !lidPoll) lidPoll = setInterval(watchLid, 5000);
+    if (!lid && lidPoll) {
+      clearInterval(lidPoll);
+      lidPoll = undefined;
+    }
   };
+  const failed = (err: unknown): void => {
+    if (!(err instanceof ApiError && err.status === 401)) toast(t('header.keepAwakeError'), 'error');
+  };
+  /** Нажатие: обычное удержание сна. */
   const toggle = async (): Promise<void> => {
     item.disabled = true;
     try {
-      active = (await transport.setCaffeinate(!active)).active;
+      state = await transport.setCaffeinate(!state.active);
       sync();
+      toast(state.active ? t('header.keepAwakeOnToast') : t('header.keepAwakeOffToast'));
     } catch (err) {
-      if (!(err instanceof ApiError && err.status === 401)) toast(t('header.keepAwakeError'), 'error');
+      failed(err);
     } finally {
       item.disabled = false;
     }
   };
+  /** Удержание: не спать и с закрытой крышкой. Хост без разрешения отвечает прежним
+   *  состоянием — тогда говорим, что нужна настройка на Mac. */
+  const toggleLid = async (): Promise<void> => {
+    const want = state.lid !== true;
+    item.disabled = true;
+    try {
+      state = await transport.setLidAwake(want);
+      sync();
+      if (state.lid === want) toast(want ? t('header.lidAwakeOnToast') : t('header.lidAwakeOffToast'));
+      else toast(t('header.lidAwakeSetup'), 'error');
+    } catch (err) {
+      failed(err);
+    } finally {
+      item.disabled = false;
+    }
+  };
+  const watchLid = (): void => {
+    transport.caffeinate().then(
+      (next) => {
+        if (stopped) return;
+        const was = state.lid === true;
+        state = next;
+        sync();
+        if (was && next.lid !== true) toast(t('header.lidAwakeAuto'));
+      },
+      () => {
+        // Обрыв связи: спросим на следующем заходе.
+      },
+    );
+  };
+  const cancelHold = (): void => {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = undefined;
+  };
+  item.addEventListener('pointerdown', () => {
+    held = false;
+    cancelHold();
+    if (!state.lidSupported || item.disabled) return;
+    holdTimer = setTimeout(() => {
+      holdTimer = undefined;
+      held = true;
+      void toggleLid();
+    }, LID_HOLD_MS);
+  });
+  for (const type of ['pointerup', 'pointerleave', 'pointercancel']) item.addEventListener(type, cancelHold);
+  // Долгое нажатие на телефоне зовёт контекстное меню — оно здесь не нужно.
+  item.addEventListener('contextmenu', (e) => e.preventDefault());
+  item.addEventListener(
+    'click',
+    (e) => {
+      if (!held) return;
+      held = false;
+      e.stopImmediatePropagation();
+    },
+    true,
+  );
   const probe = (): void => {
     transport
       .caffeinate()
-      .then((state) => {
-        if (stopped || !state.supported) return;
-        active = state.active;
+      .then((next) => {
+        if (stopped || !next.supported) return;
+        state = next;
         item.hidden = false;
         item.disabled = false;
         sync();
@@ -790,7 +869,9 @@ function addCaffeineItem(addItem: AddItem, transport: Transport): () => void {
   probe();
   return () => {
     stopped = true;
+    cancelHold();
     if (retry) clearTimeout(retry);
+    if (lidPoll) clearInterval(lidPoll);
   };
 }
 
