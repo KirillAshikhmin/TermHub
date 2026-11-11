@@ -115,6 +115,8 @@ function sources(over: Partial<TranscriptSources> = {}): Partial<TranscriptSourc
     panePids: async () => new Map([[PANE, 900]]),
     openFiles: async () => [],
     opencodeSessions: async () => [],
+    paneTitle: async () => undefined,
+    codexThreads: async () => [],
     ...over,
   };
 }
@@ -971,5 +973,79 @@ describe('источники Linux: /proc', () => {
       readHead: async () => ROOT_META,
     }));
     expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE] });
+  });
+});
+
+describe('Codex: привязка панели к потоку по названию', () => {
+  const OTHER_FILE = `${CODEX_DIR}/2026/09/06/rollout-2026-09-06T10-00-00-01a07400-0000-7000-8000-000000000001.jsonl`;
+  const started = localStart();
+  /** Общий демон Codex и два тонких клиента в одном каталоге: ни открытые файлы, ни каталог
+   *  панели друг от друга не отличают — это живая картина с тремя сессиями в одном проекте. */
+  const shared = (over: Partial<TranscriptSources> = {}): Partial<TranscriptSources> =>
+    sources({
+      processTable: async () => [
+        row(900, started, 1, '-zsh'),
+        row(901, started, 900, 'codex'),
+        row(910, started, 1, '-zsh'),
+        row(911, started, 910, 'codex'),
+        row(950, started, 901, '/opt/codex/bin/codex app-server --listen unix://'),
+      ],
+      processCwd: async () => '/work/app',
+      // Все беседы держит открытыми демон — потомок первой панели.
+      openFiles: async (pids) => (pids.includes(950) ? [ROOT_FILE, OTHER_FILE] : []),
+      readHead: async () => ROOT_META,
+      codexThreads: async () => [
+        { id: 't1', rolloutPath: ROOT_FILE, name: 'Router' },
+        { id: 't2', rolloutPath: OTHER_FILE, name: 'MQTT' },
+      ],
+      ...over,
+    });
+
+  it('заголовок панели называет поток: панель получает именно свою беседу', async () => {
+    const res = await resolve(PANE, shared({ paneTitle: async () => '⠧ Router' }));
+    expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE], live: true });
+    clearCache();
+    // Та же панель с другим заголовком — другая беседа: раньше обе получали один файл.
+    const other = await resolve(PANE, shared({ paneTitle: async () => 'MQTT' }));
+    expect(other).toMatchObject({ ok: true, files: [OTHER_FILE] });
+  });
+
+  it('название не нашлось или не единственное — определитель идёт прежним путём', async () => {
+    const before = await resolve(PANE, shared());
+    clearCache();
+    expect(await resolve(PANE, shared({ paneTitle: async () => 'Совсем другое' }))).toEqual(before);
+    clearCache();
+    const twins = shared({
+      paneTitle: async () => 'Router',
+      codexThreads: async () => [
+        { id: 't1', rolloutPath: ROOT_FILE, name: 'Router' },
+        { id: 't2', rolloutPath: OTHER_FILE, name: 'Router' },
+      ],
+    });
+    expect(await resolve(PANE, twins)).toEqual(before);
+  });
+
+  it('базе на слово не верим: файл вне каталога сессий Codex не берётся', async () => {
+    const before = await resolve(PANE, shared());
+    clearCache();
+    const evil = shared({
+      paneTitle: async () => 'Router',
+      codexThreads: async () => [{ id: 't1', rolloutPath: '/etc/passwd', name: 'Router' }],
+    });
+    expect(await resolve(PANE, evil)).toEqual(before);
+  });
+
+  it('незнакомая схема базы или её сбой привязку не ломают', async () => {
+    const before = await resolve(PANE, shared());
+    clearCache();
+    expect(await resolve(PANE, shared({ paneTitle: async () => 'Router', codexThreads: async () => null }))).toEqual(before);
+    clearCache();
+    const broken = shared({
+      paneTitle: async () => 'Router',
+      codexThreads: async () => {
+        throw new Error('database is locked');
+      },
+    });
+    expect(await resolve(PANE, broken)).toEqual(before);
   });
 });

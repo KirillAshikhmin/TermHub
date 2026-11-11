@@ -36,6 +36,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { sessionTitleText } from '@termhub/protocol';
+
+import { readCodexThreads, type CodexThreadRow } from './codex-state.js';
 import { isSchemaError, opencodeDbExists, opencodeDbPath, openOpencodeDb } from './opencode-db.js';
 import { isExistingSessionName } from './sessions.js';
 import { runTmux, isNoServerError } from './tmux-run.js';
@@ -125,6 +128,11 @@ export interface TranscriptSources {
   /** Корневые неархивные беседы opencode с этим рабочим каталогом. Базы нет — пустой
    *  список, схема незнакома — null. */
   opencodeSessions(db: string, directory: string): Promise<OpencodeSession[] | null>;
+  /** Заголовок панели (`pane_title`): клиент Codex пишет в него название своего потока. */
+  paneTitle(pane: string): Promise<string | undefined>;
+  /** Корневые неархивные потоки Codex с этим рабочим каталогом (codex-state). Базы нет —
+   *  пустой список, схема незнакома — null. */
+  codexThreads(cwd: string): Promise<CodexThreadRow[] | null>;
 }
 
 /** Беседа opencode глазами определителя: когда её трогали последней и отпочкована ли она. */
@@ -258,6 +266,8 @@ function withDefaults(over?: Partial<TranscriptSources>): TranscriptSources {
     openFiles: over?.openFiles ?? (ON_LINUX ? procOpenFiles : defaultOpenFiles),
     processCwd: over?.processCwd ?? (ON_LINUX ? procCwd : defaultProcessCwd),
     opencodeSessions: over?.opencodeSessions ?? defaultOpencodeSessions,
+    paneTitle: over?.paneTitle ?? ((pane) => defaultPaneTitle(pane, socketName)),
+    codexThreads: over?.codexThreads ?? ((cwd) => readCodexThreads(home, cwd)),
   };
 }
 
@@ -855,6 +865,54 @@ async function daemonCodexThread(pid: number, processes: Map<number, ProcessRow>
 }
 
 /** Способ второй: открытые файлы процесса панели. undefined — Codex в панели нет. */
+/** TUI-клиент Codex в строке процесса (не демон `app-server`). */
+function isCodexTui(args: string): boolean {
+  return /^(?:\S*\/)?codex(?:$|\s+(?:-|resume\b|fork\b))/.test(args) && !/\bapp-server\b/.test(args);
+}
+
+/** Заголовок панели по её адресу; панели нет или tmux не ответил — undefined. */
+async function defaultPaneTitle(pane: string, socketName?: string): Promise<string | undefined> {
+  const id = /\.(%\d+)$/.exec(pane)?.[1];
+  if (!id) return undefined;
+  try {
+    const out = await runTmux(['display-message', '-p', '-t', id, '#{pane_title}'], { socketName, timeoutMs: EXEC_TIMEOUT_MS });
+    return out.replace(/\n$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Привязка клиента Codex к потоку по названию: заголовок панели (без индикатора состояния)
+ *  равен названию ровно одного корневого потока её рабочего каталога в базе состояния Codex.
+ *  Любая неоднозначность или сбой — undefined, и определитель идёт прежним путём: этот
+ *  способ уточняет ответ, а не заменяет остальные. */
+async function codexByTitle(
+  pane: string,
+  pid: number,
+  processes: Map<number, ProcessRow>,
+  src: TranscriptSources,
+): Promise<TranscriptResult | undefined> {
+  try {
+    const clients = descendants(pid, processes).filter((id) => isCodexTui(processes.get(id)?.args ?? ''));
+    if (clients.length !== 1) return undefined;
+    const title = sessionTitleText((await src.paneTitle(pane)) ?? '');
+    if (!title) return undefined;
+    const cwd = await src.processCwd(clients[0]);
+    if (!cwd) return undefined;
+    const threads = await src.codexThreads(cwd);
+    const matches = (threads ?? []).filter((t) => t.name === title);
+    if (matches.length !== 1) return undefined;
+    const file = matches[0].rolloutPath;
+    // Файл обязан быть настоящим корневым rollout: база чужая, и на слово ей не верим.
+    if (!withinDir(file, path.join(src.home, CODEX_SESSIONS_DIR)) || !file.endsWith('.jsonl')) return undefined;
+    const meta = codexMeta(await src.readHead(file, HEAD_BYTES));
+    if (!meta?.root) return undefined;
+    return found('codex', file, !meta.forkedFrom, true);
+  } catch {
+    return undefined;
+  }
+}
+
 async function codexThread(
   pid: number,
   processes: Map<number, ProcessRow>,
@@ -954,7 +1012,9 @@ async function tryCodex(pane: string, snap: Snapshot, src: TranscriptSources): P
   const key = `${pid}:${row ? row.startedAt.getTime() : 0}`;
   const hit = codexCache.get(pane);
   if (hit && hit.key === key && hit.until > Date.now()) return hit.value;
-  const value = await codexThread(pid, processes, src);
+  // Название потока в заголовке панели — самая точная привязка: при общем демоне Codex ни
+  // открытые файлы, ни рабочий каталог панели друг от друга не отличают.
+  const value = (await codexByTitle(pane, pid, processes, src)) ?? (await codexThread(pid, processes, src));
   codexCache.set(pane, { key, until: Date.now() + CODEX_CACHE_TTL_MS, value });
   return value;
 }
