@@ -8,6 +8,7 @@ import { api } from './api';
 import type { DiagInfo } from './api';
 import { t } from './i18n';
 import { lastTerminalMode, terminalModeName, terminalModeRequest } from './term-mode';
+import { relayTransportInUse } from './relay-transport-state';
 import { iconButton, openModal, renderHeader, spinner } from './ui';
 import type { Transport } from './transport';
 
@@ -60,6 +61,25 @@ export function mountDiag(root: HTMLElement, transport?: Transport): () => void 
   };
 }
 
+function diagRow(key: string, value: string): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'th-diag__row';
+  const kk = document.createElement('span');
+  kk.className = 'th-diag__k';
+  kk.textContent = key;
+  const vv = document.createElement('span');
+  vv.className = 'th-diag__v';
+  vv.textContent = value;
+  row.append(kk, vv);
+  return row;
+}
+
+function browserTransportName(via: 'ws' | 'poll' | 'rtc'): string {
+  if (via === 'rtc') return t('diag.transportRtc');
+  if (via === 'poll') return t('diag.transportPoll');
+  return t('diag.transportWs');
+}
+
 /** Наполняет main сведениями агента и обновляет их опросом; возвращает остановку. */
 function fillDiag(main: HTMLElement): () => void {
   main.append(spinner());
@@ -96,21 +116,11 @@ function fillDiag(main: HTMLElement): () => void {
         [t('diag.agentId'), d.relay.agentId || '—'],
         [t('diag.clients'), String(d.relay.clients)],
       );
+      if (d.relay.dial) rows.push([t('diag.relayDial'), d.relay.dial]);
     }
     rows.push([t('diag.roots'), d.roots.join('\n')]);
 
-    for (const [k, v] of rows) {
-      const row = document.createElement('div');
-      row.className = 'th-diag__row';
-      const kk = document.createElement('span');
-      kk.className = 'th-diag__k';
-      kk.textContent = k;
-      const vv = document.createElement('span');
-      vv.className = 'th-diag__v';
-      vv.textContent = v;
-      row.append(kk, vv);
-      card.append(row);
-    }
+    for (const [k, v] of rows) card.append(diagRow(k, v));
     main.append(card);
   };
 
@@ -122,6 +132,15 @@ function fillDiag(main: HTMLElement): () => void {
       () => {
         if (stopped) return;
         main.replaceChildren();
+        // Через relay сведений агента нет, но способ, которым сама эта вкладка дошла
+        // до relay, известен здесь — его и показываем.
+        const via = relayTransportInUse();
+        if (via) {
+          const card = document.createElement('div');
+          card.className = 'th-diag__card';
+          card.append(diagRow(t('diag.browserTransport'), browserTransportName(via)));
+          main.append(card);
+        }
         const p = document.createElement('p');
         p.className = 'th-diag__note';
         p.textContent = t('diag.unavailable');

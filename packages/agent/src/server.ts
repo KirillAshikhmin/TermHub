@@ -14,6 +14,7 @@ import type { WebSocket } from 'ws';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { TermhubConfig } from './config.js';
+import { describeDial, readRelayDial } from './relay-dial.js';
 import { verifyPassword, loadAuthorized, saveAuthorized, parseScope, VERSION } from './config.js';
 import type { DeviceScope } from './config.js';
 import type { SessionService, SessionPreset } from './sessions.js';
@@ -553,6 +554,8 @@ export class AgentServer {
             connected: rs?.connected ?? false,
             agentId: rs?.agentId ?? '',
             clients: rs?.clients ?? 0,
+            // Способ, которым агент ходит на relay (маскировка, свой адрес, короткие запросы).
+            dial: describeDial(readRelayDial(this.config, process.env, () => undefined)),
           }
         : { configured: false },
     });

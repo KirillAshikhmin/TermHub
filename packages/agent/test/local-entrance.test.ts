@@ -146,6 +146,37 @@ describe('сертификат для localhost', () => {
   });
 });
 
+describe('/api/diag называет способ связи агента с relay', () => {
+  async function dialOf(over: Partial<TermhubConfig>): Promise<unknown> {
+    server = new AgentServer({ config: config({ relayUrl: 'wss://relay.example.com/relay', ...over }), sessions });
+    const port = await server.listen();
+    const login = await fetch(`http://127.0.0.1:${port}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'secret' }),
+    });
+    const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0];
+    const diag = (await (await fetch(`http://127.0.0.1:${port}/api/diag`, { headers: { Cookie: cookie } })).json()) as {
+      relay: { dial?: string };
+    };
+    return diag.relay.dial;
+  }
+
+  it('без настроек — обычный websocket', async () => {
+    expect(await dialOf({})).toBe('websocket');
+  });
+
+  it('туннель и маскировка видны словами', async () => {
+    expect(await dialOf({ relayConnect: '127.0.0.1:19443' })).toBe('websocket, via 127.0.0.1:19443');
+    await server?.close();
+    expect(await dialOf({ relayConnect: 'relay.example.com:9444', relayDisguise: 'ssh' })).toBe(
+      'websocket, disguised as ssh, via relay.example.com:9444',
+    );
+    await server?.close();
+    expect(await dialOf({ relayTransport: 'poll' })).toBe('short requests');
+  });
+});
+
 describe('обычный HTTP на loopback', () => {
   it('второй вход отвечает тем же приложением; кука без Secure на HTTP и с Secure на HTTPS', async () => {
     server = new AgentServer({ config: config({ tls: main, localHttpPort: 0 }), sessions });

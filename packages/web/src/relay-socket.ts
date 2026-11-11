@@ -9,6 +9,7 @@
 
 import { PollSocket } from '@termhub/protocol/pollsock';
 import { RtcSocket } from '@termhub/protocol/rtcsock';
+import { setRelayTransportInUse } from './relay-transport-state';
 
 export type RelayTransportMode = 'ws' | 'poll' | 'rtc';
 
@@ -72,6 +73,7 @@ export function noteRtcOutcome(ok: boolean, now = Date.now()): void {
  *  которой пользуются транспорт и пейринг, включая числа readyState. */
 export function openRelaySocket(url: string): WebSocket {
   const mode = effectiveRelayTransport();
+  setRelayTransportInUse(mode);
   if (mode === 'poll') return new PollSocket(url) as unknown as WebSocket;
   if (mode === 'rtc') {
     return new RtcSocket(url, {

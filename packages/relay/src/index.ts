@@ -80,6 +80,8 @@ export interface RelayHandle {
 /** Состояние одного WS-соединения relay (эволюционирует по мере хендшейка). */
 interface ConnState {
   ip: string;
+  /** Способ доставки: обычный WebSocket, короткие запросы или WebRTC. Только для лога. */
+  via: 'ws' | 'poll' | 'rtc';
   /** Ответил ли на последний ping (heartbeat): иначе соединение считаем мёртвым. */
   alive?: boolean;
   // register-хендшейк
@@ -125,7 +127,7 @@ class RelayServer {
     this.poll = new PollHub(WS_PATH, MAX_MESSAGE, (conn, req) => {
       const ip = this.clientIp(req);
       if (!this.rateAllow(ip)) return false;
-      this.onConnection(conn as unknown as WebSocket, ip);
+      this.onConnection(conn as unknown as WebSocket, ip, 'poll');
       return true;
     });
     const rtc = opts.rtc ?? rtcFromEnv();
@@ -135,7 +137,7 @@ class RelayServer {
         MAX_MESSAGE,
         rtc,
         (conn, req) => {
-          this.onConnection(conn as unknown as WebSocket, this.clientIp(req));
+          this.onConnection(conn as unknown as WebSocket, this.clientIp(req), 'rtc');
           return true;
         },
         (req) => this.rateAllow(this.clientIp(req)),
@@ -260,7 +262,7 @@ class RelayServer {
       socket.destroy();
       return;
     }
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, ip));
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, ip, 'ws'));
   }
 
   /** IP клиента для rate-limit. За доверенным прокси (trustProxy) — ПОСЛЕДНИЙ IP из
@@ -301,8 +303,8 @@ class RelayServer {
 
   // ── WS соединение ───────────────────────────────────────────────────────────
 
-  private onConnection(ws: WebSocket, ip: string): void {
-    const state: ConnState = { ip, alive: true };
+  private onConnection(ws: WebSocket, ip: string, via: ConnState['via']): void {
+    const state: ConnState = { ip, via, alive: true };
     this.states.set(ws, state);
     ws.on('pong', () => {
       state.alive = true;
@@ -403,7 +405,7 @@ class RelayServer {
     state.regEdPub = undefined;
     state.regNonce = undefined;
     send(ws, { t: 'registered', agentId });
-    this.log(`agent registered ${agentId} (agents=${this.rooms.agentCount()})`);
+    this.log(`agent registered ${agentId} via ${state.via} (agents=${this.rooms.agentCount()})`);
   }
 
   private onConnect(ws: WebSocket, state: ConnState, msg: Record<string, unknown>): void {
@@ -435,7 +437,7 @@ class RelayServer {
     state.clientConnId = connId;
     send(agent.ws, { t: 'client-open', connId });
     send(ws, { t: 'connected' });
-    this.log(`client connected → ${msg.agentId} conn=${connId} (clients=${agent.clients.size})`);
+    this.log(`client connected → ${msg.agentId} conn=${connId} via ${state.via} (clients=${agent.clients.size})`);
   }
 
   private onClientCloseFromAgent(state: ConnState, msg: Record<string, unknown>): void {
@@ -561,6 +563,7 @@ class RelayServer {
       if (agent && agent.clients.get(state.clientConnId) === ws) {
         this.rooms.releaseClient(agent, state.clientConnId);
         send(agent.ws, { t: 'client-close', connId: state.clientConnId });
+        this.log(`client disconnected → ${state.clientAgentId} conn=${state.clientConnId} via ${state.via} (clients=${agent.clients.size})`);
       }
     }
     if (state.pairRoomId) {

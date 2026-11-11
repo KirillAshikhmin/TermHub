@@ -221,7 +221,7 @@ export interface DiagInfo {
   sessions: number;
   relay:
     | { configured: false }
-    | { configured: true; url: string; connected: boolean; agentId: string; clients: number };
+    | { configured: true; url: string; connected: boolean; agentId: string; clients: number; dial?: string };
 }
 
 export const api = {

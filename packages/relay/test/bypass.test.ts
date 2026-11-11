@@ -178,6 +178,31 @@ describe('транспорт короткими запросами', () => {
   });
 });
 
+describe('способ доставки в логе', () => {
+  it('лог называет способ у агента и у клиента — и при подключении, и при уходе', async () => {
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (m: string) => lines.push(m);
+    try {
+      const handle = await startRelay({ port: 0 });
+      closers.push(() => handle.close());
+      const agent = await openWs(`ws://127.0.0.1:${handle.port}/relay`);
+      const agentIn = wsInbox(agent);
+      const agentId = await register((t) => agent.send(t), agentIn);
+      const client = await openPoll(handle.port);
+      client.send(JSON.stringify({ t: 'connect', agentId }));
+      await agentIn.next();
+      client.close();
+      await agentIn.next();
+      expect(lines).toContain(`[relay] agent registered ${agentId} via ws (agents=1)`);
+      expect(lines).toContain(`[relay] client connected → ${agentId} conn=1 via poll (clients=1)`);
+      expect(lines).toContain(`[relay] client disconnected → ${agentId} conn=1 via poll (clients=0)`);
+    } finally {
+      console.log = log;
+    }
+  });
+});
+
 describe('раздача бандла кусками', () => {
   function bundle(): { dir: string; js: Buffer } {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-chunks-'));
