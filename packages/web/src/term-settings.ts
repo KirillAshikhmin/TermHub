@@ -1,5 +1,5 @@
 // Окно «Настройки» — одно на всё приложение: вид (тема, шрифт, интервал, фон), раскладка
-// на десктопе, ввод (что делает Enter) и язык. Меняет всё сразу — открытый терминал
+// на десктопе, ввод (что делает Enter), способ подключения к сессии и язык. Меняет всё сразу — открытый терминал
 // слушает term-prefs и перестраивается под окном.
 import { getLang, setLang, t, type Lang } from './i18n';
 import {
@@ -12,6 +12,8 @@ import {
   type TermBg,
   type TermFont,
 } from './term-prefs';
+import { lastTerminalMode, setTerminalModeRequest, terminalModeName, terminalModeRequest } from './term-mode';
+import type { TerminalMode } from './transport';
 import { THEME_CHOICES, setThemeChoice, themeChoice, type ThemeChoice } from './theme';
 import { iconButton, openModal } from './ui';
 
@@ -193,6 +195,22 @@ export function openTermSettings(): void {
       (value) => setLang(value),
     );
 
+    // Подключение: control mode или attach. Это просьба: она уедет в следующее открытие
+    // терминала, а решает агент — поэтому рядом названо, чем он подключил в последний раз.
+    const mode = segment<TerminalMode>(
+      t('termview.mode'),
+      [
+        { value: 'control', label: terminalModeName('control') },
+        { value: 'attach', label: terminalModeName('attach') },
+      ],
+      terminalModeRequest(),
+      (value) => setTerminalModeRequest(value),
+    );
+    const modeHint = document.createElement('p');
+    modeHint.className = 'th-settings__hint';
+    const last = lastTerminalMode();
+    modeHint.textContent = `${last ? t('termview.modeNow', { mode: terminalModeName(last) }) : t('term.modeUnknown')}. ${t('termview.modeHint')}`;
+
     const section = (name: string, ...rows: HTMLElement[]): HTMLElement => {
       const wrap = document.createElement('section');
       wrap.className = 'th-settings__section';
@@ -215,6 +233,7 @@ export function openTermSettings(): void {
       ),
       section(t('termview.secLayout'), side, holo),
       section(t('termview.secInput'), enter, enterHint),
+      section(t('termview.secConn'), mode, modeHint),
       section(t('termview.secLang'), lang),
     );
     return box;

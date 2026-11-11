@@ -87,7 +87,8 @@ describe('term prefs', () => {
     const off = onTermPrefsChange((p) => seen.push(p.enterSends));
     expect(readTermPrefs().enterSends).toBe(true);
     openTermSettings();
-    expect(document.querySelectorAll('.th-settings__section').length).toBe(4);
+    // Вид, раскладка, ввод, подключение, язык.
+    expect(document.querySelectorAll('.th-settings__section').length).toBe(5);
     const enter = document.querySelectorAll('.th-termview .th-segment')[5]!;
     enter.querySelectorAll<HTMLButtonElement>('.th-segment__btn')[1]!.click();
     expect(readTermPrefs().enterSends).toBe(false);

@@ -23,10 +23,6 @@ import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
 import {
   noteTerminalMode,
-  otherTerminalMode,
-  setTerminalModeRequest,
-  terminalModeLetter,
-  terminalModeName,
   terminalModeRequest,
 } from './term-mode';
 import { markBellSeen, recordBell, unseenBellCount } from './bell-seen';
@@ -196,60 +192,20 @@ export function mountTerminal(
     else await tabs?.refresh();
   }
   // ── Способ подключения и пометка альтернативного экрана ──────────────
-  // Режим выбирает агент (его настройка старше просьбы клиента), поэтому чип
-  // показывает то, что пришло кадром состояния, а переключатель меняет просьбу
-  // для СЛЕДУЮЩЕГО открытия терминала — живой терминал остаётся в своём режиме.
-  // Просьба, с которой открыт ЭТОТ терминал (уезжает в кадр открытия ниже), и просьба,
-  // выбранная переключателем сейчас: расходятся ровно тогда, когда переключили уже после
-  // открытия — тогда просьба ждёт следующего.
+  // Просьба о способе (control mode или attach) снимается один раз на открытие и уезжает
+  // в кадр открытия ниже. Выбирают её в окне настроек — там же названо, каким способом
+  // агент подключил на самом деле (его настройка старше просьбы, возможен откат на attach).
   const openedMode: TerminalMode = terminalModeRequest();
-  let requestedMode: TerminalMode = openedMode;
-  let activeMode: TerminalMode | undefined;
-
-  const modeBtn = document.createElement('button');
-  modeBtn.type = 'button';
-  modeBtn.className = 'th-termbar__mode';
-  const syncMode = (): void => {
-    // Видно букву, слово целиком — в подсказке: шапка узкая, а режимов всего два.
-    modeBtn.textContent = activeMode ? terminalModeLetter(activeMode) : '—';
-    // Просьбу переключили после открытия — она уедет только в следующий терминал.
-    // Совпала с работающим режимом (агент уже подключил так) — обещать нечего.
-    const awaitsOpen = requestedMode !== openedMode && requestedMode !== activeMode;
-    // Агент ответил не тем, что просили: его настройка старше просьбы, плюс возможен
-    // откат на attach. Просьба уже уехала, ждать её нечего — но расхождение видно.
-    const overridden = activeMode !== undefined && activeMode !== openedMode;
-    modeBtn.classList.toggle('is-pending', awaitsOpen);
-    modeBtn.classList.toggle('is-overridden', overridden);
-    const parts = [
-      activeMode ? t('term.modeActive', { mode: terminalModeName(activeMode) }) : t('term.modeUnknown'),
-    ];
-    if (overridden) parts.push(t('term.modeOverridden', { mode: terminalModeName(openedMode) }));
-    if (awaitsOpen) parts.push(t('term.modeNext', { mode: terminalModeName(requestedMode) }));
-    parts.push(t('term.modeSwitch'));
-    const label = parts.join(' · ');
-    modeBtn.title = label;
-    modeBtn.setAttribute('aria-label', label);
-  };
-  syncMode();
-  // Пометка экрана и показанный режим живут ровно одним подключением: оба знает только
-  // агент и оба приходят кадром состояния. Пережить смену канала им нельзя — иначе
-  // «включён» от терминала, открытого до перезапуска агента, горит над новой сессией,
-  // которой оно не касается. Поэтому каждое подключение начинает с «агент ещё ничего
-  // не называл», а зажечь пометку и назвать режим вправе только пришедший следом кадр.
+  // Пометка экрана и размер панели живут ровно одним подключением: их знает только агент,
+  // и приходят они кадром состояния. Пережить смену канала им нельзя — иначе «включён» от
+  // терминала, открытого до перезапуска агента, горит над новой сессией, которой оно не
+  // касается. Поэтому каждое подключение начинает с «агент ещё ничего не называл».
   let paneSize: { cols: number; rows: number } | undefined;
   const forgetAgentState = (): void => {
     setAltScreen(false);
-    activeMode = undefined;
     paneSize = undefined;
     sentSize = ''; // новому терминалу агента размер ещё не называли
-    syncMode();
   };
-  modeBtn.addEventListener('click', () => {
-    requestedMode = otherTerminalMode(requestedMode);
-    setTerminalModeRequest(requestedMode);
-    syncMode();
-    toast(t('term.modeNext', { mode: terminalModeName(requestedMode) }));
-  });
 
   const dot = document.createElement('span');
   dot.className = 'th-conn-dot';
@@ -268,7 +224,7 @@ export function mountTerminal(
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('mousedown', (e) => e.preventDefault());
   viewBtn.addEventListener('click', () => openTermSettings());
-  bar.append(...(tabs ? [tabs.el] : []), toggleSlot, viewBtn, modeBtn, dot);
+  bar.append(...(tabs ? [tabs.el] : []), toggleSlot, viewBtn, dot);
   if (!embedded) screen.append(bar);
 
   // Баннер переподключения (скрыт, пока соединение живо).
@@ -664,11 +620,8 @@ export function mountTerminal(
     onTerminalState: (state) => {
       if (disposed) return;
       // Поля независимы: пришло одно — второе не трогаем.
-      if (state.mode) {
-        activeMode = state.mode;
-        noteTerminalMode(state.mode);
-        syncMode();
-      }
+      // Работающий способ подключения запоминается для окна настроек и диагностики.
+      if (state.mode) noteTerminalMode(state.mode);
       if (state.altScreen !== undefined) setAltScreen(state.altScreen);
       if (state.cols !== undefined && state.rows !== undefined) {
         paneSize = { cols: state.cols, rows: state.rows };
