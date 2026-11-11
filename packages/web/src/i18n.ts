@@ -169,7 +169,6 @@ const ru: Dict = {
     modeOverridden: 'Просьба о {mode} не принята: режим выбирает агент',
     modeSwitch: 'Переключить способ подключения',
     queue: 'Ждут внимания: {n}. Перейти к следующей (Ctrl+Alt+↓)',
-    foreignSize: 'Размер экрана задаёт другой клиент tmux: {cols}×{rows}',
   },
   usage: {
     title: 'Расход по сессиям',
@@ -244,6 +243,7 @@ const ru: Dict = {
     enterSends: 'Отправлять по Enter',
     search: 'Поиск по терминалу',
     compose: 'Строка ввода',
+    hold: '{key}; удержание — {held}',
   },
   compose: {
     placeholder: 'Ввод…',
@@ -675,7 +675,6 @@ const en: Dict = {
     modeOverridden: 'The {mode} request was not accepted: the agent picks the mode',
     modeSwitch: 'Switch the connection method',
     queue: 'Waiting for attention: {n}. Go to the next one (Ctrl+Alt+↓)',
-    foreignSize: 'Another tmux client sets the screen size: {cols}×{rows}',
   },
   usage: {
     title: 'Usage by session',
@@ -750,6 +749,7 @@ const en: Dict = {
     enterSends: 'Send on Enter',
     search: 'Search terminal',
     compose: 'Compose bar',
+    hold: '{key}; hold for {held}',
   },
   compose: {
     placeholder: 'Type…',

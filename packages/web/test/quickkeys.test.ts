@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { setLang, t } from '../src/i18n';
-import { keyBytes, mountQuickKeys, SEND_KEYS } from '../src/quickkeys';
+import { HOLD_MS, keyBytes, mountQuickKeys, SEND_KEYS } from '../src/quickkeys';
 
 /** Эталон id → байты, которые кнопка обязана отправить в pty. */
 const EXPECTED: Record<string, number[]> = {
@@ -36,10 +36,54 @@ describe('quickkeys — байт-последовательности', () => {
   });
 });
 
+describe('quickkeys — раскладка и удержание', () => {
+  const base = {
+    onKeyboardToggle: () => {},
+    keyboardEnabled: true,
+    onSelectToggle: () => {},
+    onComposeToggle: () => {},
+    composeEnabled: false,
+    onSearch: () => {},
+    selectEnabled: false,
+    onEnterSendsToggle: () => {},
+    enterSendsEnabled: true,
+    t,
+  };
+
+  it('первый ряд — Esc, Tab, ⇧Tab, стрелки и Enter справа; шрифта и отдельной ^C нет', () => {
+    setLang('ru');
+    const panel = mountQuickKeys({ ...base, onKey: () => {} });
+    const row = [...panel.querySelectorAll('.th-qk__row--keys .th-qk__key')].map((b) =>
+      [...b.classList].find((c) => c.startsWith('th-qk__key--'))!.replace('th-qk__key--', ''),
+    );
+    expect(row).toEqual(['esc', 'tab', 'shiftTab', 'shiftLeft', 'left', 'up', 'down', 'right', 'enter']);
+    expect(panel.textContent).not.toContain('A+');
+    expect(panel.querySelectorAll('.th-qk__row--tools .th-qk__key').length).toBe(5);
+    expect(panel.querySelector('.th-qk__key--esc .th-qk__hold')!.textContent).toBe('^C');
+    expect(panel.querySelector('.th-qk__key--tab')!.getAttribute('aria-label')).toBe('Tab');
+  });
+
+  it('тап по Esc шлёт Esc, удержание — Ctrl+C, и клик после удержания Esc не добавляет', () => {
+    vi.useFakeTimers();
+    const sent: number[][] = [];
+    const panel = mountQuickKeys({ ...base, onKey: (b) => sent.push([...b]) });
+    const esc = panel.querySelector<HTMLButtonElement>('.th-qk__key--esc')!;
+    esc.dispatchEvent(new Event('pointerdown'));
+    esc.dispatchEvent(new Event('pointerup'));
+    esc.click();
+    expect(sent).toEqual([[0x1b]]);
+    esc.dispatchEvent(new Event('pointerdown'));
+    vi.advanceTimersByTime(HOLD_MS + 1);
+    esc.dispatchEvent(new Event('pointerup'));
+    esc.click();
+    expect(sent).toEqual([[0x1b], [0x03]]);
+    vi.useRealTimers();
+  });
+});
+
 describe('quickkeys — чекбокс клавиатуры', () => {
   const handlers = (over: Partial<Parameters<typeof mountQuickKeys>[0]> = {}) => ({
     onKey: () => {},
-    onFontStep: () => {},
     onKeyboardToggle: () => {},
     keyboardEnabled: true,
     onSelectToggle: () => {},
@@ -86,7 +130,6 @@ describe('quickkeys — чекбокс клавиатуры', () => {
 describe('quickkeys — выделение и копирование', () => {
   const handlers = (over: Partial<Parameters<typeof mountQuickKeys>[0]> = {}) => ({
     onKey: () => {},
-    onFontStep: () => {},
     onKeyboardToggle: () => {},
     keyboardEnabled: true,
     onSelectToggle: () => {},

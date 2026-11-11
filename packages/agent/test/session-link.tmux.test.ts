@@ -115,4 +115,31 @@ describe.skipIf(!tmuxAvailable).each(['live', 'sprut.app'])('SessionLink — н�
       link.dispose();
     }
   }, 30000);
+
+  it('размер забирает клиент, который попросил последним, и его экран пересобирается', async () => {
+    const paneSize = (): string => tmux(['display-message', '-p', '-t', `=${sessionName}:`, '#{pane_width}x#{pane_height}']).trim();
+    const dataA: string[] = [];
+    const dec = new TextDecoder();
+    const open1 = (cols: number, rows: number, onData: (b: Uint8Array) => void = () => {}) =>
+      open(sessionName, { socketName, cols, rows, onData, onExit: () => {}, log: () => {} });
+    const a = open1(100, 30, (b) => dataA.push(dec.decode(b)));
+    let b: ReturnType<typeof open1> | undefined;
+    try {
+      expect(await a.ready).toBe('control');
+      expect(await waitFor(() => paneSize() === '100x30', 15000), `панель: ${paneSize()}`).toBe(true);
+      // Второй клиент подключился позже — tmux отдаёт размер ему.
+      b = open1(60, 20);
+      expect(await b.ready).toBe('control');
+      expect(await waitFor(() => paneSize() === '60x20', 15000), `панель: ${paneSize()}`).toBe(true);
+      // Человек вернулся к первому: без перехвата его просьбу tmux не слушает вовсе.
+      dataA.length = 0;
+      a.resize(100, 30);
+      expect(await waitFor(() => paneSize() === '100x30', 15000), `панель: ${paneSize()}`).toBe(true);
+      // Его экран после смены размера нарисован заново: стирание и картинка панели.
+      expect(await waitFor(() => dataA.join('').includes('\x1b[H\x1b[2J'), 15000)).toBe(true);
+    } finally {
+      a.dispose();
+      b?.dispose();
+    }
+  }, 90000);
 });

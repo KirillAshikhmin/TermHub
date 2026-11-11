@@ -64,6 +64,9 @@ const READY_TIMEOUT_MS = 2000;
 const READY_MAX_WAIT_MS = 10_000;
 
 /** Глубина снимка по умолчанию: хватает, чтобы сразу было что листать (~18 КБ). */
+/** Предел придержанного вывода на время пересборки экрана. */
+const RESYNC_HOLD_LIMIT = 1 << 20;
+
 const DEFAULT_SNAPSHOT_LINES = 200;
 /** Глубже history-limit проекта просить нечего. */
 const MAX_SNAPSHOT_LINES = 50_000;
@@ -125,6 +128,29 @@ export function parsePaneState(line: string | undefined): Record<StateField, num
     state[field] = Number.isInteger(value) && value >= 0 ? value : undefined;
   });
   return state;
+}
+
+/** Пересборка экрана после смены размера панели: только видимый экран, с чистого листа.
+ *
+ *  Смену размера tmux и терминал клиента переживают каждый по-своему (кто какие строки
+ *  уводит в историю, где остаётся курсор), и приложение, которое после неё дорисовывает
+ *  себя относительно курсора, попадает не в те строки: сверху новая картинка, ниже —
+ *  остатки старой. Поэтому после смены размера экран клиента стирается и рисуется заново
+ *  по панели; история клиента при этом остаётся его собственной. Позиции здесь абсолютные:
+ *  к этому моменту клиент уже принял размер панели (кадр состояния идёт раньше данных). */
+export function renderScreen(lines: string[], state: Record<StateField, number | undefined> | undefined): string {
+  const alt = state?.alternate_on === 1;
+  // Сброс цвета и области прокрутки, в начало экрана, стереть экран — и картинка панели.
+  let out = `${state ? (alt ? '\x1b[?1049h' : '\x1b[?1049l') : ''}\x1b[0m\x1b[r\x1b[H\x1b[2J${lines.join('\r\n')}\x1b[0m`;
+  if (!state) return out;
+  const rows = state.pane_height ?? 0;
+  const top = state.scroll_region_upper;
+  const bottom = state.scroll_region_lower;
+  if (top !== undefined && bottom !== undefined && rows > 0 && (top > 0 || bottom < rows - 1))
+    out += `\x1b[${top + 1};${bottom + 1}r`;
+  out += `\x1b[${(state.cursor_y ?? 0) + 1};${(state.cursor_x ?? 0) + 1}H`;
+  if (state.cursor_flag === 0) out += '\x1b[?25l';
+  return out;
 }
 
 /** Снимок экрана вместе с состоянием панели — байтами, готовыми к записи в терминал.
@@ -239,6 +265,12 @@ class SessionLink implements Link {
   private activePane: string | undefined;
   private paneCols = 0;
   private paneRows = 0;
+  /** Вывод панели, придержанный на время пересборки экрана (см. resync): он идёт клиенту
+   *  после свежей картинки, а не до неё. */
+  private held: Uint8Array[] | undefined;
+  private heldBytes = 0;
+  /** Размер сменился ещё раз, пока шла пересборка: по её концу нужна новая. */
+  private resyncAgain = false;
   private altScreen = false;
   private altKnown = false;
   /** Сколько байт префикса alt-screen уже совпало: последовательность рвётся между кусками. */
@@ -357,7 +389,13 @@ class SessionLink implements Link {
       case 'output':
         if (event.pane !== this.activePane) return;
         this.scanAlt(event.data); // состояние экрана считается и по скрытому выводу
-        if (this.captureDepth === 0) this.opts.onData(event.data);
+        if (this.captureDepth !== 0) return;
+        if (this.held) {
+          this.held.push(event.data);
+          this.heldBytes += event.data.length;
+          // Пересборка затянулась под потоком вывода: держать больше мегабайта нельзя.
+          if (this.heldBytes > RESYNC_HOLD_LIMIT) this.releaseHeld();
+        } else this.opts.onData(event.data);
         return;
       // Блок сопоставляется раньше, чем засчитывается готовность: приветственный
       // блок control mode приходит до наших команд и адресата в очереди не имеет.
@@ -469,12 +507,55 @@ class SessionLink implements Link {
     const rows = Number(parts[4]);
     if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
       if (cols !== this.paneCols || rows !== this.paneRows) {
+        const first = this.paneCols === 0;
         this.paneCols = cols;
         this.paneRows = rows;
         this.opts.onPaneSize?.(cols, rows);
+        // Первый размер — часть подключения (экран придёт снимком); каждая следующая
+        // смена оставляет экран клиента и панель в разных состояниях — пересобираем.
+        if (!first && this.mode === 'control') void this.resync();
       }
     }
     return true;
+  }
+
+  /** Отпускает придержанный вывод клиенту. */
+  private releaseHeld(): void {
+    const held = this.held;
+    this.held = undefined;
+    this.heldBytes = 0;
+    if (held && !this.disposed) for (const part of held) this.opts.onData(part);
+  }
+
+  /** Рисует экран клиента заново по панели (renderScreen). Живой вывод на это время
+   *  придерживается и уходит следом: иначе он лёг бы на экран раньше картинки, поверх
+   *  которой его напечатали. */
+  private async resync(): Promise<void> {
+    if (this.held) {
+      this.resyncAgain = true;
+      return;
+    }
+    const pane = this.activePane;
+    if (this.disposed || pane === undefined) return;
+    this.held = [];
+    try {
+      const shot = this.command(`capture-pane -t ${pane} -p -e`, true);
+      const state = this.command(stateQuery(pane)).then(
+        (answer) => parsePaneState(answer[0]),
+        () => undefined,
+      );
+      const screen = encoder.encode(renderScreen(await shot, await state));
+      if (!this.disposed) this.opts.onData(screen);
+    } catch (err) {
+      // Экран остаётся как был: следующая перерисовка приложения его догонит.
+      this.log(`session ${this.session}: screen resync failed (${String(err)})`);
+    } finally {
+      this.releaseHeld();
+      if (this.resyncAgain && !this.disposed) {
+        this.resyncAgain = false;
+        void this.resync();
+      }
+    }
   }
 
   /** Пометка альтернативного экрана: первое состояние сообщается всегда — при подключении
@@ -647,6 +728,14 @@ class SessionLink implements Link {
     }
     // До приветственного блока команду слать нельзя: размер уйдёт вместе с init.
     if (this.greeted) {
+      // Размер окна tmux отдаёт «последнему» клиенту, а среди control-клиентов последним
+      // навсегда остаётся подключившийся позже: просьбы остальных он просто не слушает
+      // (замер на tmux 3.7c). `switch-client` на свою же сессию делает последним нас —
+      // так размер задаёт тот клиент, с которым человек сейчас работает: веб шлёт resize
+      // на его действие. Политика `window-size` при этом не меняется.
+      this.command(`switch-client -t =${this.session}:`).catch((err: Error): void =>
+        this.log(`session ${this.session}: size claim failed (${err.message})`),
+      );
       this.command(`refresh-client -C ${this.cols}x${this.rows}`).catch((err: Error): void =>
         this.log(`session ${this.session}: resize failed (${err.message})`),
       );

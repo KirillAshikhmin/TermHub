@@ -567,6 +567,40 @@ describe('снимок экрана', () => {
     expect(chunks).toEqual(['between']);
   });
 
+  it('смена размера панели пересобирает экран: стирание, картинка, затем придержанный вывод', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const chunks: string[] = [];
+    const link = open('sess', options({ onData: (b) => chunks.push(dec.decode(b)) }));
+    fake.feed(GREETING);
+    fake.feed(reply(1));
+    fake.feed(reply(2, '%0 @0 0 80 24'));
+    expect(await link.ready).toBe('control');
+    fake.feed('%layout-change @0 b25d,60x10,0,0,0 b25d,60x10,0,0,0 *\n');
+    await tick();
+    fake.feed(reply(3, '%0 @0 0 60 10')); // новый размер → пересборка
+    await tick();
+    expect(fake.commands().at(-2)).toBe('capture-pane -t %0 -p -e'); // только видимый экран
+    fake.feed('%output %0 inside\n'); // до конца снимка — уже внутри него
+    fake.feed(reply(4, 'row0', 'row1'));
+    fake.feed('%output %0 after\n'); // после снимка — придержан, пойдёт следом
+    fake.feed(reply(5, 'TH-STATE,3,1,10,0,0,9,1,0,0,0,0,0,0,0,1,0'));
+    await tick();
+    await tick();
+    expect(chunks).toEqual(['\x1b[?1049l\x1b[0m\x1b[r\x1b[H\x1b[2Jrow0\r\nrow1\x1b[0m\x1b[2;4H', 'after']);
+    fake.feed('%output %0 live\n');
+    expect(chunks.at(-1)).toBe('live');
+  });
+
+  it('resize забирает размер себе: switch-client на свою сессию, затем просьба о размере', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const link = open('sess', options());
+    await bringUp(fake, link, '%0');
+    link.resize(120, 40);
+    expect(fake.commands().slice(-2)).toEqual(['switch-client -t =sess:', 'refresh-client -C 120x40']);
+  });
+
   it('размер панели сообщается при подключении и при смене раскладки окна', async () => {
     const fake = makeFakePty();
     stubSpawns(fake);

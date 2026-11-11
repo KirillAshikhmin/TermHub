@@ -2047,21 +2047,6 @@ select.th-input {
   display: none;
 }
 
-/* Пометка: окно сессии держит другой клиент tmux, экран принял его размер. */
-.th-term__foreign {
-  position: absolute;
-  right: 12px;
-  bottom: 8px;
-  z-index: 6;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  background: var(--bg-elev-2);
-  color: var(--text-dim);
-  font-size: 0.72rem;
-  pointer-events: none;
-  opacity: 0.9;
-}
 /* Круглая кнопка-переключатель панели инструментов, поверх терминала справа-сверху. */
 .th-term__toolbar-toggle {
   position: absolute;
@@ -2535,6 +2520,66 @@ main.th-gradle {
 .th-qk__group {
   display: flex;
   gap: 6px;
+}
+/* Два ряда: клавиши и инструменты. На широком экране они встают в одну линию, на
+   телефоне ряд клавиш занимает всю ширину и не переносится — девять кнопок в строку. */
+.th-qk__row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.th-qk__row--keys {
+  flex: 1 1 auto;
+}
+.th-qk__row--tools {
+  flex: 0 0 auto;
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .th-qk__row {
+    flex: 1 1 100%;
+    gap: 4px;
+  }
+  .th-qk__row .th-qk__key {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0;
+  }
+  .th-qk__row--tools .th-qk__group {
+    flex: 2 1 0;
+    gap: 4px;
+  }
+}
+/* Enter — справа и чуть шире соседей. */
+.th-qk__row--keys .th-qk__key--enter {
+  flex-grow: 1.6;
+}
+/* Кнопка с действием по удержанию: мелкая пометка в углу и ход удержания заливкой. */
+.th-qk__key--esc {
+  position: relative;
+}
+.th-qk__hold {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-size: 0.56rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--danger);
+  pointer-events: none;
+}
+.th-qk__key.is-holding {
+  background: linear-gradient(var(--danger-tint), var(--danger-tint)) no-repeat left / 0% 100%, var(--bg-elev-2);
+  animation: th-qk-hold 450ms linear forwards;
+}
+.th-qk__key.is-held {
+  background: var(--danger-tint);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+@keyframes th-qk-hold {
+  to {
+    background-size: 100% 100%, auto;
+  }
 }
 .th-qk__key {
   flex: 1 0 auto;

@@ -315,11 +315,7 @@ export function mountTerminal(
     // лента. Признак остаётся ради ползунка: листать в альтернативном экране нечего.
     host.classList.toggle('is-alt', on);
   }
-  // Пометка «размер задаёт другой клиент tmux» (см. doFit).
-  const foreignNote = document.createElement('div');
-  foreignNote.className = 'th-term__foreign';
-  foreignNote.hidden = true;
-  body.append(host, foreignNote);
+  body.append(host);
   screen.append(body);
 
   root.append(screen);
@@ -390,6 +386,9 @@ export function mountTerminal(
   const onSelectionStart = (): void => copyController.gestureStarted();
   const onSelectionEnd = (): void => copyController.gestureEnded();
   host.addEventListener('mousedown', onSelectionStart);
+  // Касание или клик по терминалу — тоже работа здесь (см. claimSize).
+  const onPointerClaim = (): void => claimSize();
+  host.addEventListener('pointerdown', onPointerClaim);
   host.addEventListener('mouseup', onSelectionEnd);
 
   // Кликабельные пути: путь в выводе открывает ПРОВОДНИК СЕССИИ (переключение вкладки,
@@ -544,14 +543,52 @@ export function mountTerminal(
 
   // Два размера. `wanted` — под свой контейнер: его клиент просит у агента. `paneSize` —
   // размер панели, который называет агент в control mode: tmux там НЕ подгоняет вывод под
-  // клиента, и если окно сессии держит другой клиент (системный терминал, второй браузер),
-  // панель остаётся его размера. Экран обязан быть размера панели — иначе вывод ложится
-  // со сдвигом и переносами; просьба о своём размере при этом продолжает уходить агенту.
+  // клиента, и размер окна держит один клиент — тот, с которым работали последним
+  // (системный терминал, второй браузер, телефон). Экран обязан быть размера панели —
+  // иначе вывод ложится со сдвигом и переносами. Пока размер чужой, экран показан
+  // зеркалом (fitForeign), а действие здесь забирает размер себе (claimSize).
   let wanted = { cols: term.cols, rows: term.rows };
   let sentSize = '';
   const sendResize = (): void => {
     sentSize = `${wanted.cols}x${wanted.rows}`;
     channel?.resize(wanted.cols, wanted.rows);
+  };
+  /** Размер панели не наш: его держит другой клиент — тот, с которым работали последним. */
+  const foreignSize = (): boolean =>
+    paneSize !== undefined && (paneSize.cols !== wanted.cols || paneSize.rows !== wanted.rows);
+  /** Пока размер чужой, этот экран — зеркало: чужая панель больше контейнера, и без
+   *  уменьшения был бы виден только её левый верхний угол (у полноэкранного приложения
+   *  там пусто, всё содержимое внизу). Поэтому экран целиком вписывается в контейнер
+   *  масштабом; первое же действие здесь забирает размер себе (claimSize), и масштаб уходит. */
+  const fitForeign = (): void => {
+    const xt = term.element;
+    if (!xt) return;
+    const screenEl = xt.querySelector<HTMLElement>('.xterm-screen');
+    const sw = screenEl?.offsetWidth ?? 0;
+    const sh = screenEl?.offsetHeight ?? 0;
+    const k = foreignSize() && sw > 0 && sh > 0 ? Math.min(1, host.clientWidth / sw, host.clientHeight / sh) : 1;
+    if (k < 1) {
+      xt.style.width = `${sw}px`;
+      xt.style.height = `${sh}px`;
+      xt.style.transformOrigin = '0 0';
+      xt.style.transform = `scale(${k})`;
+    } else {
+      xt.style.width = '';
+      xt.style.height = '';
+      xt.style.transform = '';
+    }
+  };
+  /** Действие пользователя на этом экране: размер задаёт тот клиент, с которым работают.
+   *  Просьба уходит заново — агент делает нас «последним» клиентом tmux, и панель
+   *  принимает наш размер. Не чаще раза в секунду: панель могла не принять размер
+   *  (пределы агента), и каждое нажатие иначе слало бы просьбу. */
+  let lastClaim = 0;
+  const claimSize = (): void => {
+    if (!connected || readOnly || !foreignSize()) return;
+    const now = performance.now();
+    if (now - lastClaim < 1000) return;
+    lastClaim = now;
+    sendResize();
   };
   const doFit = (): void => {
     try {
@@ -564,9 +601,8 @@ export function mountTerminal(
     } catch {
       // Контейнер ещё без размеров (не в DOM / скрыт) — ретраит следующий resize.
     }
-    const foreign = paneSize !== undefined && (paneSize.cols !== wanted.cols || paneSize.rows !== wanted.rows);
-    foreignNote.hidden = !foreign;
-    if (foreign && paneSize) foreignNote.textContent = t('term.foreignSize', { cols: paneSize.cols, rows: paneSize.rows });
+    fitForeign();
+    requestAnimationFrame(fitForeign); // размеры холста xterm обновляет к следующему кадру
     // Экран держит размер панели, а контейнер сменился: onResize не сработает, просим сами.
     // Первый RESIZE подключения шлёт onStatus (он обязан быть первым кадром) — не здесь.
     if (connected && sentSize !== '' && sentSize !== `${wanted.cols}x${wanted.rows}`) sendResize();
@@ -588,6 +624,7 @@ export function mountTerminal(
     updateAppBadge(unseenBellCount());
     if (readOnly) return;
     if (connected) {
+      claimSize(); // ввод здесь — значит, работают здесь
       channel?.write(bytes);
       return;
     }
@@ -746,11 +783,8 @@ export function mountTerminal(
   });
 
   // ── Панель быстрых клавиш ────────────────────────────────────────────
-  // Вид (шрифт, интервал, фон) меняют и кнопки A−/A+, и окно «Вид терминала» — оба
-  // пишут в term-prefs, а терминал перестраивается здесь, в одном месте.
-  const stepFont = (delta: number): void => {
-    setTermPrefs({ fontSize: prefs.fontSize + delta });
-  };
+  // Вид (шрифт, интервал, фон) меняет окно «Вид терминала»: оно пишет в term-prefs, а
+  // терминал перестраивается здесь.
   const offPrefs = onTermPrefsChange((next) => {
     prefs = next;
     term.options.fontFamily = termFontFamily(next.font, cssVar('--font-mono', 'monospace'));
@@ -888,7 +922,6 @@ export function mountTerminal(
     // (клавиатура не закрывается), а насильный term.focus() открывал бы её на
     // каждой стрелке даже при закрытой — ровно то, на что жаловались.
     onKey: (bytes) => sendData(bytes),
-    onFontStep: stepFont,
     keyboardEnabled,
     onKeyboardToggle: (enabled) => {
       keyboardEnabled = enabled;
@@ -1002,6 +1035,7 @@ export function mountTerminal(
       resizeDisp.dispose();
       selectionDisp.dispose();
       host.removeEventListener('mousedown', onSelectionStart);
+      host.removeEventListener('pointerdown', onPointerClaim);
       host.removeEventListener('mouseup', onSelectionEnd);
       stopTouchScroll?.();
       stopTouchSelect?.();

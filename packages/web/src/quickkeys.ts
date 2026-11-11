@@ -1,7 +1,10 @@
 // Панель быстрых клавиш терминала: крупные тач-кнопки, которые шлют управляющие
-// последовательности в pty (Esc, Tab, стрелки, Ctrl+C, y/n) плюс регулировка
-// размера шрифта. Карта кнопка→байты вынесена чистой структурой (SEND_KEYS) —
-// её и покрывает тест; DOM-монтаж отделён и от него не зависит.
+// последовательности в pty. Два ряда: первый — клавиши (Esc, Tab, ⇧Tab, стрелки, Enter;
+// на телефоне он обязан помещаться в одну строку), второй — инструменты (выделение,
+// поиск, тумблеры). Ctrl+C — удержание Esc: отдельной кнопки у него нет, и случайным
+// тапом команду не оборвать. Размер шрифта отсюда убран — он в окне вида терминала.
+// Карта кнопка→байты вынесена чистой структурой (SEND_KEYS) — её и покрывает тест;
+// DOM-монтаж отделён и от него не зависит.
 
 import type { TFn } from './i18n';
 
@@ -14,21 +17,28 @@ export interface QuickKey {
   send: string;
   /** Ключ i18n для aria-label (стрелки-глифы без текста); иначе подпись = glyph. */
   ariaKey?: string;
+  /** Подпись для aria-label словом, когда глиф — значок (Tab, Enter). */
+  aria?: string;
+  /** Не кнопка, а действие по удержанию названной кнопки (Ctrl+C — удержание Esc). */
+  holdOf?: string;
 }
+
+/** Сколько держать кнопку, чтобы сработало действие удержания. */
+export const HOLD_MS = 450;
 
 // Порядок = порядок в панели (см. бриф Task 8).
 export const SEND_KEYS: readonly QuickKey[] = [
   { id: 'esc', glyph: 'Esc', send: '\x1b' },
-  { id: 'tab', glyph: 'Tab', send: '\t' },
-  { id: 'shiftTab', glyph: '⇧Tab', send: '\x1b[Z' },
+  { id: 'tab', glyph: '⇥', send: '\t', aria: 'Tab' },
+  { id: 'shiftTab', glyph: '⇤', send: '\x1b[Z', aria: 'Shift + Tab' },
   // Shift+← — «назад» в вопросах Codex (xterm-форма стрелки с модификатором Shift).
   { id: 'shiftLeft', glyph: '⇧←', send: '\x1b[1;2D', ariaKey: 'quickkeys.shiftLeft' },
   { id: 'left', glyph: '←', send: '\x1b[D', ariaKey: 'quickkeys.left' },
   { id: 'up', glyph: '↑', send: '\x1b[A', ariaKey: 'quickkeys.up' },
   { id: 'down', glyph: '↓', send: '\x1b[B', ariaKey: 'quickkeys.down' },
   { id: 'right', glyph: '→', send: '\x1b[C', ariaKey: 'quickkeys.right' },
-  { id: 'enter', glyph: 'Enter', send: '\r' },
-  { id: 'ctrlC', glyph: '^C', send: '\x03' },
+  { id: 'enter', glyph: '↵', send: '\r', aria: 'Enter' },
+  { id: 'ctrlC', glyph: '^C', send: '\x03', holdOf: 'esc' },
 ];
 
 const encoder = new TextEncoder();
@@ -42,7 +52,6 @@ export function keyBytes(key: Pick<QuickKey, 'send'>): Uint8Array {
  *  экранной клавиатуры (term.ts переводит textarea xterm в inputmode). */
 export interface QuickKeysHandlers {
   onKey: (bytes: Uint8Array) => void;
-  onFontStep: (delta: number) => void;
   onKeyboardToggle: (enabled: boolean) => void;
   /** Начальное состояние переключателя клавиатуры. */
   keyboardEnabled: boolean;
@@ -103,6 +112,52 @@ function toggleButton(
   return btn;
 }
 
+/** Удержание кнопки шлёт другую последовательность (Esc → Ctrl+C). Короткий тап остаётся
+ *  обычным нажатием; после сработавшего удержания клик гасится. На кнопке — мелкая
+ *  пометка, что даёт удержание. */
+function wireHold(btn: HTMLButtonElement, held: QuickKey, h: Pick<QuickKeysHandlers, 'onKey' | 't'>): void {
+  const mark = document.createElement('span');
+  mark.className = 'th-qk__hold';
+  mark.textContent = held.glyph;
+  btn.append(mark);
+  const label = h.t('quickkeys.hold', { key: btn.getAttribute('aria-label') ?? '', held: 'Ctrl+C' });
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let fired = false;
+  const cancel = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    btn.classList.remove('is-holding');
+  };
+  btn.addEventListener('pointerdown', () => {
+    fired = false;
+    cancel();
+    btn.classList.add('is-holding');
+    timer = setTimeout(() => {
+      timer = undefined;
+      fired = true;
+      btn.classList.remove('is-holding');
+      btn.classList.add('is-held');
+      setTimeout(() => btn.classList.remove('is-held'), 300);
+      h.onKey(keyBytes(held));
+    }, HOLD_MS);
+  });
+  for (const type of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(type, cancel);
+  // Долгое нажатие на телефоне зовёт контекстное меню — оно здесь не нужно.
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Клик после сработавшего удержания — не нажатие Esc.
+  btn.addEventListener(
+    'click',
+    (e) => {
+      if (!fired) return;
+      fired = false;
+      e.stopImmediatePropagation();
+    },
+    true,
+  );
+}
+
 /** Строит DOM-панель быстрых клавиш. Позиционирование к низу/над клавиатурой —
  *  на стороне term.ts (visualViewport). */
 export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
@@ -111,19 +166,24 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
   panel.setAttribute('role', 'toolbar');
   panel.setAttribute('aria-label', h.t('quickkeys.title'));
 
+  // Первый ряд — клавиши: Esc, Tab, ⇧Tab, стрелки и Enter справа.
+  const keys = document.createElement('div');
+  keys.className = 'th-qk__row th-qk__row--keys';
   for (const key of SEND_KEYS) {
-    const aria = key.ariaKey ? h.t(key.ariaKey) : key.glyph;
-    panel.append(quickKeyButton(key.glyph, aria, () => h.onKey(keyBytes(key))));
+    if (key.holdOf) continue; // действие удержания — не кнопка
+    const held = SEND_KEYS.find((k) => k.holdOf === key.id);
+    const name = key.ariaKey ? h.t(key.ariaKey) : (key.aria ?? key.glyph);
+    const btn = quickKeyButton(key.glyph, name, () => h.onKey(keyBytes(key)));
+    btn.classList.add(`th-qk__key--${key.id}`);
+    btn.title = name;
+    if (held) wireHold(btn, held, h);
+    keys.append(btn);
   }
+  panel.append(keys);
 
-  // Порядок после ^C: размер шрифта → выделение/копирование → Enter → клавиатура.
-  const fontGroup = document.createElement('div');
-  fontGroup.className = 'th-qk__group';
-  fontGroup.append(
-    quickKeyButton('A−', h.t('term.fontDecrease'), () => h.onFontStep(-1)),
-    quickKeyButton('A+', h.t('term.fontIncrease'), () => h.onFontStep(1)),
-  );
-  panel.append(fontGroup);
+  // Второй ряд — инструменты.
+  const tools = document.createElement('div');
+  tools.className = 'th-qk__row th-qk__row--tools';
 
   // Режим выделения (тач-драг → выделение) + копирование выделенного.
   const selectGroup = document.createElement('div');
@@ -134,23 +194,24 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
     selectToggle,
     quickKeyButton('⌕', h.t('quickkeys.search'), () => h.onSearch()),
   );
-  panel.append(selectGroup);
+  tools.append(selectGroup);
 
   // Тумблер «Отправлять по Enter» (выкл — Enter переносит строку).
   const enterToggle = toggleButton('⏎', h.t('quickkeys.enterSends'), h.enterSendsEnabled, h.onEnterSendsToggle);
   enterToggle.classList.add('th-qk__enter');
-  panel.append(enterToggle);
+  tools.append(enterToggle);
 
   // Экранная клавиатура.
   const keyboardToggle = toggleButton('⌨', h.t('quickkeys.keyboard'), h.keyboardEnabled, h.onKeyboardToggle);
   keyboardToggle.classList.add('th-qk__keyboard');
-  panel.append(keyboardToggle);
+  tools.append(keyboardToggle);
 
   // Строка ввода (compose bar) — справа, после клавиатуры. Нативное поле для
   // свайпа/подсказок (терминальная textarea их не поддерживает).
   const composeToggle = toggleButton('✎', h.t('quickkeys.compose'), h.composeEnabled, h.onComposeToggle);
   composeToggle.classList.add('th-qk__compose');
-  panel.append(composeToggle);
+  tools.append(composeToggle);
+  panel.append(tools);
 
   return panel;
 }
