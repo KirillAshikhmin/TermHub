@@ -11,9 +11,19 @@ import type { Transport } from './transport';
 import { iconButton, renderMenu, sortSelect, svgIcon, toast } from './ui';
 import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
-import { makeActivityDot } from './activity-dot';
 import { activity } from './activity';
-import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking, type SessionAgent } from './session-status';
+import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
+import {
+  AGENT_MARK,
+  clearGroupHeaders,
+  groupSessions,
+  sessionGroup,
+  syncGroupHeaders,
+  syncSessionHead,
+  type SessionHeadInfo,
+} from './session-view';
+
+export { AGENT_MARK, groupSessions, sessionGroup };
 import { bellUnseen, markBellSeen, observeBells, onBellChange, unseenBellCount } from './bell-seen';
 import { updateAppBadge } from './app-badge';
 import { hasCap } from './capabilities';
@@ -81,39 +91,8 @@ export function mountSessionBar(opts: {
   return { el: bar, toggleSlot, teardown: tabs.teardown };
 }
 
-/** Проект сессии для боковой панели: имя без хвостового номера (`sprut_app2` → `sprut_app`). */
-export function sessionGroup(name: string): string {
-  return name.replace(/[\s._-]*\d+$/, '') || name;
-}
-
-/** Сессии, собранные по проектам: группы идут в порядке первого появления, внутри
- *  группы порядок прежний — выбранная сортировка не ломается, а лишь кучкуется. */
-export function groupSessions<T extends { name: string }>(sessions: T[]): T[] {
-  const groups = new Map<string, T[]>();
-  for (const s of sessions) {
-    const key = sessionGroup(s.name);
-    const list = groups.get(key);
-    if (list) list.push(s);
-    else groups.set(key, [s]);
-  }
-  return [...groups.values()].flat();
-}
-
 /** Минимум, который нужен табу от сессии (SessionInfo подходит структурно). */
-export interface TabInfo {
-  name: string;
-  bell: boolean;
-  title: string;
-  /** Команда панели — по ней таб получает цветную метку агента. */
-  command?: string;
-}
-
-/** Буква и полное имя агента для метки на вкладке. */
-export const AGENT_MARK: Record<SessionAgent, { letter: string; name: string }> = {
-  claude: { letter: 'C', name: 'Claude Code' },
-  codex: { letter: 'X', name: 'Codex' },
-  opencode: { letter: 'O', name: 'opencode' },
-};
+export type TabInfo = SessionHeadInfo;
 
 /** Чистый рендер таба сессии: кнопка-имя (переключение) + крестик (завершить). */
 export function renderSessionTab(
@@ -129,12 +108,6 @@ export function renderSessionTab(
   const main = document.createElement('button');
   main.type = 'button';
   main.className = 'th-tab__btn';
-  const label = document.createElement('span');
-  label.className = 'th-tab__label';
-  const name = document.createElement('span');
-  name.className = 'th-tab__name';
-  label.append(name);
-  main.append(label);
   // Тап по вкладке не должен уводить фокус с textarea xterm (на телефоне это закрывает
   // экранную клавиатуру ещё до смены экрана) — тот же приём, что у быстрых клавиш.
   main.addEventListener('mousedown', (e) => e.preventDefault());
@@ -155,40 +128,6 @@ export function renderSessionTab(
   return tab;
 }
 
-/** Точка активности — первый элемент в .th-tab__btn (перед именем). */
-function setTabActivityDot(main: HTMLElement | null, translate: TFn, show: boolean): void {
-  if (!main) return;
-  const dot = main.querySelector<HTMLElement>('.th-tab__activity');
-  if (show) {
-    if (!dot) main.prepend(makeActivityDot('th-tab__activity', translate('card.activity')));
-  } else {
-    dot?.remove();
-  }
-}
-
-/** Подпись таба: заголовок терминала (крупно) + tmux-имя (мелко, второй строкой),
- *  если отличается. Индикатор активности из заголовка срезан (он — точкой).
- *  Обновляется на месте — заголовок меняет Claude. */
-function setTabLabel(main: HTMLElement | null, info: TabInfo): void {
-  const label = main?.querySelector<HTMLElement>('.th-tab__label');
-  const nameEl = label?.querySelector<HTMLElement>('.th-tab__name');
-  if (!label || !nameEl) return;
-  const title = sessionTitleText(info.title);
-  const hasTitle = title !== '' && title !== info.name;
-  nameEl.textContent = hasTitle ? title : info.name;
-  let sub = label.querySelector<HTMLElement>('.th-tab__sub');
-  if (hasTitle) {
-    if (!sub) {
-      sub = document.createElement('span');
-      sub.className = 'th-tab__sub';
-      label.append(sub);
-    }
-    sub.textContent = info.name;
-  } else {
-    sub?.remove();
-  }
-}
-
 /** Обновляет таб на месте: активность и непрочитанный звонок видны независимо друг от друга. */
 export function updateSessionTab(
   tab: HTMLElement,
@@ -198,42 +137,14 @@ export function updateSessionTab(
   showActivity = false,
 ): void {
   tab.classList.toggle('is-active', active);
-  // Метка агента — буква с подсказкой: что за агент работает в сессии.
-  const agent = sessionAgent(info.command ?? '');
-  let mark = tab.querySelector<HTMLElement>('.th-tab__agent');
-  if (agent) {
-    tab.dataset.agent = agent;
-    if (!mark) {
-      mark = document.createElement('span');
-      mark.className = 'th-tab__agent';
-      tab.prepend(mark);
-    }
-    mark.textContent = AGENT_MARK[agent].letter;
-    mark.title = AGENT_MARK[agent].name;
-    mark.setAttribute('aria-label', AGENT_MARK[agent].name);
-  } else {
-    delete tab.dataset.agent;
-    mark?.remove();
-  }
+  tab.classList.toggle('has-bell', info.bell);
   const main = tab.querySelector<HTMLElement>('.th-tab__btn');
-  main?.setAttribute('aria-current', active ? 'true' : 'false');
-  setTabActivityDot(main, translate, showActivity);
-  setTabLabel(main, info);
-
-  const showBell = info.bell;
-  tab.classList.toggle('has-bell', showBell);
-  let bell = tab.querySelector<HTMLElement>('.th-tab__bell');
-  if (showBell) {
-    if (!bell && main) {
-      bell = document.createElement('span');
-      bell.className = 'th-tab__bell';
-      bell.setAttribute('aria-label', translate('card.bell'));
-      bell.textContent = '🔔';
-      main.append(bell);
-    }
-  } else {
-    bell?.remove();
-  }
+  if (!main) return;
+  main.setAttribute('aria-current', active ? 'true' : 'false');
+  // Вкладка — компактный вид сессии: одна шапка (session-view), без подробностей.
+  const agent = syncSessionHead(main, 'th-tab', info, translate, showActivity);
+  if (agent) tab.dataset.agent = agent;
+  else delete tab.dataset.agent;
 }
 
 export interface SessionTabsOpts {
@@ -418,8 +329,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       ? latest
       : [{ name: opts.current, bell: false, title: '', path: '', command: '', activityTs: now, attached: 0 }, ...latest];
     const guest = opts.transport.clientScope != null;
-    const shown = sortSessions(rows, sortMode, bellUnseen, readManualOrder());
+    // Тот же вид, что на главной: по проектам, с заголовками групп.
+    const shown = groupSessions(sortSessions(rows, sortMode, bellUnseen, readManualOrder()));
     const visible = shown.map((x) => x.name);
+    const cardOf = new Map<string, HTMLElement>();
     const move = (name: string, delta: -1 | 1): void => {
       writeManualOrder(moveInOrder(readManualOrder(), visible, name, delta));
       buildPanelRows();
@@ -450,8 +363,10 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
         onMoveDown: guest || sortMode !== 'manual' ? undefined : () => move(s.name, 1),
       });
       if (s.name === opts.current) card.classList.add('is-current');
+      cardOf.set(s.name, card);
       list.append(card);
     }
+    syncGroupHeaders(list, visible, (name) => cardOf.get(name));
   };
   function closePanel(): void {
     panelOpen = false;
@@ -495,45 +410,15 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // иконками. В обычном режиме обоих нет: текущую сессию показывает её вкладка.
   const currentEl = document.createElement('div');
   currentEl.className = 'th-tabs-current';
-  // Свои классы, не вкладочные: `.th-tab__name` в полосе ищут и стили, и код вкладок.
-  const currentLabel = document.createElement('span');
-  currentLabel.className = 'th-tabs-current__label';
-  const currentName = document.createElement('span');
-  currentName.className = 'th-tabs-current__name';
-  currentName.textContent = opts.current;
-  const currentSub = document.createElement('span');
-  currentSub.className = 'th-tabs-current__sub';
-  currentLabel.append(currentName, currentSub);
-  currentEl.append(currentLabel);
   let sideMenu: { el: HTMLElement; teardown: () => void } | null = null;
   const syncSideHeader = (side: boolean, info: TabInfo, working: boolean): void => {
-    setTabActivityDot(currentEl, t, working);
-    const title = sessionTitleText(info.title);
-    const hasTitle = title !== '' && title !== info.name;
-    currentName.textContent = hasTitle ? title : info.name;
-    currentSub.textContent = hasTitle ? info.name : '';
-    const agent = sessionAgent(info.command ?? '');
-    let mark = currentEl.querySelector<HTMLElement>('.th-tab__agent');
-    if (agent) {
-      currentEl.dataset.agent = agent;
-      if (!mark) {
-        mark = document.createElement('span');
-        mark.className = 'th-tab__agent';
-        currentEl.prepend(mark);
-      }
-      mark.textContent = AGENT_MARK[agent].letter;
-      mark.title = AGENT_MARK[agent].name;
-    } else {
-      delete currentEl.dataset.agent;
-      mark?.remove();
-    }
+    syncSessionHead(currentEl, 'th-tabs-current', info, t, working);
     // Меню строится только в боковом режиме: в обычном оно скрыто, а его пункты
     // спрашивают агента (caffeinate) — впустую это делать незачем.
     if (side && !sideMenu) {
       // Без пункта выбора сервера: на терминале его открывает глобус состояния связи,
       // второй глобус рядом был бы дублем.
-      sideMenu = renderMenu(opts.transport);
-      sideMenu.el.classList.add('th-menu--inline');
+      sideMenu = renderMenu(opts.transport, undefined, 'bar');
       wrap.append(sideMenu.el);
     } else if (!side && sideMenu) {
       sideMenu.teardown();
@@ -628,7 +513,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     const focusInside = document.activeElement instanceof Node && strip.contains(document.activeElement);
     if (!focusInside) {
       // Заголовки групп — не вкладки: снимаем перед перестановкой и ставим заново.
-      for (const head of strip.querySelectorAll('.th-tabs__group')) head.remove();
+      clearGroupHeaders(strip);
       let anchor: ChildNode | null = strip.firstChild;
       for (const s of sessions) {
         const el = tabs.get(s.name);
@@ -636,19 +521,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
         if (el === anchor) anchor = anchor.nextSibling;
         else strip.insertBefore(el, anchor);
       }
-      if (side) {
-        let prev = '';
-        for (const s of sessions) {
-          const group = sessionGroup(s.name);
-          const el = tabs.get(s.name);
-          if (!el || group === prev) continue;
-          prev = group;
-          const head = document.createElement('div');
-          head.className = 'th-tabs__group';
-          head.textContent = group;
-          strip.insertBefore(head, el);
-        }
-      }
+      if (side) syncGroupHeaders(strip, order, (name) => tabs.get(name));
     }
   };
 

@@ -271,7 +271,7 @@ describe('mountSessionTabs', () => {
     const { transport } = stubTransport([[sessionFixture('a')]]);
     const tabs = mountSessionTabs({ ...baseOpts, transport });
     await vi.advanceTimersByTimeAsync(0);
-    expect(tabs.el.querySelector('.th-menu--inline')).toBeNull();
+    expect(tabs.el.querySelector('.th-menu--bar')).toBeNull();
     tabs.teardown();
   });
 
@@ -311,12 +311,14 @@ describe('mountSessionTabs', () => {
     await vi.advanceTimersByTimeAsync(0);
     const strip = tabs.el.querySelector('.th-tabs')!;
     const seq = [...strip.children].map((n) =>
-      n.classList.contains('th-tabs__group') ? `[${n.textContent}]` : n.querySelector('.th-tab__name')!.textContent,
+      n.classList.contains('th-group') ? `[${n.textContent}]` : n.querySelector('.th-tab__name')!.textContent,
     );
     expect(seq).toEqual(['[app]', 'app1', 'app2', '[zed]', 'zed']);
     // Общая шапка: слева текущая сессия, справа меню главной в ряд иконок.
     expect(tabs.el.querySelector('.th-tabs-current__name')!.textContent).toBe('zed');
-    expect(tabs.el.querySelector('.th-menu--inline .th-menu__item')).not.toBeNull();
+    expect(tabs.el.querySelector('.th-menu--bar .th-menu__row .th-menu__item')).not.toBeNull();
+    // Редкое (язык, сведения о подключении) — под «⋯», а не в ряду.
+    expect(tabs.el.querySelector('.th-menu--bar .th-menu__pop .th-menu__item')).not.toBeNull();
     tabs.teardown();
     localStorage.removeItem('termhub.sideTabs');
     window.matchMedia = real;
@@ -445,8 +447,10 @@ describe('mountSessionTabs', () => {
     const cards = [...tabs.el.querySelectorAll<HTMLElement>('.th-spanel__list .th-card')];
     const bCard = cards.find((c) => c.textContent?.includes('b'))!;
     expect(bCard.querySelector('.th-card__dir')!.textContent).toContain('b');
-    expect(bCard.querySelector('.th-badge')!.textContent).toBe('claude');
-    expect(bCard.querySelector('.th-bell')).not.toBeNull();
+    expect(bCard.querySelector('.th-badge')!.textContent).toBe('Claude Code');
+    expect(bCard.querySelector('.th-card__bell')).not.toBeNull();
+    // Разные проекты — над каждой группой заголовок, как в боковой панели.
+    expect([...tabs.el.querySelectorAll('.th-spanel__list > .th-group')].map((g) => g.textContent)).toEqual(['a', 'b']);
     tabs.teardown();
   });
 
@@ -459,7 +463,7 @@ describe('mountSessionTabs', () => {
     await vi.advanceTimersByTimeAsync(0);
     tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
 
-    const names = [...tabs.el.querySelectorAll<HTMLElement>('.th-spanel__list .th-card__name-text')].map(
+    const names = [...tabs.el.querySelectorAll<HTMLElement>('.th-spanel__list .th-card__name')].map(
       (n) => n.textContent,
     );
     expect(names).toEqual(['alpha', 'gamma']); // по активности было бы gamma первой

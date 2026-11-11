@@ -424,9 +424,8 @@ button {
   gap: 8px;
 }
 .th-card__name {
-  font-size: 1.02rem;
+  font-size: 0.98rem;
   font-weight: 650;
-  word-break: break-word;
 }
 
 .th-card__menu-wrap {
@@ -1176,19 +1175,13 @@ select.th-input {
   line-height: 1.2;
   opacity: 0.85;
 }
-.th-tab[data-agent='claude'],
-.th-tabs-current[data-agent='claude'],
-.th-split__pane[data-agent='claude'] {
+.th-tab__agent[data-agent='claude'] {
   --tab-agent: var(--claude);
 }
-.th-tab[data-agent='codex'],
-.th-tabs-current[data-agent='codex'],
-.th-split__pane[data-agent='codex'] {
+.th-tab__agent[data-agent='codex'] {
   --tab-agent: var(--accent);
 }
-.th-tab[data-agent='opencode'],
-.th-tabs-current[data-agent='opencode'],
-.th-split__pane[data-agent='opencode'] {
+.th-tab__agent[data-agent='opencode'] {
   --tab-agent: var(--opencode);
 }
 /* Десктоп: шапка сессии ниже и кнопки мельче — высота уходит терминалу; подпись вкладки
@@ -1265,46 +1258,136 @@ select.th-input {
   background: var(--bg-hover);
 }
 
-/* Заголовок группы вкладок и текущая сессия в шапке: видны только в боковом режиме. */
-.th-tabs__group,
+/* Текущая сессия в шапке: видна только в боковом режиме. */
 .th-tabs-current {
   display: none;
 }
-/* Меню главной, разложенное в ряд иконок (шапка сессии в боковом режиме). */
-.th-menu--inline > .th-iconbtn {
+/* Заголовок проекта над группой сессий — один на три места (session-view): в сетке
+   главной и панели он занимает всю строку, в боковой панели стоит над вкладками, а в
+   полосе вкладок сверху его нет. */
+.th-group {
   display: none;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.th-menu--inline .th-menu__pop {
-  position: static;
+.th-grid > .th-group {
+  display: block;
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+.th-grid > .th-group:first-child {
+  margin-top: 0;
+}
+/* Шапка сессии (session-view) — общая для вкладки и карточки. */
+.th-sess__label {
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 2px;
+  flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
+  line-height: 1.15;
+}
+.th-sess__name,
+.th-sess__sub {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.th-sess__sub {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+/* Карточка — подробный вид: та же шапка, крупнее, под ней каталог, превью и подвал. */
+.th-card__head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.th-card__head .th-tab__agent {
+  margin-left: 0;
+}
+.th-card__label {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+.th-card__name {
+  white-space: nowrap;
+}
+.th-card__sub {
+  white-space: nowrap;
+}
+.th-card__bell {
+  flex: none;
+  font-size: 0.85rem;
+}
+.th-badge--codex {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.th-badge--opencode {
+  color: var(--opencode);
+  background: var(--opencode-tint);
+}
+/* Сведения о подключении всплывающим окном. */
+.th-diag--modal {
   padding: 0;
+  max-width: none;
+}
+.th-diag--modal .th-diag__card {
   border: none;
+  padding: 0;
   background: none;
   box-shadow: none;
 }
+/* Меню в шапке сессии (раскладка `bar`): частые действия — рядом иконками по группам,
+   редкие — под «⋯». */
+.th-menu--bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.th-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 /* Вторая иконка пункта (галка «включено») в ряду не нужна: состояние видно цветом. */
-.th-menu--inline .th-menu__label,
-.th-menu--inline .th-menu__sep,
-.th-menu--inline .th-menu__item .th-menu__label ~ .th-icon {
+.th-menu__row .th-menu__label,
+.th-menu__row .th-menu__item .th-menu__label ~ .th-icon {
   display: none;
 }
-.th-menu--inline .th-menu__item {
+.th-menu__row .th-menu__item {
   justify-content: center;
   width: 32px;
   min-height: 32px;
   padding: 0;
   color: var(--text-dim);
 }
-.th-menu--inline .th-menu__item:hover {
+.th-menu__row .th-menu__item:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
-.th-menu--inline .th-menu__item.is-on {
+.th-menu__row .th-menu__item.is-on {
   color: var(--accent);
+}
+/* Граница группы в ряду — тонкая вертикальная черта. */
+.th-menu__row .th-menu__sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 5px;
+  background: var(--border-strong);
+}
+.th-menu--bar .th-menu__pop {
+  z-index: 30;
 }
 /* Боковая панель сессий (выбор в окне «Вид терминала», только десктоп): полоса вкладок
    становится столбцом слева, а экраны сессии сдвигаются вправо. Полоса остаётся тем же
@@ -1346,7 +1429,7 @@ select.th-input {
     flex: 1;
     text-align: left;
   }
-  :root[data-side-tabs] .th-ws-view .th-tabs__group {
+  :root[data-side-tabs] .th-ws-view .th-tabs > .th-group {
     display: block;
     margin: 10px 4px 2px;
     color: var(--text-faint);
@@ -1358,7 +1441,7 @@ select.th-input {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  :root[data-side-tabs] .th-ws-view .th-tabs__group:first-child {
+  :root[data-side-tabs] .th-ws-view .th-tabs > .th-group:first-child {
     margin-top: 0;
   }
   /* Шапка без вкладок: слева текущая сессия, справа кнопки. */

@@ -8,7 +8,7 @@ import { api } from './api';
 import type { DiagInfo } from './api';
 import { t } from './i18n';
 import { lastTerminalMode, terminalModeName, terminalModeRequest } from './term-mode';
-import { renderHeader, spinner } from './ui';
+import { iconButton, openModal, renderHeader, spinner } from './ui';
 import type { Transport } from './transport';
 
 function fmtUptime(ms: number): string {
@@ -21,12 +21,47 @@ function fmtUptime(ms: number): string {
   return `${m}м ${s % 60}с`;
 }
 
+/** Сведения о подключении всплывающим окном: поверх текущего экрана, а не вместо него —
+ *  раньше пункт меню уводил на отдельную страницу, с которой назад была только главная. */
+export function openDiag(): void {
+  openModal((close) => {
+    const box = document.createElement('div');
+    box.className = 'th-diag-modal';
+    const head = document.createElement('div');
+    head.className = 'th-modal__head';
+    const title = document.createElement('h2');
+    title.textContent = t('diag.title');
+    head.append(title, iconButton('close', t('common.close'), close));
+    const body = document.createElement('div');
+    body.className = 'th-diag th-diag--modal';
+    box.append(head, body);
+    const stop = fillDiag(body);
+    // У окна нет своего события закрытия: опрос гаснет сам, когда тело ушло со страницы.
+    const watch = setInterval(() => {
+      if (box.isConnected) return;
+      clearInterval(watch);
+      stop();
+    }, 1000);
+    return box;
+  });
+}
+
+/** Страница диагностики по прямой ссылке `#/diag` (из меню открывается окно). */
 export function mountDiag(root: HTMLElement, transport?: Transport): () => void {
   root.replaceChildren();
   const header = renderHeader(true, transport);
   const main = document.createElement('main');
   main.className = 'th-diag';
   root.append(header.el, main);
+  const stop = fillDiag(main);
+  return () => {
+    stop();
+    header.teardown();
+  };
+}
+
+/** Наполняет main сведениями агента и обновляет их опросом; возвращает остановку. */
+function fillDiag(main: HTMLElement): () => void {
   main.append(spinner());
 
   let stopped = false;
@@ -100,6 +135,5 @@ export function mountDiag(root: HTMLElement, transport?: Transport): () => void 
   return () => {
     stopped = true;
     clearInterval(timer);
-    header.teardown();
   };
 }

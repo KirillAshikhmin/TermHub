@@ -8,6 +8,7 @@ import { getLang, setLang, t } from './i18n';
 import { notificationsSupported, permissionState, requestNotificationPermission } from './notify';
 import { enablePush } from './push';
 import { currentTheme, toggleTheme } from './theme';
+import { openDiag } from './diag';
 import { openFeedSearch } from './feed-search-all';
 import { openTermSettings } from './term-settings';
 import { openUsage } from './usage';
@@ -42,6 +43,10 @@ const ICONS: Record<string, string> = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   pulse: '<path d="M3 12h4l2-6 4 12 2-6h6"/>',
+  // Столбики — расход; «i» в круге — сведения о подключении; «A» с иероглифом — язык.
+  chart: '<path d="M3 21h18M7 21V11M12 21V4M17 21v-7"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/>',
+  lang: '<path d="M3 5h9M7.5 3v2M5 9c1.2 2.6 3.4 4.6 6 5.6M10.5 5c-.6 4-2.8 7.4-6.5 9.5"/><path d="M13 21l4-10 4 10M14.5 17.5h5"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
   // Ползунки — параметры отображения (окно «Вид терминала»).
   sliders: '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/><circle cx="16" cy="6" r="2.2"/><circle cx="10" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
@@ -549,8 +554,12 @@ export function wireToolbar(opts: {
 
 /** То же меню «⋯», что в шапке главной, — для шапки сессии: класс `th-menu--inline`
  *  раскладывает его пункты в ряд иконок. Снимать через teardown. */
-export function renderMenu(transport?: Transport, onPickAgent?: () => void): { el: HTMLElement; teardown: () => void } {
-  return buildMenu(transport, onPickAgent);
+export function renderMenu(
+  transport?: Transport,
+  onPickAgent?: () => void,
+  layout: MenuLayout = 'menu',
+): { el: HTMLElement; teardown: () => void } {
+  return buildMenu(transport, onPickAgent, layout);
 }
 
 /** Текстовая метка пункта меню. */
@@ -567,8 +576,12 @@ type AddItem = (
   iconName: string,
   label: string,
   onClick: (item: HTMLButtonElement) => void,
-  opts?: { keepOpen?: boolean },
+  opts?: { keepOpen?: boolean; primary?: boolean },
 ) => HTMLButtonElement;
+
+/** Раскладка меню: `menu` — всё в выпадающем списке под «⋯» (шапка главной); `bar` —
+ *  частые действия рядом иконками, редкие остаются под «⋯» (шапка сессии). */
+export type MenuLayout = 'menu' | 'bar';
 
 /** Меню «⋯»: тема и язык — всегда; при связи с агентом (transport) добавляются
  *  уведомления, «не давать засыпать», устройства и «поделиться доступом». Гостю
@@ -577,9 +590,13 @@ type AddItem = (
 function buildMenu(
   transport?: Transport,
   onPickAgent?: () => void,
+  layout: MenuLayout = 'menu',
 ): { el: HTMLElement; teardown: () => void } {
   const wrap = document.createElement('div');
-  wrap.className = 'th-menu';
+  wrap.className = layout === 'bar' ? 'th-menu th-menu--bar' : 'th-menu';
+  // Ряд частых действий (только раскладка `bar`).
+  const row = document.createElement('div');
+  row.className = 'th-menu__row';
 
   const trigger = iconButton('dots', t('header.menu'), () => {
     const open = wrap.classList.toggle('is-open');
@@ -603,22 +620,36 @@ function buildMenu(
     item.className = 'th-menu__item';
     item.setAttribute('role', 'menuitem');
     item.append(svgIcon(iconName), menuLabel(label));
-    // Подсказка нужна там, где меню показано одними иконками (шапка сессии).
+    // Подсказка нужна там, где пункт показан одной иконкой (ряд в шапке сессии).
     item.title = label;
     item.addEventListener('click', () => {
       if (!opts.keepOpen) closeMenu();
       onClick(item);
     });
-    pop.append(item);
+    (layout === 'bar' && opts.primary ? row : pop).append(item);
     return item;
   };
+  /** Частое действие: в раскладке `bar` встаёт иконкой в ряд. */
+  const addPrimary: AddItem = (iconName, label, onClick, opts = {}) =>
+    addItem(iconName, label, onClick, { ...opts, primary: true });
 
+  /** Граница группы — в списке и в ряду. Пустых и двойных границ не ставит. */
   const addSep = (): void => {
-    const sep = document.createElement('div');
-    sep.className = 'th-menu__sep';
-    sep.setAttribute('role', 'separator');
-    pop.append(sep);
+    for (const target of layout === 'bar' ? [row, pop] : [pop]) {
+      const last = target.lastElementChild;
+      if (!last || last.classList.contains('th-menu__sep')) continue;
+      const sep = document.createElement('div');
+      sep.className = 'th-menu__sep';
+      sep.setAttribute('role', 'separator');
+      target.append(sep);
+    }
   };
+
+  // Группы идут в одном порядке в обеих раскладках: работа с беседами, вид, агент и
+  // связь, доступ. Пункт, зависящий от возможности агента (ADR 0018), встаёт на своё
+  // место сразу, но скрытым — и показывается ответом обмена, не сдвигая соседей.
+  const guest = !!transport?.clientScope;
+  let stopCaffeine = (): void => {};
 
   // — Выбор агента (только remote): переключиться на другой сопряжённый агент.
   if (onPickAgent) {
@@ -626,67 +657,60 @@ function buildMenu(
     addSep();
   }
 
-  // — Тема (тумблер): иконка и подпись отражают, куда переключит клик.
+  // — Беседы: поиск по лентам всех сессий и расход.
+  if (transport) {
+    const tr = transport;
+    const search = addPrimary('search', t('feedall.title'), () => openFeedSearch(tr));
+    const usage = addPrimary('chart', t('usage.title'), () => openUsage(tr));
+    search.hidden = true;
+    usage.hidden = true;
+    void whenCap('feed', tr).then((ok) => (search.hidden = !ok));
+    void whenCap('usage', tr).then((ok) => (usage.hidden = !ok));
+    addSep();
+  }
+
+  // — Вид: параметры терминала, тема (тумблер: иконка и подпись говорят, куда
+  //   переключит клик), язык. setLang перерисует приложение (onLangChange) — меню
+  //   пересоберётся уже на новом языке, обновлять пункт на месте не нужно.
+  addPrimary('sliders', t('termview.title'), () => openTermSettings());
   const themeLabel = (): string => (currentTheme() === 'dark' ? t('header.themeToLight') : t('header.themeToDark'));
   const themeIcon = (): string => (currentTheme() === 'dark' ? 'moon' : 'sun');
-  const themeItem = addItem(
+  const themeItem = addPrimary(
     themeIcon(),
     themeLabel(),
     () => {
       toggleTheme();
       themeItem.replaceChildren(svgIcon(themeIcon()), menuLabel(themeLabel()));
+      themeItem.title = themeLabel();
     },
     { keepOpen: true },
   );
-
-  // — Поиск по лентам всех сессий: только если агент умеет ленту (ADR 0018).
-  if (transport) {
-    const tr = transport;
-    void whenCap('feed', tr).then((ok) => {
-      if (!ok) return;
-      const item = addItem('search', t('feedall.title'), () => openFeedSearch(tr));
-      pop.insertBefore(item, pop.firstChild);
-    });
-  }
-
-  // — Расход по сессиям: только если агент умеет его считать.
-  if (transport) {
-    const tr = transport;
-    void whenCap('usage', tr).then((ok) => {
-      if (!ok) return;
-      const item = addItem('pulse', t('usage.title'), () => openUsage(tr));
-      pop.insertBefore(item, pop.firstChild);
-    });
-  }
-
-  // — Вид терминала (шрифт, интервал, фон): окно поверх, меню закрывается.
-  addItem('sliders', t('termview.title'), () => openTermSettings());
-
-  // — Язык (RU↔EN). setLang перерисует приложение (onLangChange) — меню
-  //   пересоберётся уже на новом языке, обновлять пункт на месте не нужно.
   addItem(
-    'globe',
+    'lang',
     `${t('header.language')}: ${getLang().toUpperCase()}`,
     () => setLang(getLang() === 'ru' ? 'en' : 'ru'),
     { keepOpen: true },
   );
+  addSep();
 
-  // — Диагностика (статус агента и связи с relay).
-  addItem('pulse', t('diag.title'), () => (location.hash = '#/diag'));
-
-  let stopCaffeine = (): void => {};
-
-  // Transport-пункты — только при связи с агентом и только владельцу (у гостя
-  // ограниченный scope; управление уведомлениями/сном/доступом ему не даём).
-  const guest = !!transport?.clientScope;
+  // — Агент и связь: уведомления и «не давать засыпать» — только при связи с агентом и
+  //   только владельцу (у гостя ограниченный scope); сведения о подключении — всем.
   if (transport && !guest) {
-    if (notificationsSupported()) addNotificationsItem(addItem, transport);
-    stopCaffeine = addCaffeineItem(addItem, transport);
+    if (notificationsSupported()) addNotificationsItem(addPrimary, transport);
+    stopCaffeine = addCaffeineItem(addPrimary, transport);
+  }
+  addItem('info', t('diag.title'), () => openDiag());
+
+  // — Доступ: устройства и «поделиться» — владельцу.
+  if (transport && !guest) {
     addSep();
     addItem('devices', t('header.devices'), () => openDevicesModal(transport));
     addItem('share', t('header.share'), () => openShareDialog(transport));
   }
+  // Ряд не должен кончаться границей.
+  if (row.lastElementChild?.classList.contains('th-menu__sep')) row.lastElementChild.remove();
 
+  if (layout === 'bar') wrap.append(row);
   wrap.append(trigger, pop);
   const onDocClick = (e: MouseEvent): void => {
     if (!wrap.contains(e.target as Node)) closeMenu();

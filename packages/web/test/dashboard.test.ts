@@ -35,23 +35,39 @@ describe('renderSessionCard', () => {
   it('бейдж команды claude получает акцентный класс', () => {
     const claude = renderSessionCard(fixture({ command: 'claude' }), t, { now: NOW });
     const badge = claude.querySelector('.th-badge');
-    expect(badge?.textContent).toContain('claude');
+    // Бейдж называет агента: Claude именует процесс номером версии, команда тут немая.
+    expect(badge?.textContent).toBe('Claude Code');
     expect(badge?.classList.contains('th-badge--claude')).toBe(true);
+    const versioned = renderSessionCard(fixture({ command: '2.1.317' }), t, { now: NOW });
+    expect(versioned.querySelector('.th-badge')?.textContent).toBe('Claude Code');
 
     const zsh = renderSessionCard(fixture({ command: 'zsh' }), t, { now: NOW });
     expect(zsh.querySelector('.th-badge')?.classList.contains('th-badge--claude')).toBe(false);
   });
 
   it('значок звонка показывается только при bell', () => {
-    expect(renderSessionCard(fixture({ bell: true }), t, { now: NOW }).querySelector('.th-bell')).not.toBeNull();
-    expect(renderSessionCard(fixture({ bell: false }), t, { now: NOW }).querySelector('.th-bell')).toBeNull();
+    expect(renderSessionCard(fixture({ bell: true }), t, { now: NOW }).querySelector('.th-card__bell')).not.toBeNull();
+    expect(renderSessionCard(fixture({ bell: false }), t, { now: NOW }).querySelector('.th-card__bell')).toBeNull();
   });
 
-  const nameText = (s: Partial<SessionInfo>): string | undefined =>
-    renderSessionCard(fixture(s), t, { now: NOW }).querySelector('.th-card__name-text')?.textContent ?? undefined;
+  // Шапка карточки — та же, что у вкладки (session-view): заголовок и tmux-имя отдельно.
+  const headText = (s: Partial<SessionInfo>): Array<string | undefined> => {
+    const card = renderSessionCard(fixture(s), t, { now: NOW });
+    return [card.querySelector('.th-card__name')?.textContent ?? undefined, card.querySelector('.th-card__sub')?.textContent ?? undefined];
+  };
+  const nameText = (s: Partial<SessionInfo>): string | undefined => headText(s)[0];
 
-  it('имя: заголовок терминала + tmux-имя в скобках, индикатор срезан', () => {
-    expect(nameText({ name: 'main', title: '⠋ Рефакторинг' })).toBe('Рефакторинг (main)');
+  it('имя: заголовок терминала крупно, tmux-имя второй строкой, индикатор срезан', () => {
+    expect(headText({ name: 'main', title: '⠋ Рефакторинг' })).toEqual(['Рефакторинг', 'main']);
+    expect(headText({ name: 'main', title: '' })).toEqual(['main', undefined]);
+  });
+
+  it('шапка карточки и вкладки — один вид: метка агента с подсказкой', () => {
+    const card = renderSessionCard(fixture({ command: 'codex' }), t, { now: NOW });
+    const mark = card.querySelector<HTMLElement>('.th-card__head .th-tab__agent')!;
+    expect(mark.textContent).toBe('X');
+    expect(mark.title).toBe('Codex');
+    expect(card.querySelector('.th-sess__label.th-card__label')).not.toBeNull();
   });
 
   it('имя: только tmux-имя, если заголовок пуст или совпадает с именем', () => {
@@ -76,10 +92,9 @@ describe('renderSessionCard', () => {
 
   it('точка активности рисуется перед именем при showActivity', () => {
     const card = renderSessionCard(fixture(), t, { now: NOW, showActivity: true });
-    const name = card.querySelector<HTMLElement>('.th-card__name')!;
-    expect(name.querySelector('.th-card__activity')).not.toBeNull();
-    // точка — первый ребёнок имени (перед текстом)
-    expect(name.firstElementChild!.classList.contains('th-card__activity')).toBe(true);
+    const dot = card.querySelector<HTMLElement>('.th-card__head .th-card__activity')!;
+    // точка — прямо перед подписью
+    expect(dot.nextElementSibling!.classList.contains('th-card__label')).toBe(true);
   });
 
   it('без showActivity точки нет', () => {
@@ -106,7 +121,7 @@ describe('updateSessionCard', () => {
     const card = renderSessionCard(fixture({ command: 'zsh', attached: 0, bell: false }), t, { now: NOW });
     const badgeBefore = card.querySelector('.th-badge');
     expect(card.querySelector('.th-attached')).toBeNull();
-    expect(card.querySelector('.th-bell')).toBeNull();
+    expect(card.querySelector('.th-card__bell')).toBeNull();
 
     updateSessionCard(
       card,
@@ -117,22 +132,22 @@ describe('updateSessionCard', () => {
 
     // Тот же самый узел бейджа — карточка не пересоздана.
     expect(card.querySelector('.th-badge')).toBe(badgeBefore);
-    expect(badgeBefore?.textContent).toBe('claude');
+    expect(badgeBefore?.textContent).toBe('Claude Code');
     expect(badgeBefore?.classList.contains('th-badge--claude')).toBe(true);
     expect(card.querySelector('.th-card__time')?.textContent).toBe('2 ч назад');
     expect(card.querySelector('.th-attached')?.textContent).toBe('2');
-    expect(card.querySelector('.th-bell')).not.toBeNull();
+    expect(card.querySelector('.th-card__bell')).not.toBeNull();
   });
 
   it('снимает attached и bell при сбросе флагов', () => {
     const card = renderSessionCard(fixture({ command: 'claude', attached: 3, bell: true }), t, { now: NOW });
     expect(card.querySelector('.th-attached')).not.toBeNull();
-    expect(card.querySelector('.th-bell')).not.toBeNull();
+    expect(card.querySelector('.th-card__bell')).not.toBeNull();
 
     updateSessionCard(card, fixture({ command: 'zsh', attached: 0, bell: false }), t, NOW);
 
     expect(card.querySelector('.th-attached')).toBeNull();
-    expect(card.querySelector('.th-bell')).toBeNull();
+    expect(card.querySelector('.th-card__bell')).toBeNull();
     const badge = card.querySelector('.th-badge');
     expect(badge?.textContent).toBe('zsh');
     expect(badge?.classList.contains('th-badge--claude')).toBe(false);

@@ -3,7 +3,7 @@
 // не отдаёт, поэтому строка берётся из последнего кадра состояния (term-mode.ts).
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mountDiag } from '../src/diag';
+import { mountDiag, openDiag } from '../src/diag';
 import { setLang, t } from '../src/i18n';
 import { noteTerminalMode, setTerminalModeRequest } from '../src/term-mode';
 
@@ -60,5 +60,16 @@ describe('диагностика — способ подключения тер�
 
     expect(row(t('diag.terminalMode'))).toBe('—');
     teardown();
+  });
+
+  it('из меню сведения открываются окном поверх экрана, а не отдельной страницей', async () => {
+    location.hash = '#/term/work';
+    openDiag();
+    const box = document.querySelector('.th-overlay .th-diag-modal')!;
+    expect(box).not.toBeNull();
+    await vi.waitFor(() => expect(box.querySelector('.th-diag__row')).not.toBeNull());
+    // Экран под окном остался тем же: адрес не сменился, назад идти некуда и незачем.
+    expect(location.hash).toBe('#/term/work');
+    expect(root.children.length).toBe(0);
   });
 });

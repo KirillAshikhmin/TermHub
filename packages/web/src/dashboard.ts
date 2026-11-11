@@ -12,9 +12,9 @@ import { playBell } from './sound';
 import { formatRelativeTime } from './time';
 import type { Transport } from './transport';
 import { activity } from './activity';
-import { makeActivityDot } from './activity-dot';
 import { termHash } from './routes';
 import { previewOf, refreshPreviews } from './session-preview';
+import { AGENT_MARK, clearGroupHeaders, groupSessions, syncGroupHeaders, syncSessionHead } from './session-view';
 import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
@@ -29,16 +29,18 @@ function basename(path: string): string {
   return parts.length ? parts[parts.length - 1]! : path;
 }
 
-/** true для команды claude (акцентный бейдж). */
-function isClaude(command: string): boolean {
-  return sessionAgent(command) === 'claude';
-}
-
-/** Имя карточки: заголовок терминала (Claude его меняет), а в скобках — tmux-имя
- *  сессии, если отличается. Индикатор активности из заголовка срезан (он — точкой). */
+/** Полное имя для подсказок и скринридера: заголовок терминала и tmux-имя в скобках. */
 function sessionDisplayName(session: SessionInfo): string {
   const term = sessionTitleText(session.title);
   return term && term !== session.name ? `${term} (${session.name})` : session.name;
+}
+
+/** Бейдж подвала: имя агента, если он узнан (Claude называет процесс номером версии —
+ *  сама команда тут ничего не говорит), иначе команда панели. */
+function syncBadge(badge: HTMLElement, command: string): void {
+  const agent = sessionAgent(command);
+  badge.textContent = agent ? AGENT_MARK[agent].name : command;
+  badge.className = agent ? `th-badge th-badge--${agent}` : 'th-badge';
 }
 
 export interface CardOptions {
@@ -90,17 +92,6 @@ function setCardStatus(card: HTMLElement, translate: TFn, working: boolean, wait
   el.textContent = translate(state === 'waiting' ? 'card.statusWaiting' : 'card.statusWorking');
 }
 
-/** Точка активности — первый элемент в .th-card__name (перед текстом имени). */
-function setCardActivityDot(name: HTMLElement | null, translate: TFn, show: boolean): void {
-  if (!name) return;
-  const dot = name.querySelector<HTMLElement>('.th-card__activity');
-  if (show) {
-    if (!dot) name.prepend(makeActivityDot('th-card__activity', translate('card.activity')));
-  } else {
-    dot?.remove();
-  }
-}
-
 /** Чистый рендер карточки сессии из SessionInfo. */
 export function renderSessionCard(session: SessionInfo, translate: TFn, opts: CardOptions = {}): HTMLElement {
   const now = opts.now ?? Date.now();
@@ -114,14 +105,12 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   const top = document.createElement('div');
   top.className = 'th-card__top';
 
-  const name = document.createElement('h3');
-  name.className = 'th-card__name';
-  const nameText = document.createElement('span');
-  nameText.className = 'th-card__name-text';
-  nameText.textContent = sessionDisplayName(session);
-  name.append(nameText);
-  setCardActivityDot(name, translate, opts.showActivity ?? false);
-  top.append(name);
+  // Шапка карточки — тот же вид сессии, что у вкладки (session-view): метка агента,
+  // точка активности, заголовок и tmux-имя, звонок. Подробности — ниже.
+  const head = document.createElement('div');
+  head.className = 'th-card__head';
+  syncSessionHead(head, 'th-card', session, translate, opts.showActivity ?? false);
+  top.append(head);
 
   // Меню управления (rename/kill) — только владельцу. Гость (scope) колбэков не
   // получает (dashboard их не передаёт) → меню не рисуем вовсе.
@@ -207,8 +196,7 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
   foot.className = 'th-card__foot';
 
   const badge = document.createElement('span');
-  badge.className = isClaude(session.command) ? 'th-badge th-badge--claude' : 'th-badge';
-  badge.textContent = session.command;
+  syncBadge(badge, session.command);
   foot.append(badge);
 
   const time = document.createElement('span');
@@ -222,14 +210,6 @@ export function renderSessionCard(session: SessionInfo, translate: TFn, opts: Ca
     attached.title = translate('card.attached', { n: session.attached });
     attached.textContent = `${session.attached}`;
     foot.append(attached);
-  }
-
-  if (session.bell) {
-    const bell = document.createElement('span');
-    bell.className = 'th-bell';
-    bell.setAttribute('aria-label', translate('card.bell'));
-    bell.textContent = '🔔';
-    foot.append(bell);
   }
 
   card.append(foot);
@@ -266,17 +246,12 @@ export function updateSessionCard(
 ): void {
   setCardPreview(card, preview);
   setCardStatus(card, translate, showActivity, session.bell);
-  setCardActivityDot(card.querySelector<HTMLElement>('.th-card__name'), translate, showActivity);
-
-  // Имя-текст меняется вслед за заголовком терминала (Claude его правит).
-  const nameText = card.querySelector<HTMLElement>('.th-card__name-text');
-  if (nameText) nameText.textContent = sessionDisplayName(session);
+  const head = card.querySelector<HTMLElement>('.th-card__head');
+  if (head) syncSessionHead(head, 'th-card', session, translate, showActivity);
+  card.setAttribute('aria-label', `${translate('card.open')}: ${sessionDisplayName(session)}`);
 
   const badge = card.querySelector<HTMLElement>('.th-badge');
-  if (badge) {
-    badge.textContent = session.command;
-    badge.className = isClaude(session.command) ? 'th-badge th-badge--claude' : 'th-badge';
-  }
+  if (badge) syncBadge(badge, session.command);
 
   const time = card.querySelector<HTMLElement>('.th-card__time');
   if (time) time.textContent = formatRelativeTime(session.activityTs, translate, now);
@@ -297,20 +272,6 @@ export function updateSessionCard(
     attached.textContent = `${session.attached}`;
   } else {
     attached?.remove();
-  }
-
-  // bell — всегда последний элемент подвала.
-  let bell = foot.querySelector<HTMLElement>('.th-bell');
-  if (session.bell) {
-    if (!bell) {
-      bell = document.createElement('span');
-      bell.className = 'th-bell';
-      bell.setAttribute('aria-label', translate('card.bell'));
-      bell.textContent = '🔔';
-      foot.append(bell);
-    }
-  } else {
-    bell?.remove();
   }
 }
 
@@ -445,7 +406,7 @@ export function mountDashboard(
   /** Список в текущем порядке. 🔔-режим смотрит на непрочитанные звонки, ручной —
    *  на сохранённый порядок (перечитываем каждый раз: его меняют кнопками меню). */
   const ordered = (sessions: SessionInfo[]): SessionInfo[] =>
-    sortSessions(sessions, sortMode, bellUnseen, readManualOrder());
+    groupSessions(sortSessions(sessions, sortMode, bellUnseen, readManualOrder()));
 
   /** Сдвиг карточки в ручном порядке на одну позицию. */
   const move = (name: string, delta: -1 | 1): void => {
@@ -544,7 +505,12 @@ export function mountDashboard(
     }
     // Порядок сетки приводим к списку сессий, только если ни одна карточка не
     // «занята» — перемещение узла сбросило бы открытое меню/фокус.
-    if (![...cards.values()].some(isCardBusy)) reorderGrid(grid, sessions, cards);
+    if (![...cards.values()].some(isCardBusy)) {
+      // Заголовки проектов — не карточки: снимаем перед перестановкой и ставим заново.
+      clearGroupHeaders(grid);
+      reorderGrid(grid, sessions, cards);
+      syncGroupHeaders(grid, sessions.map((s) => s.name), (name) => cards.get(name));
+    }
   };
 
   const reactToBells = (sessions: SessionInfo[]): void => {

@@ -108,6 +108,7 @@ export function mountSplit(root: HTMLElement, sessions: string[], transport: Tra
         head.mark.hidden = !agent;
         if (agent) {
           head.pane.dataset.agent = agent;
+          head.mark.dataset.agent = agent;
           head.mark.textContent = AGENT_MARK[agent].letter;
           head.mark.title = AGENT_MARK[agent].name;
         } else delete head.pane.dataset.agent;
