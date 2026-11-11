@@ -252,6 +252,15 @@ const ru: Dict = {
     tabsTop: 'Сверху',
     tabsSide: 'Сбоку, по проектам',
   },
+  paste: {
+    uploading: 'Загружаю изображение…',
+    done: 'Изображение вставлено',
+    failed: 'Не удалось вставить изображение: {error}',
+    empty: 'Буфер обмена пуст',
+    denied: 'Нет доступа к буферу обмена — разрешите его в браузере',
+    unavailable: 'Буфер обмена доступен только по HTTPS или с localhost',
+    readOnly: 'Доступ только для просмотра — вставка недоступна',
+  },
   quickkeys: {
     title: 'Быстрые клавиши',
     left: 'Влево',
@@ -264,6 +273,7 @@ const ru: Dict = {
     enterSends: 'Отправлять по Enter',
     search: 'Поиск по терминалу',
     compose: 'Строка ввода',
+    paste: 'Вставить из буфера',
     hold: '{key}; удержание — {held}',
   },
   compose: {
@@ -781,6 +791,15 @@ const en: Dict = {
     tabsTop: 'On top',
     tabsSide: 'Sidebar, by project',
   },
+  paste: {
+    uploading: 'Uploading the image…',
+    done: 'Image pasted',
+    failed: 'Could not paste the image: {error}',
+    empty: 'The clipboard is empty',
+    denied: 'No access to the clipboard — allow it in the browser',
+    unavailable: 'The clipboard is available only over HTTPS or from localhost',
+    readOnly: 'View-only access — pasting is not available',
+  },
   quickkeys: {
     title: 'Quick keys',
     left: 'Left',
@@ -793,6 +812,7 @@ const en: Dict = {
     enterSends: 'Send on Enter',
     search: 'Search terminal',
     compose: 'Compose bar',
+    paste: 'Paste from clipboard',
     hold: '{key}; hold for {held}',
   },
   compose: {

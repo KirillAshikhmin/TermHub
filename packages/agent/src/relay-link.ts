@@ -92,6 +92,7 @@ import { buildSessionName } from './gradle.js';
 import { sessionFeed, sessionUsage, type FeedResult } from './session-feed.js';
 import type { UsageReader } from './transcript-usage.js';
 import { feedPage, feedSession, type FeedReader } from './feed-request.js';
+import { PasteStore } from './paste-image.js';
 import { VcsService } from './vcs.js';
 
 /** TTL кода пейринга — 5 минут (совпадает с relay). */
@@ -204,6 +205,7 @@ export class RelayLink {
   private readonly caffeinate?: CaffeinateCtl;
   private readonly push?: PushCtl;
   private readonly files?: FilesCtl;
+  private readonly pastes: PasteStore;
   private readonly vcs?: VcsService;
   private readonly roots: string[];
   private readonly socketName?: string;
@@ -270,8 +272,11 @@ export class RelayLink {
     /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
     feed?: FeedReader;
     usage?: UsageReader;
+    /** Приём картинок из буфера клиента; по умолчанию — каталог `~/.termhub/paste`. */
+    pastes?: PasteStore;
   }) {
     this.url = opts.url;
+    this.pastes = opts.pastes ?? new PasteStore();
     this.dial = opts.dial ?? {};
     this.identity = opts.identity;
     this.authorized = opts.authorized;
@@ -819,10 +824,15 @@ export class RelayLink {
         case FrameType.FileStat:
         case FrameType.FileChunk:
         case FrameType.Repo:
-        case FrameType.FileOp:
           // Чтение — с правом files; мутации (repo commit, файловые move/copy/remove)
           // дополнительно требуют write (в doRepo/doFileOp).
           if (!scope.files) return;
+          break;
+        case FrameType.FileOp:
+          // Тем же кадром едет картинка из буфера (paste-chunk): ей хватает права ввода,
+          // право files она не требует. Что именно просят, видно только в payload —
+          // поэтому оба права проверяет doFileOp, а сюда пускают с любым из двух.
+          if (!scope.files && !scope.write) return;
           break;
         case FrameType.Feed:
           // Лента гостю — наравне с хозяином: write она не требует (ничего не меняет),
@@ -1075,6 +1085,23 @@ export class RelayLink {
     }
     const id = typeof req.id === 'number' ? req.id : 0;
     try {
+      if (String(req.action) === 'paste-chunk') {
+        // Картинка из буфера клиента: каталог назначения свой и от запроса не зависит,
+        // поэтому нужно ровно то право, что и на ввод в терминал.
+        if (s.scope && !s.scope.write) throw new Error('no write permission');
+        const offset = Number(req.offset ?? 0);
+        if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid offset');
+        const result = await this.pastes.chunk(
+          String(req.upload ?? ''),
+          String(req.type ?? ''),
+          Buffer.from(String(req.data ?? ''), 'base64'),
+          offset,
+          req.last === true,
+        );
+        this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
+        return;
+      }
+      if (s.scope && !s.scope.files) throw new Error('no files permission');
       if (!this.files) throw new Error('file browser unavailable');
       if (String(req.action) !== 'stat-full' && s.scope && !s.scope.write) {
         throw new Error('no write permission');

@@ -109,6 +109,10 @@ class ScriptedTransport implements Transport {
     return Promise.resolve();
   }
 
+  pasteImage(_blob: Blob): Promise<string> {
+    return Promise.resolve('');
+  }
+
   repo<T = unknown>(_action: string, _params: Record<string, unknown>): Promise<T> {
     return Promise.reject(new Error('repo not scripted'));
   }

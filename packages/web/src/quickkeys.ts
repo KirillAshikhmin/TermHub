@@ -1,13 +1,14 @@
 // Панель быстрых клавиш терминала: крупные тач-кнопки, которые шлют управляющие
 // последовательности в pty. Два ряда: первый — клавиши (Esc, Tab, стрелки, Enter; на
 // телефоне он обязан помещаться в одну строку), второй — сочетания с Shift (⇧Tab, ⇧←)
-// слева и инструменты (выделение, поиск, тумблеры). Ctrl+C — удержание Esc: отдельной кнопки у него нет, и случайным
+// слева, за ними вставка из буфера и инструменты (выделение, поиск, тумблеры). Ctrl+C — удержание Esc: отдельной кнопки у него нет, и случайным
 // тапом команду не оборвать; Shift+Enter (перенос строки) — удержание Enter. Размер
 // шрифта и выбор «Enter отправляет / переносит» — в окне настроек.
 // Карта кнопка→байты вынесена чистой структурой (SEND_KEYS) — её и покрывает тест;
 // DOM-монтаж отделён и от него не зависит.
 
 import type { TFn } from './i18n';
+import { svgIcon } from './ui';
 
 /** Описание кнопки: id (для теста), видимая подпись, отправляемая строка байт. */
 export interface QuickKey {
@@ -67,6 +68,8 @@ export interface QuickKeysHandlers {
   keyboardEnabled: boolean;
   /** Тумблер режима выделения текста (тач-драг выделяет вместо скролла). */
   onSelectToggle: (enabled: boolean) => void;
+  /** Вставить из буфера обмена: текст или картинку (term-paste.ts). */
+  onPaste: () => void;
   /** Открыть панель поиска по терминалу. */
   onSearch: () => void;
   /** Начальное состояние тумблера выделения. */
@@ -190,6 +193,14 @@ export function mountQuickKeys(h: QuickKeysHandlers): HTMLElement {
     (key.second ? tools : keys).append(btn);
   }
   panel.append(keys);
+
+  // Вставка из буфера — сразу за сочетаниями с Shift: на телефоне сочетания клавиш
+  // «вставить» нет, а картинку иначе в агента не передать.
+  const paste = quickKeyButton('', h.t('quickkeys.paste'), () => h.onPaste());
+  paste.classList.add('th-qk__key--paste');
+  paste.title = h.t('quickkeys.paste');
+  paste.append(svgIcon('paste'));
+  tools.append(paste);
 
   // Режим выделения (тач-драг → выделение) + копирование выделенного.
   const selectGroup = document.createElement('div');

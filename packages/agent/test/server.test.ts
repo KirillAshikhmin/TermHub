@@ -8,6 +8,7 @@ import { WebSocket } from 'ws';
 import { issueCookie, checkCookie, LoginRateLimit } from '../src/auth.js';
 import { AgentServer } from '../src/server.js';
 import { FileService } from '../src/files.js';
+import { PasteStore } from '../src/paste-image.js';
 import { hashPassword } from '../src/config.js';
 import type { TermhubConfig, DeviceScope } from '../src/config.js';
 import type { SessionService } from '../src/sessions.js';
@@ -70,6 +71,7 @@ async function start(opts: {
   relayStatus?: () => { connected: boolean; agentId: string; clients: number; caps: string[]; capsAt: number } | null;
   feed?: (session: string, opts: FeedOptions) => Promise<FeedResult>;
   usage?: (session: string) => Promise<UsageResult>;
+  pastes?: PasteStore;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -83,6 +85,7 @@ async function start(opts: {
     relayStatus: opts.relayStatus,
     feed: opts.feed,
     usage: opts.usage,
+    pastes: opts.pastes,
   });
   const port = await server.listen();
   return { server, base: `http://127.0.0.1:${port}` };
@@ -656,6 +659,35 @@ describe('AgentServer — auth/mode/login (стаб SessionService)', () => {
       expect(await res.text()).toContain('build the web bundle');
     } finally {
       fs.rmSync(emptyStatic, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('AgentServer — POST /api/paste-image', () => {
+  it('картинка из буфера ложится в каталог вставок, ответ — её путь; без cookie — 401', async () => {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-paste-lan-')), 'paste');
+    const s = await start({ pastes: new PasteStore({ dir }) });
+    try {
+      const anon = await fetch(`${s.base}/api/paste-image?type=image/png`, { method: 'POST', body: 'PNG' });
+      expect(anon.status).toBe(401);
+      const res = await fetch(`${s.base}/api/paste-image?type=image%2Fpng`, {
+        method: 'POST',
+        headers: { cookie: authCookie() },
+        body: 'PNGDATA',
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { path: string };
+      expect(path.dirname(body.path)).toBe(dir);
+      expect(fs.readFileSync(body.path, 'utf8')).toBe('PNGDATA');
+      const bad = await fetch(`${s.base}/api/paste-image?type=text%2Fhtml`, {
+        method: 'POST',
+        headers: { cookie: authCookie() },
+        body: 'x',
+      });
+      expect(bad.status).toBe(400);
+    } finally {
+      await s.server.close();
+      fs.rmSync(path.dirname(dir), { recursive: true, force: true });
     }
   });
 });

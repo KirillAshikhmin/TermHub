@@ -307,6 +307,24 @@ export const api = {
       xhr.addEventListener('abort', () => reject(new Error('upload aborted')));
       xhr.send(file);
     }),
+  /** Картинка из буфера: тело — сам файл, ответ — путь на хосте (см. term-paste.ts). */
+  pasteImage: async (blob: Blob): Promise<string> => {
+    let res: Response;
+    try {
+      res = await fetch(`/api/paste-image?type=${encodeURIComponent(blob.type)}`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: blob,
+      });
+    } catch (err) {
+      throw new ApiError(0, err instanceof Error ? err.message : 'network error');
+    }
+    const body = (await res.json().catch(() => ({}))) as { path?: unknown; error?: unknown };
+    if (!res.ok || typeof body.path !== 'string') {
+      throw new ApiError(res.status, typeof body.error === 'string' ? body.error : res.statusText);
+    }
+    return body.path;
+  },
   share: (scope?: DeviceScope) => request<ShareInfo>('POST', '/api/share', { body: { scope } }),
   devices: () => request<DeviceInfo[]>('GET', '/api/devices'),
   revoke: (fingerprint: string) => request<void>('DELETE', `/api/devices/${encodeURIComponent(fingerprint)}`),

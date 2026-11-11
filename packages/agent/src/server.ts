@@ -28,6 +28,7 @@ import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
 import { sessionFeed, sessionUsage } from './session-feed.js';
 import type { UsageReader } from './transcript-usage.js';
 import { feedPage, type FeedReader } from './feed-request.js';
+import { PasteStore } from './paste-image.js';
 import { AGENT_CAPS, intersect, parseCaps } from '@termhub/protocol';
 
 /** Сервис веб-push (реализация — Task 9). */
@@ -165,6 +166,7 @@ export class AgentServer {
   private readonly config: TermhubConfig;
   private readonly sessions: SessionService;
   private readonly files?: FileService;
+  private readonly pastes: PasteStore;
   private readonly vcs?: VcsService;
   private readonly onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
   private readonly relayStatus?: () => {
@@ -214,8 +216,11 @@ export class AgentServer {
     /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
     feed?: FeedReader;
     usage?: UsageReader;
+    /** Приём картинок из буфера клиента; по умолчанию — каталог `~/.termhub/paste`. */
+    pastes?: PasteStore;
   }) {
     this.config = opts.config;
+    this.pastes = opts.pastes ?? new PasteStore();
     this.sessions = opts.sessions;
     this.files = opts.files;
     this.vcs = opts.vcs;
@@ -414,6 +419,7 @@ export class AgentServer {
     if (method === 'POST' && pathname === '/api/files/op') return this.filesOp(req, res);
     if (method === 'POST' && pathname === '/api/gradle') return this.gradleApi(req, res);
     if (method === 'POST' && pathname === '/api/files/upload') return this.fileUpload(req, res, url);
+    if (method === 'POST' && pathname === '/api/paste-image') return this.pasteImage(req, res, url);
     if (method === 'POST' && pathname === '/api/push/subscribe') return this.pushSubscribe(req, res);
     if (method === 'GET' && pathname === '/api/devices') {
       const list = loadAuthorized().map((d) => ({ name: d.name, fingerprint: d.fingerprint, addedAt: d.addedAt }));
@@ -600,6 +606,17 @@ export class AgentServer {
     try {
       await this.files.uploadStream(url.searchParams.get('root') ?? '', url.searchParams.get('path') ?? '', req);
       this.sendJson(res, 200, { ok: true });
+    } catch (err) {
+      this.sendJson(res, 400, { error: (err as Error).message });
+    }
+  }
+
+  /** Картинка из буфера клиента: тело запроса — сам файл, ответ — путь на хосте, который
+   *  клиент вставит в терминал (paste-image.ts). */
+  private async pasteImage(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    try {
+      const file = await this.pastes.saveStream(url.searchParams.get('type') ?? '', req);
+      this.sendJson(res, 200, { path: file });
     } catch (err) {
       this.sendJson(res, 400, { error: (err as Error).message });
     }

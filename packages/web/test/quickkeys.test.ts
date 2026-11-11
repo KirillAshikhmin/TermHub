@@ -45,6 +45,7 @@ describe('quickkeys — раскладка и удержание', () => {
     onComposeToggle: () => {},
     composeEnabled: false,
     onSearch: () => {},
+    onPaste: () => {},
     selectEnabled: false,
     t,
   };
@@ -102,6 +103,7 @@ describe('quickkeys — чекбокс клавиатуры', () => {
     onComposeToggle: () => {},
     composeEnabled: false,
     onSearch: () => {},
+    onPaste: () => {},
     selectEnabled: false,
     t,
     ...over,
@@ -146,6 +148,7 @@ describe('quickkeys — выделение и копирование', () => {
     onComposeToggle: () => {},
     composeEnabled: false,
     onSearch: () => {},
+    onPaste: () => {},
     selectEnabled: false,
     t,
     ...over,
@@ -160,6 +163,22 @@ describe('quickkeys — выделение и копирование', () => {
     toggle.click();
     expect(onSelectToggle).toHaveBeenCalledWith(true);
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('кнопка вставки стоит во втором ряду сразу за сочетаниями с Shift', () => {
+    setLang('ru');
+    const onPaste = vi.fn();
+    const panel = mountQuickKeys(handlers({ onPaste }));
+    const tools = [...panel.querySelector('.th-qk__row--tools')!.children];
+    expect(tools.slice(0, 3).map((el) => el.className.match(/th-qk__key--(\w+)/)?.[1])).toEqual([
+      'shiftTab',
+      'shiftLeft',
+      'paste',
+    ]);
+    const paste = tools[2] as HTMLButtonElement;
+    expect(paste.getAttribute('aria-label')).toBe('Вставить из буфера');
+    paste.click();
+    expect(onPaste).toHaveBeenCalledTimes(1);
   });
 
   it('тумблер compose-строки зовёт onComposeToggle', () => {

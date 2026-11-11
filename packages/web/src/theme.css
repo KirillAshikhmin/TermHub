@@ -2626,6 +2626,15 @@ main.th-gradle {
     gap: 4px;
   }
 }
+.th-qk__key--paste {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.th-qk__key--paste .th-icon {
+  width: 18px;
+  height: 18px;
+}
 /* Enter — справа и чуть шире соседей. */
 .th-qk__row--keys .th-qk__key--enter {
   flex-grow: 1.6;

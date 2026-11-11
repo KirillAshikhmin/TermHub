@@ -118,6 +118,9 @@ export interface Transport {
    *  LAN — потоком одним POST; relay — кусками через E2E. onProgress(0..1).
    *  Существующий файл не перезаписывается (агент отвечает ошибкой). */
   uploadFile(root: string, subpath: string, file: File, onProgress?: (frac: number) => void): Promise<void>;
+  /** Картинка из буфера обмена — файлом на хост; ответ — путь, который вставляют в
+   *  терминал (term-paste.ts). Агент старше этой функции отвечает ошибкой. */
+  pasteImage(blob: Blob): Promise<string>;
   /** Операции VCS (git/svn/hg) над папкой в пределах корня (оба режима). action —
    *  log|show|status|diff|commit; params — {root, path, rev?, file?, files?, message?}. */
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T>;
@@ -385,6 +388,10 @@ export class LanTransport implements Transport {
 
   uploadFile(root: string, subpath: string, file: File, onProgress?: (frac: number) => void): Promise<void> {
     return api.uploadFile(root, subpath, file, onProgress);
+  }
+
+  pasteImage(blob: Blob): Promise<string> {
+    return api.pasteImage(blob);
   }
 
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {

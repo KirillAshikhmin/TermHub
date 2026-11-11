@@ -22,6 +22,7 @@ import { mountSessionTabs, pickNeighbor } from './tabs';
 import { correctMirrorMouse } from './mirror-mouse';
 import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
+import { imageFromPaste, pathForPaste, readClipboard } from './term-paste';
 import {
   noteTerminalMode,
   terminalModeName,
@@ -720,8 +721,53 @@ export function mountTerminal(
   // ещё и явно — страховка от второго \r и от \n в скрытой textarea.
   // Выбор живёт в настройках (term-prefs) и меняется на месте — см. onTermPrefsChange.
   let enterSends = prefs.enterSends;
+  // ── Вставка из буфера (term-paste.ts). Картинка уходит файлом на хост, в терминал
+  // вставляется её путь — агент превращает его во вложение. ──
+  const pasteImage = async (blob: Blob): Promise<void> => {
+    if (readOnly) return toast(t('paste.readOnly'), 'error');
+    toast(t('paste.uploading'));
+    try {
+      const file = await transport.pasteImage(blob);
+      if (disposed) return;
+      term.paste(pathForPaste(file));
+      toast(t('paste.done'));
+    } catch (err) {
+      toast(t('paste.failed', { error: err instanceof Error ? err.message : String(err) }), 'error');
+    }
+  };
+  /** Кнопка «Вставить»: что бы ни лежало в буфере. */
+  const pasteFromClipboard = async (): Promise<void> => {
+    if (readOnly) return toast(t('paste.readOnly'), 'error');
+    const content = await readClipboard();
+    if (content.kind === 'image') return pasteImage(content.blob);
+    if (content.kind === 'text') return term.paste(content.text);
+    toast(t(`paste.${content.kind}`), content.kind === 'empty' ? 'info' : 'error');
+  };
+  // Cmd+V и «Вставить» из меню браузера: событие с картинкой без текста — наше, остальное
+  // (текст) вставляет сам xterm.
+  const onPasteEvent = (e: ClipboardEvent): void => {
+    const image = imageFromPaste(e.clipboardData);
+    if (!image) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void pasteImage(image);
+  };
+  root.addEventListener('paste', onPasteEvent, true);
   term.attachCustomKeyEventHandler((e) => {
     if (!copyController.keyEvent(e)) return false;
+    // Ctrl+V — «вставить картинку» у агентов: они читают буфер хоста, а картинка лежит в
+    // буфере этого устройства. Есть она там — загружаем; нет (или буфер не прочитать) —
+    // клавиша уходит в терминал как была (^V).
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyV') {
+      if (e.type === 'keydown') {
+        void readClipboard().then((content) => {
+          if (content.kind === 'image') void pasteImage(content.blob);
+          else sendData(encoder.encode('\x16'));
+        });
+      }
+      e.preventDefault();
+      return false;
+    }
     const action = enterAction(e, enterSends);
     if (action === 'newline') {
       sendData(encoder.encode('\x1b\r'));
@@ -919,6 +965,7 @@ export function mountTerminal(
     selectEnabled: false,
     onSelectToggle: (enabled) => applySelectMode(enabled),
     onSearch: openSearch,
+    onPaste: () => void pasteFromClipboard(),
     composeEnabled: composeOpen,
     onComposeToggle: (enabled) => {
       composeOpen = enabled;
@@ -1010,6 +1057,7 @@ export function mountTerminal(
       window.removeEventListener('resize', scheduleFit);
       vv?.removeEventListener('resize', scheduleFit);
       vv?.removeEventListener('scroll', scheduleFit);
+      root.removeEventListener('paste', onPasteEvent, true);
       dataDisp.dispose();
       binaryDisp.dispose();
       resizeDisp.dispose();

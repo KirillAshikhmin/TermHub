@@ -1181,6 +1181,29 @@ export class RelayTransport implements Transport {
     } while (offset < file.size);
   }
 
+  /** Картинка из буфера — теми же кусками, что загрузка файла; путь на хосте приходит
+   *  ответом на последний кусок. */
+  async pasteImage(blob: Blob): Promise<string> {
+    const CHUNK = 256 * 1024;
+    const upload = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.padEnd(12, '0');
+    let offset = 0;
+    for (;;) {
+      const buf = new Uint8Array(await blob.slice(offset, offset + CHUNK).arrayBuffer());
+      const last = offset + buf.length >= blob.size;
+      const res = await this.fileOp<{ path?: string } | undefined>('paste-chunk', {
+        upload,
+        type: blob.type,
+        offset,
+        last,
+        data: b64(buf),
+      });
+      offset += buf.length;
+      if (!last) continue;
+      if (typeof res?.path !== 'string') throw new Error('agent returned no path');
+      return res.path;
+    }
+  }
+
   /** У relay нет HTTP — прямого URL нет, тянем через fileBlob (чанки). */
   downloadUrl(): string | null {
     return null;

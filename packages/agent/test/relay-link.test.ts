@@ -36,6 +36,7 @@ import {
 import { startRelay, type RelayHandle } from '../../relay/src/index.js';
 import { RelayLink } from '../src/relay-link.js';
 import { FileService } from '../src/files.js';
+import { PasteStore } from '../src/paste-image.js';
 import { SessionService } from '../src/sessions.js';
 import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
@@ -1012,6 +1013,7 @@ describe('RelayLink — вкладка Gradle через relay', () => {
       roots: [root],
       socketName,
       attach: fakeAttach,
+      pastes: new PasteStore({ dir: path.join(root, 'paste') }),
     });
     gradleLink.start();
   });
@@ -1084,6 +1086,23 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     c.ws.send(c.enc.push(jsonFrame(FrameType.Open, 5, payload)), { binary: true });
     expect((await nextFrame(c)).type).toBe(FrameType.OpenOk);
   }
+
+  it('картинка из буфера: гостю хватает права ввода, файл ложится в каталог вставок', async () => {
+    const data = Buffer.from('PNGDATA');
+    const send = (c: Client, upload: string): Promise<{ result?: unknown; error?: string }> =>
+      fileOp(c, { action: 'paste-chunk', upload, type: 'image/png', offset: 0, last: true, data: data.toString('base64') });
+    const writer = await guestClient({ session: GUEST_SESSION, write: true, files: false });
+    const done = await send(writer, 'upload-guest-1');
+    const file = (done.result as { path: string }).path;
+    expect(path.dirname(file)).toBe(path.join(root, 'paste'));
+    expect(fs.readFileSync(file)).toEqual(data);
+    // Прочие файловые операции такому гостю закрыты — отказом, а не молчанием.
+    expect((await fileOp(writer, { action: 'mkdir', root, path: 'gradle-proj/x' })).error).toBe('no files permission');
+    writer.ws.close();
+    const viewer = await guestClient({ session: GUEST_SESSION, write: false, files: true });
+    expect((await send(viewer, 'upload-guest-2')).error).toBe('no write permission');
+    viewer.ws.close();
+  });
 
   it('гость «только для просмотра» открывает терминал зрителем: размер окна он не задаёт', async () => {
     const readOnly = await guestClient({ session: GUEST_SESSION, write: false, files: false });
