@@ -839,13 +839,14 @@ export class RelayLink {
       case FrameType.Resize: {
         const t = s.terminals.get(frame.channel);
         if (!t) return;
-        let dims: { cols: number; rows: number };
+        let dims: { cols: number; rows: number; claim?: unknown };
         try {
-          dims = frameJson<{ cols: number; rows: number }>(frame);
+          dims = frameJson<{ cols: number; rows: number; claim?: unknown }>(frame);
         } catch {
           return; // битый RESIZE игнорируем, сессию не рвём
         }
-        t.resize(dims.cols, dims.rows);
+        // Поля `claim` у старого клиента нет — он забирал размер всегда, так и остаётся.
+        t.resize(dims.cols, dims.rows, dims.claim !== false);
         return;
       }
       case FrameType.Close: {

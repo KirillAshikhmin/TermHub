@@ -100,7 +100,7 @@ describe('транспорт WebRTC DataChannel', () => {
 
     // оба сообщения больше одного куска канала — проверяется склейка
     // вверх — больше порога буфера канала: очередь обязана дойти и без события «буфер опустел»
-    const up = Buffer.from(Uint8Array.from({ length: 2_500_000 }, (_, i) => (i * 7) & 255));
+    const up = Buffer.from(Uint8Array.from({ length: 1_300_000 }, (_, i) => (i * 7) & 255));
     client.send(up);
     const atAgent = (await agent.inbox.next()) as Buffer;
     expect(atAgent.readUInt32BE(0)).toBe(1);

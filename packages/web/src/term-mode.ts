@@ -1,7 +1,8 @@
 // Способ подключения терминала со стороны клиента: что просить у агента и что агент
 // в ответ назвал. Два значения хранятся раздельно, потому что настройка агента старше
 // просьбы: попросить control там, где агент его запретил, нельзя, и интерфейс обязан
-// показывать режим из кадра состояния, а не собственную просьбу.
+// показывать режим из кадра состояния, а не собственную просьбу. Ответ агента помнится
+// по сессиям: у двух открытых терминалов он бывает разным (один откатился на attach).
 
 import type { TerminalMode } from '@termhub/protocol/frames';
 
@@ -43,29 +44,28 @@ export function setTerminalModeRequest(mode: TerminalMode): void {
   write(REQUEST_KEY, mode);
 }
 
-/** Второй из двух способов — им переключает интерфейс. */
-export function otherTerminalMode(mode: TerminalMode): TerminalMode {
-  return mode === 'control' ? 'attach' : 'control';
-}
-
 /** Режим из последнего кадра состояния; undefined — терминал ещё не открывали. */
 export function lastTerminalMode(): TerminalMode | undefined {
   return read(LAST_KEY);
 }
 
+/** Ответы агента по сессиям — живут, пока жива страница. */
+const bySession = new Map<string, TerminalMode>();
+
 /** Запомнить ответ агента: диагностика открывается отдельным экраном и берёт режим
- *  отсюда, а не из живого терминала. */
-export function noteTerminalMode(mode: TerminalMode): void {
+ *  отсюда, а не из живого терминала. С именем сессии ответ помнится ещё и за ней. */
+export function noteTerminalMode(mode: TerminalMode, session?: string): void {
   write(LAST_KEY, mode);
+  if (session !== undefined) bySession.set(session, mode);
+}
+
+/** Каким способом агент подключил именно эту сессию; undefined — в этой вкладке её
+ *  терминал ещё не называл режим. */
+export function sessionTerminalMode(session: string): TerminalMode | undefined {
+  return bySession.get(session);
 }
 
 /** Человеческое имя режима для интерфейса. */
 export function terminalModeName(mode: TerminalMode): string {
   return mode === 'control' ? t('term.modeControl') : t('term.modeAttach');
-}
-
-/** Однобуквенный вид режима для чипа в шапке: место в шапке дорогое, а слово
- *  целиком остаётся в подсказке кнопки. */
-export function terminalModeLetter(mode: TerminalMode): string {
-  return mode === 'control' ? t('term.modeShortControl') : t('term.modeShortAttach');
 }

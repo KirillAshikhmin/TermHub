@@ -43,7 +43,10 @@ export interface Link {
    *  промис не отвергается никогда — мёртвый терминал виден по onExit. */
   readonly ready: Promise<TerminalMode>;
   write(bytes: Uint8Array): void;
-  resize(cols: number, rows: number): void;
+  /** `claim` — человек работает именно на этом клиенте, и размер окна должен стать его
+   *  (control mode: клиент становится «последним» для tmux). Без него просьба только
+   *  запоминается: пассивный клиент не вправе отбирать размер у того, с кем работают. */
+  resize(cols: number, rows: number, claim?: boolean): void;
   /** Снимок экрана с историей: `capture-pane -p -e -S -<lines>`, строки склеены CRLF
    *  и готовы к записи в терминал. В режиме attach снимка нет — придёт пусто. */
   snapshot(lines?: number): Promise<Uint8Array>;
@@ -63,10 +66,10 @@ const READY_TIMEOUT_MS = 2000;
  *  команду: дольше этого проект нигде не ждёт tmux. */
 const READY_MAX_WAIT_MS = 10_000;
 
-/** Глубина снимка по умолчанию: хватает, чтобы сразу было что листать (~18 КБ). */
 /** Предел придержанного вывода на время пересборки экрана. */
 const RESYNC_HOLD_LIMIT = 1 << 20;
 
+/** Глубина снимка по умолчанию: хватает, чтобы сразу было что листать (~18 КБ). */
 const DEFAULT_SNAPSHOT_LINES = 200;
 /** Глубже history-limit проекта просить нечего. */
 const MAX_SNAPSHOT_LINES = 50_000;
@@ -118,10 +121,10 @@ function stateQuery(pane: string): string {
 }
 
 /** Разбор ответа `TH-STATE,…`; undefined — ответ не тот, состояние восстанавливать не из чего. */
-export function parsePaneState(line: string | undefined): Record<StateField, number | undefined> | undefined {
+export function parsePaneState(line: string | undefined): PaneState | undefined {
   const parts = (line ?? '').split(',');
   if (parts[0] !== STATE_MARK) return undefined;
-  const state = {} as Record<StateField, number | undefined>;
+  const state = {} as PaneState;
   STATE_FIELDS.forEach((field, i) => {
     const raw = parts[i + 1];
     const value = raw === undefined || raw === '' ? NaN : Number(raw);
@@ -138,18 +141,58 @@ export function parsePaneState(line: string | undefined): Record<StateField, num
  *  остатки старой. Поэтому после смены размера экран клиента стирается и рисуется заново
  *  по панели; история клиента при этом остаётся его собственной. Позиции здесь абсолютные:
  *  к этому моменту клиент уже принял размер панели (кадр состояния идёт раньше данных). */
-export function renderScreen(lines: string[], state: Record<StateField, number | undefined> | undefined): string {
+export function renderScreen(lines: string[], state: PaneState | undefined): string {
   const alt = state?.alternate_on === 1;
   // Сброс цвета и области прокрутки, в начало экрана, стереть экран — и картинка панели.
   let out = `${state ? (alt ? '\x1b[?1049h' : '\x1b[?1049l') : ''}\x1b[0m\x1b[r\x1b[H\x1b[2J${lines.join('\r\n')}\x1b[0m`;
   if (!state) return out;
+  // Режимы ставятся и снимаются явно: вывод, пришедший на время захвата, клиенту не идёт
+  // (он уже внутри картинки), и вместе с ним терялись бы переключения режимов — курсор,
+  // спрятанный перед перерисовкой и показанный после, так и остался бы спрятанным.
+  return out + regionAndCursor(state) + modes(state, true);
+}
+
+type PaneState = Record<StateField, number | undefined>;
+
+/** Область прокрутки и абсолютная позиция курсора. Область ставится до курсора: её
+ *  установка уводит курсор в начало экрана. */
+function regionAndCursor(state: PaneState): string {
   const rows = state.pane_height ?? 0;
   const top = state.scroll_region_upper;
   const bottom = state.scroll_region_lower;
+  let out = '';
   if (top !== undefined && bottom !== undefined && rows > 0 && (top > 0 || bottom < rows - 1))
     out += `\x1b[${top + 1};${bottom + 1}r`;
-  out += `\x1b[${(state.cursor_y ?? 0) + 1};${(state.cursor_x ?? 0) + 1}H`;
-  if (state.cursor_flag === 0) out += '\x1b[?25l';
+  return `${out}\x1b[${(state.cursor_y ?? 0) + 1};${(state.cursor_x ?? 0) + 1}H`;
+}
+
+/** Пары «включить / выключить» по полям состояния. Порядок — как их ставит приложение. */
+const MODE_SEQUENCES: ReadonlyArray<readonly [StateField, string, string]> = [
+  ['keypad_cursor_flag', '\x1b[?1h', '\x1b[?1l'],
+  ['keypad_flag', '\x1b=', '\x1b>'],
+  ['mouse_standard_flag', '\x1b[?1000h', '\x1b[?1000l'],
+  ['mouse_button_flag', '\x1b[?1002h', '\x1b[?1002l'],
+  ['mouse_any_flag', '\x1b[?1003h', '\x1b[?1003l'],
+  ['mouse_sgr_flag', '\x1b[?1006h', '\x1b[?1006l'],
+  ['bracket_paste_flag', '\x1b[?2004h', '\x1b[?2004l'],
+  ['wrap_flag', '\x1b[?7h', '\x1b[?7l'],
+  ['insert_flag', '\x1b[4h', '\x1b[4l'],
+  ['cursor_flag', '\x1b[?25h', '\x1b[?25l'],
+];
+/** Значения свежего терминала: снимку для нового экрана их повторять незачем. */
+const MODE_DEFAULTS: Partial<Record<StateField, number>> = { wrap_flag: 1, cursor_flag: 1 };
+
+/** Режимы приложения. `explicit` — назвать каждый известный режим (экран клиента уже жил
+ *  и мог запомнить другое); иначе — только отличия от свежего терминала. Поле, которого
+ *  этот tmux не знает, пропускается: угадывать режим хуже, чем не трогать. */
+function modes(state: PaneState, explicit: boolean): string {
+  let out = '';
+  for (const [field, on, off] of MODE_SEQUENCES) {
+    const value = state[field];
+    if (value === undefined) continue;
+    if (!explicit && value === (MODE_DEFAULTS[field] ?? 0)) continue;
+    out += value === 1 ? on : off;
+  }
   return out;
 }
 
@@ -164,41 +207,24 @@ export function renderScreen(lines: string[], state: Record<StateField, number |
  *
  *  Альтернативный экран: клиент сначала сам уходит в него (`?1049h`), иначе полноэкранное
  *  приложение рисуется в обычный буфер и засоряет историю; там позиции абсолютные. */
-export function renderSnapshot(lines: string[], state: Record<StateField, number | undefined> | undefined): string {
+export function renderSnapshot(lines: string[], state: PaneState | undefined): string {
   const body = lines.join('\r\n');
   if (!state) return body;
-  const flag = (field: StateField): boolean => state[field] === 1;
   const x = state.cursor_x ?? 0;
   const y = state.cursor_y ?? 0;
   const rows = state.pane_height ?? 0;
-  const alt = flag('alternate_on');
+  const alt = state.alternate_on === 1;
   let out = alt ? `\x1b[?1049h\x1b[H${body}` : body;
   out += '\x1b[0m'; // цвет последней строки снимка не должен протечь в живой вывод
-  if (alt) {
-    const top = state.scroll_region_upper;
-    const bottom = state.scroll_region_lower;
-    // Область прокрутки ставится до курсора: её установка уводит курсор в начало экрана.
-    if (top !== undefined && bottom !== undefined && rows > 0 && (top > 0 || bottom < rows - 1))
-      out += `\x1b[${top + 1};${bottom + 1}r`;
-    out += `\x1b[${y + 1};${x + 1}H`;
-  } else {
+  if (alt) out += regionAndCursor(state);
+  else {
     const up = rows > 0 ? Math.max(0, rows - 1 - y) : 0;
     out += '\r';
     if (up > 0) out += `\x1b[${up}A`;
     if (x > 0) out += `\x1b[${x}C`;
   }
   // Режимы, включённые приложением до подключения клиента.
-  if (flag('keypad_cursor_flag')) out += '\x1b[?1h';
-  if (flag('keypad_flag')) out += '\x1b=';
-  if (flag('mouse_standard_flag')) out += '\x1b[?1000h';
-  if (flag('mouse_button_flag')) out += '\x1b[?1002h';
-  if (flag('mouse_any_flag')) out += '\x1b[?1003h';
-  if (flag('mouse_sgr_flag')) out += '\x1b[?1006h';
-  if (flag('bracket_paste_flag')) out += '\x1b[?2004h';
-  if (state.wrap_flag === 0) out += '\x1b[?7l';
-  if (flag('insert_flag')) out += '\x1b[4h';
-  if (state.cursor_flag === 0) out += '\x1b[?25l';
-  return out;
+  return out + modes(state, false);
 }
 
 /** Вход в альтернативный экран — `ESC [ ? 1 0 4 9 h`, выход — тот же префикс и `l`. */
@@ -227,6 +253,9 @@ interface Pending {
   label: string;
   /** Команда снимка: пока она в полёте, вывод панели на экран не идёт. */
   capture: boolean;
+  /** Ждущему уже ответили (отказом по сроку), но место в очереди запись держит: блок
+   *  tmux на эту команду ещё придёт и должен достаться ей, а не следующей. */
+  settled?: boolean;
   timer: ReturnType<typeof setTimeout>;
   resolve: (lines: string[]) => void;
   reject: (error: Error) => void;
@@ -269,8 +298,27 @@ class SessionLink implements Link {
    *  после свежей картинки, а не до неё. */
   private held: Uint8Array[] | undefined;
   private heldBytes = 0;
+  /** Пересборка в полёте. Отдельный флаг, а не «есть придержанный вывод»: придержанное
+   *  отпускается и раньше её конца (переполнение), а вторая пересборка параллельно первой
+   *  писала бы на экран две картинки вперемешку. */
+  private resyncing = false;
+  /** Придержанный вывод уже ушёл клиенту: картинка этой пересборки старше него. */
+  private resyncStale = false;
   /** Размер сменился ещё раз, пока шла пересборка: по её концу нужна новая. */
   private resyncAgain = false;
+  /** Последняя просьба размера, отправленная tmux (`refresh-client -C`). */
+  private askedSize = '';
+  /** Просьба, с которой мы последний раз забирали размер окна себе. */
+  private claimedSize = '';
+  /** Размер панели менялся после нашей заявки: только тогда новая заявка на ту же
+   *  просьбу имеет смысл — иначе панель, которая под нас не встаёт (окно поделено на
+   *  панели, пределы размера), собирала бы заявку на каждое нажатие. */
+  private paneMovedSinceClaim = true;
+  /** После своей заявки экран пересобирается, даже если размер панели «не менялся».
+   *  Пока окно держал другой клиент, панель перерисовывалась под его размер, а узнать об
+   *  этом мы могли не успеть (ответ о размере приходит запросом): для нас размер был
+   *  100×30 и остался 100×30, но картинка на экране клиента уже не та. */
+  private resyncAfterClaim = false;
   private altScreen = false;
   private altKnown = false;
   /** Сколько байт префикса alt-screen уже совпало: последовательность рвётся между кусками. */
@@ -394,7 +442,11 @@ class SessionLink implements Link {
           this.held.push(event.data);
           this.heldBytes += event.data.length;
           // Пересборка затянулась под потоком вывода: держать больше мегабайта нельзя.
-          if (this.heldBytes > RESYNC_HOLD_LIMIT) this.releaseHeld();
+          // Картинка, которая ещё в пути, теперь старше отпущенного — на экран ей нельзя.
+          if (this.heldBytes > RESYNC_HOLD_LIMIT) {
+            this.resyncStale = true;
+            this.releaseHeld();
+          }
         } else this.opts.onData(event.data);
         return;
       // Блок сопоставляется раньше, чем засчитывается готовность: приветственный
@@ -438,6 +490,8 @@ class SessionLink implements Link {
   private matchBlock(id: number, lines: string[], failed: boolean): void {
     this.greeted = true;
     const head = this.pending.shift();
+    // Ответ на команду, которую уже перестали ждать: он её и закрывает, молча.
+    if (head?.settled) return;
     if (head === undefined) {
       // Отказ, которого никто не ждал, до выбора режима — доказательство, что control
       // mode тут не работает; после выбора терминал остаётся живым.
@@ -451,6 +505,8 @@ class SessionLink implements Link {
    *  `%end`, а не микрозадачей после: события одного куска разбираются синхронно, и
    *  вывод, пришедший сразу за концом снимка, иначе потерялся бы. */
   private settle(entry: Pending, error: Error | undefined, lines: string[]): void {
+    if (entry.settled) return;
+    entry.settled = true;
     clearTimeout(entry.timer);
     if (entry.capture) this.captureDepth -= 1;
     if (error) entry.reject(error);
@@ -471,9 +527,7 @@ class SessionLink implements Link {
     this.initStarted = true;
     // Размер уходит первым: снимок, который вызывающий возьмёт сразу после готовности,
     // должен быть уже в размере клиента.
-    this.command(`refresh-client -C ${this.cols}x${this.rows}`).catch((err: Error): void =>
-      this.log(`session ${this.session}: resize failed (${err.message})`),
-    );
+    this.askSize();
     this.queryPane(true);
   }
 
@@ -501,21 +555,30 @@ class SessionLink implements Link {
     const parts = (lines[0] ?? '').split(' ');
     if (parts.length < 3 || !parts[0].startsWith('%') || !parts[1].startsWith('@')) return false;
     if (this.activePane !== parts[0]) this.altMatch = 0; // недобранный префикс относился к прежней панели
+    // Активной стала другая панель (переключили окно или панель из системного терминала):
+    // на экране клиента картинка прежней, а вывод дальше пойдёт уже от новой.
+    const switched = this.activePane !== undefined && this.activePane !== parts[0];
     this.activePane = parts[0];
     this.setAlt(parts[2] === '1');
     const cols = Number(parts[3]);
     const rows = Number(parts[4]);
     if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
-      if (cols !== this.paneCols || rows !== this.paneRows) {
-        const first = this.paneCols === 0;
+      const first = this.paneCols === 0;
+      const moved = cols !== this.paneCols || rows !== this.paneRows;
+      if (moved) {
         this.paneCols = cols;
         this.paneRows = rows;
+        this.paneMovedSinceClaim = true;
         this.opts.onPaneSize?.(cols, rows);
-        // Первый размер — часть подключения (экран придёт снимком); каждая следующая
-        // смена оставляет экран клиента и панель в разных состояниях — пересобираем.
-        if (!first && this.mode === 'control') void this.resync();
       }
-    }
+      // Первый размер — часть подключения (экран придёт снимком); каждая следующая
+      // смена оставляет экран клиента и панель в разных состояниях — пересобираем.
+      // То же после своей заявки, даже если размер для нас остался прежним.
+      if (!first && this.mode === 'control' && (moved || this.resyncAfterClaim || switched)) {
+        this.resyncAfterClaim = false;
+        void this.resync();
+      }
+    } else if (switched && this.mode === 'control') void this.resync();
     return true;
   }
 
@@ -531,31 +594,65 @@ class SessionLink implements Link {
    *  придерживается и уходит следом: иначе он лёг бы на экран раньше картинки, поверх
    *  которой его напечатали. */
   private async resync(): Promise<void> {
-    if (this.held) {
+    if (this.resyncing) {
       this.resyncAgain = true;
       return;
     }
     const pane = this.activePane;
     if (this.disposed || pane === undefined) return;
+    this.resyncing = true;
+    this.resyncStale = false;
     this.held = [];
+    this.heldBytes = 0;
     try {
-      const shot = this.command(`capture-pane -t ${pane} -p -e`, true);
-      const state = this.command(stateQuery(pane)).then(
-        (answer) => parsePaneState(answer[0]),
-        () => undefined,
-      );
-      const screen = encoder.encode(renderScreen(await shot, await state));
-      if (!this.disposed) this.opts.onData(screen);
+      const { lines, state } = await this.capture(pane, '');
+      // Придержанное уже ушло клиенту (переполнение): эта картинка старше него, и
+      // стирать ею экран нельзя — следующая перерисовка приложения догонит сама.
+      if (!this.disposed && !this.resyncStale) this.opts.onData(encoder.encode(renderScreen(lines, state)));
     } catch (err) {
       // Экран остаётся как был: следующая перерисовка приложения его догонит.
       this.log(`session ${this.session}: screen resync failed (${String(err)})`);
     } finally {
       this.releaseHeld();
+      this.resyncing = false;
       if (this.resyncAgain && !this.disposed) {
         this.resyncAgain = false;
         void this.resync();
       }
     }
+  }
+
+  /** Текст панели и её состояние одним шагом. Обе команды уходят подряд, до первого
+   *  ответа: сервер tmux исполняет их одну за другой, и состояние (курсор, режимы)
+   *  относится к тому же мигу, что и текст. Вывод глушит только сам захват: пришедшее
+   *  после его конца в картинку уже не попало и обязано дойти до экрана, даже если ответ
+   *  о состоянии ещё в пути. Отказ захвата — исключение; без состояния картинка всё равно
+   *  полезна (экран заполнится, курсор догонит вывод), поэтому его отказ — строка в лог. */
+  private async capture(pane: string, depth: string): Promise<{ lines: string[]; state: PaneState | undefined }> {
+    const shot = this.command(`capture-pane -t ${pane} -p -e${depth}`, true);
+    const state = this.command(stateQuery(pane)).then(
+      (answer) => parsePaneState(answer[0]),
+      (err: Error) => {
+        this.log(`session ${this.session}: pane state query failed (${err.message})`);
+        return undefined;
+      },
+    );
+    return { lines: await shot, state: await state };
+  }
+
+  /** Просит у tmux свой размер окна. Одна и та же просьба дважды не уходит; промис —
+   *  конец отправленной просьбы (undefined — слать было нечего). */
+  private askSize(): Promise<void> | undefined {
+    const size = `${this.cols}x${this.rows}`;
+    if (size === this.askedSize) return undefined;
+    this.askedSize = size;
+    return this.command(`refresh-client -C ${size}`).then(
+      (): void => undefined,
+      (err: Error): void => {
+        this.askedSize = ''; // не дошла — следующая просьба обязана уйти заново
+        this.log(`session ${this.session}: resize failed (${err.message})`);
+      },
+    );
   }
 
   /** Пометка альтернативного экрана: первое состояние сообщается всегда — при подключении
@@ -652,9 +749,11 @@ class SessionLink implements Link {
         label,
         capture,
         timer: setTimeout((): void => {
-          const at = this.pending.indexOf(entry);
-          if (at === -1) return;
-          this.pending.splice(at, 1);
+          // Из очереди запись НЕ убирается: ответы адресуются порядком отправки, и блок
+          // на эту команду всё-таки придёт (чтение стояло на паузе, tmux был занят) —
+          // без записи он достался бы следующей команде, и сопоставление ответов
+          // сдвинулось бы навсегда: снимок получил бы ответ на ввод, запрос панели —
+          // строки снимка.
           this.settle(entry, new Error(`no answer to ${label} in ${COMMAND_TIMEOUT_MS} ms`), []);
         }, COMMAND_TIMEOUT_MS),
         resolve,
@@ -718,7 +817,7 @@ class SessionLink implements Link {
     return batch;
   }
 
-  resize(cols: number, rows: number): void {
+  resize(cols: number, rows: number, claim = true): void {
     if (this.disposed) return;
     this.cols = clampCols(cols);
     this.rows = clampRows(rows);
@@ -727,19 +826,39 @@ class SessionLink implements Link {
       return;
     }
     // До приветственного блока команду слать нельзя: размер уйдёт вместе с init.
-    if (this.greeted) {
-      // Размер окна tmux отдаёт «последнему» клиенту, а среди control-клиентов последним
-      // навсегда остаётся подключившийся позже: просьбы остальных он просто не слушает
-      // (замер на tmux 3.7c). `switch-client` на свою же сессию делает последним нас —
-      // так размер задаёт тот клиент, с которым человек сейчас работает: веб шлёт resize
-      // на его действие. Политика `window-size` при этом не меняется.
+    if (!this.greeted) return;
+    const size = `${this.cols}x${this.rows}`;
+    // Размер окна tmux отдаёт «последнему» клиенту, а среди control-клиентов последним
+    // навсегда остаётся подключившийся позже: просьбы остальных он просто не слушает
+    // (замер на tmux 3.7c). `switch-client` на свою же сессию делает последним нас — так
+    // размер задаёт тот клиент, с которым человек сейчас работает. Политика `window-size`
+    // при этом не меняется.
+    //
+    // Заявка уходит, только когда она что-то меняет: клиент просит её явно (`claim` —
+    // действие человека, а не пересчёт раскладки пассивной вкладки), и после прошлой
+    // заявки на эту же просьбу размер панели менялся. Каждая лишняя заявка — это
+    // `switch-client`, переспрос панели и полная перерисовка экрана у всех клиентов сессии.
+    //
+    // Сравнивать просьбу с известным размером панели («уже наш — заявка не нужна») здесь
+    // нельзя: размер панели приходит ответом на запрос и в этот миг бывает устаревшим —
+    // окно только что забрал другой клиент, а ответ ещё в пути. Заявка пропала бы молча
+    // (поймано на живом tmux).
+    if (claim && (size !== this.claimedSize || this.paneMovedSinceClaim)) {
+      this.claimedSize = size;
+      this.paneMovedSinceClaim = false;
       this.command(`switch-client -t =${this.session}:`).catch((err: Error): void =>
         this.log(`session ${this.session}: size claim failed (${err.message})`),
       );
-      this.command(`refresh-client -C ${this.cols}x${this.rows}`).catch((err: Error): void =>
-        this.log(`session ${this.session}: resize failed (${err.message})`),
-      );
+      this.askedSize = ''; // после смены «последнего» клиента tmux применяет свежую просьбу
+      // Заявка исполнена — спрашиваем панель сами: уведомления о смене раскладки может
+      // и не быть (размер для tmux не изменился), а экран пересобрать всё равно нужно.
+      this.resyncAfterClaim = true;
+      void this.askSize()?.then((): void => {
+        if (!this.disposed && this.mode === 'control') this.queryPane(false);
+      });
+      return;
     }
+    void this.askSize();
   }
 
   async snapshot(lines = DEFAULT_SNAPSHOT_LINES): Promise<Uint8Array> {
@@ -747,22 +866,9 @@ class SessionLink implements Link {
     if (mode !== 'control' || this.disposed || this.activePane === undefined) return EMPTY;
     // Вывод, пришедший до конца ответа, tmux уже применил к панели — он внутри снимка,
     // и второй раз на экран не идёт; глушение отпускает settle на `%end`.
-    const command = `capture-pane -t ${this.activePane} -p -e -S -${snapshotDepth(lines)}`;
     try {
-      // Обе команды уходят подряд, до первого ответа: сервер tmux исполняет их одну за
-      // другой, и состояние (курсор, режимы) относится к тому же мигу, что и текст экрана.
-      // Вывод глушит только сам снимок: то, что пришло после его конца, в снимок уже не
-      // попало и обязано дойти до экрана, даже если ответ о состоянии ещё в пути.
-      const shot = this.command(command, true);
-      const state = this.command(stateQuery(this.activePane)).then(
-        (answer) => parsePaneState(answer[0]),
-        (err: Error) => {
-          // Без состояния снимок всё равно полезен: экран заполнится, курсор догонит вывод.
-          this.log(`session ${this.session}: pane state query failed (${err.message})`);
-          return undefined;
-        },
-      );
-      return encoder.encode(renderSnapshot(await shot, await state));
+      const shot = await this.capture(this.activePane, ` -S -${snapshotDepth(lines)}`);
+      return encoder.encode(renderSnapshot(shot.lines, shot.state));
     } catch (err) {
       // Пустой снимок честнее выдуманного: экран заполнится первым же выводом.
       this.log(`session ${this.session}: capture-pane failed (${String(err)})`);

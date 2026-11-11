@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnPty } from '../src/pty-spawn.js';
-import { open, type Link, type SessionLinkOptions, parsePaneState, renderSnapshot } from '../src/session-link.js';
+import { open, type Link, type SessionLinkOptions, parsePaneState, renderScreen, renderSnapshot } from '../src/session-link.js';
 import { PtyPool } from '../src/pty-pool.js';
 
 // Шов pty мокаем целиком, как в bridge.unit.test.ts: настоящий tmux здесь
@@ -422,9 +422,15 @@ describe('активная панель', () => {
     await bringUp(fake, link, '%0');
     fake.feed('%session-window-changed $0 @1\n');
     fake.feed(reply(3, '%2 @1 0')); // ответ на переспрос display-message
-    await Promise.resolve();
+    await tick();
+    // Панель сменилась — экран пересобирается по новой: её картинка, затем её вывод.
+    expect(fake.commands().at(-2)).toBe('capture-pane -t %2 -p -e');
+    fake.feed(reply(4, 'new pane'));
     fake.feed('%output %0 stale\n%output %2 fresh\n');
-    expect(chunks).toEqual(['fresh']);
+    fake.feed(reply(5));
+    await tick();
+    await tick();
+    expect(chunks).toEqual(['\x1b[0m\x1b[r\x1b[H\x1b[2Jnew pane\x1b[0m', 'fresh']);
   });
 
   it('в режиме attach поток tmux уходит клиенту сырым, без разбора и фильтра', async () => {
@@ -587,7 +593,9 @@ describe('снимок экрана', () => {
     fake.feed(reply(5, 'TH-STATE,3,1,10,0,0,9,1,0,0,0,0,0,0,0,1,0'));
     await tick();
     await tick();
-    expect(chunks).toEqual(['\x1b[?1049l\x1b[0m\x1b[r\x1b[H\x1b[2Jrow0\r\nrow1\x1b[0m\x1b[2;4H', 'after']);
+    // Режимы названы все и явно: переключения, пришедшие на время захвата, клиенту не шли.
+    const modesOff = '\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?7h\x1b[4l\x1b[?25h';
+    expect(chunks).toEqual([`\x1b[?1049l\x1b[0m\x1b[r\x1b[H\x1b[2Jrow0\r\nrow1\x1b[0m\x1b[2;4H${modesOff}`, 'after']);
     fake.feed('%output %0 live\n');
     expect(chunks.at(-1)).toBe('live');
   });
@@ -599,6 +607,219 @@ describe('снимок экрана', () => {
     await bringUp(fake, link, '%0');
     link.resize(120, 40);
     expect(fake.commands().slice(-2)).toEqual(['switch-client -t =sess:', 'refresh-client -C 120x40']);
+  });
+
+  it('пересборка возвращает курсор, спрятанный перед захватом и показанный во время него', () => {
+    // cursor_flag=1: приложение уже показало курсор, но его `?25h` в картинку не попал.
+    const state = parsePaneState('TH-STATE,0,0,10,0,0,9,1,0,0,0,0,0,0,1,1,0');
+    const out = renderScreen(['x'], state);
+    expect(out).toContain('\x1b[?25h');
+    expect(out).toContain('\x1b[?2004h'); // вставка в скобках включена — названа тоже
+    expect(out).not.toContain('\x1b[?25l');
+  });
+
+  it('поле состояния, которого этот tmux не знает, пересборка не трогает', () => {
+    const state = parsePaneState('TH-STATE,0,0,10,0,0,9,,0,0,0,0,0,0,0,1,0'); // cursor_flag пуст
+    const out = renderScreen(['x'], state);
+    expect(out).not.toContain('\x1b[?25');
+  });
+
+  it('снимок для нового экрана называет только отличия от свежего терминала', () => {
+    const plain = parsePaneState('TH-STATE,0,0,10,0,0,9,1,0,0,0,0,0,0,0,1,0');
+    expect(renderSnapshot(['x'], plain)).toBe('x\x1b[0m\r\x1b[9A');
+    const busy = parsePaneState('TH-STATE,0,0,10,0,0,9,0,1,0,1,0,0,1,1,0,0');
+    expect(renderSnapshot(['x'], busy)).toBe('x\x1b[0m\r\x1b[9A\x1b[?1h\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[?7l\x1b[?25l');
+  });
+
+  it('придержанный вывод переполнился: он уходит клиенту, а устаревшая картинка — нет', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const chunks: string[] = [];
+    const link = open('sess', options({ onData: (b) => chunks.push(dec.decode(b)) }));
+    fake.feed(GREETING);
+    fake.feed(reply(1));
+    fake.feed(reply(2, '%0 @0 0 80 24'));
+    await link.ready;
+    fake.feed('%layout-change @0 x x *\n');
+    await tick();
+    fake.feed(reply(3, '%0 @0 0 60 10'));
+    await tick();
+    fake.feed(reply(4, 'old0', 'old1')); // захват кончился, ответ о состоянии ещё в пути
+    const big = 'a'.repeat(300_000);
+    for (let i = 0; i < 4; i++) fake.feed(`%output %0 ${big}\n`); // больше мегабайта придержано
+    expect(chunks.join('').length).toBe(4 * 300_000); // отпущено сразу, по порядку
+    fake.feed(reply(5, 'TH-STATE,0,0,10,0,0,9,1,0,0,0,0,0,0,0,1,0'));
+    await tick();
+    await tick();
+    expect(chunks.join('')).not.toContain('old0'); // стирать свежий вывод старой картинкой нельзя
+    fake.feed('%output %0 live\n');
+    expect(chunks.at(-1)).toBe('live');
+  });
+
+  it('второй размер во время пересборки не запускает её параллельно — только следом', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const link = open('sess', options());
+    fake.feed(GREETING);
+    fake.feed(reply(1));
+    fake.feed(reply(2, '%0 @0 0 80 24'));
+    await link.ready;
+    fake.feed('%layout-change @0 x x *\n');
+    await tick();
+    fake.feed(reply(3, '%0 @0 0 60 10')); // пересборка №1: команды 4 и 5
+    await tick();
+    fake.feed(reply(4, 'row'));
+    const big = 'a'.repeat(400_000);
+    for (let i = 0; i < 3; i++) fake.feed(`%output %0 ${big}\n`); // придержанное отпущено досрочно
+    fake.feed('%layout-change @0 x x *\n'); // команда 6
+    await tick();
+    fake.feed(reply(5, 'TH-STATE,0,0,10,0,0,9,1,0,0,0,0,0,0,0,1,0'));
+    const before = fake.commands().filter((c) => c.startsWith('capture-pane')).length;
+    fake.feed(reply(6, '%0 @0 0 70 12')); // размер сменился, пока первая ещё не завершилась
+    expect(fake.commands().filter((c) => c.startsWith('capture-pane')).length).toBe(before);
+    await tick();
+    await tick();
+    expect(fake.commands().filter((c) => c.startsWith('capture-pane')).length).toBe(before + 1);
+  });
+
+  it('ответ, опоздавший к сроку команды, достаётся ей же — следующие ответы не сдвигаются', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakePty();
+      stubSpawns(fake);
+      const link = open('sess', options());
+      fake.feed(GREETING);
+      fake.feed(reply(1));
+      fake.feed(reply(2, '%0 @0 0 80 24'));
+      await vi.advanceTimersByTimeAsync(0);
+      const first = link.snapshot(); // команды 3 (capture-pane) и 4 (состояние)
+      await vi.advanceTimersByTimeAsync(10_000); // tmux молчал дольше срока
+      expect(dec.decode(await first)).toBe(''); // снимок сдался пустым
+      const second = link.snapshot(); // команды 5 и 6
+      await vi.advanceTimersByTimeAsync(0);
+      fake.feed(reply(3, 'late')); // опоздавший ответ на первый снимок
+      fake.feed(reply(4, 'TH-STATE,0,0,24,0,0,23,1,0,0,0,0,0,0,0,1,0'));
+      fake.feed(reply(5, 'fresh')); // ответ на второй
+      fake.feed(reply(6, 'TH-STATE,0,0,24,0,0,23,1,0,0,0,0,0,0,0,1,0'));
+      const text = dec.decode(await second);
+      expect(text).toContain('fresh');
+      expect(text).not.toContain('late');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('активной стала другая панель: экран пересобирается по ней, даже при том же размере', async () => {
+    const fake = makeFakePty();
+    stubSpawns(fake);
+    const chunks: string[] = [];
+    const link = open('sess', options({ onData: (b) => chunks.push(dec.decode(b)) }));
+    fake.feed(GREETING);
+    fake.feed(reply(1));
+    fake.feed(reply(2, '%0 @0 0 80 24'));
+    await link.ready;
+    fake.feed('%window-pane-changed @0 %1\n');
+    await tick();
+    fake.feed(reply(3, '%1 @0 0 80 24'));
+    await tick();
+    expect(fake.commands().at(-2)).toBe('capture-pane -t %1 -p -e');
+    fake.feed(reply(4, 'other pane'));
+    fake.feed(reply(5, 'TH-STATE,0,0,24,0,0,23,1,0,0,0,0,0,0,0,1,0'));
+    await tick();
+    await tick();
+    expect(chunks.join('')).toContain('\x1b[H\x1b[2Jother pane');
+  });
+
+  describe('заявка размера', () => {
+    async function up(size = '80 24'): Promise<{ fake: Fake; link: Link }> {
+      const fake = makeFakePty();
+      stubSpawns(fake);
+      const link = open('sess', options());
+      fake.feed(GREETING);
+      fake.feed(reply(1));
+      fake.feed(reply(2, `%0 @0 0 ${size}`));
+      await link.ready;
+      return { fake, link };
+    }
+    const sent = (fake: Fake, from: number): string[] => fake.commands().slice(from);
+
+    it('без заявки просьба только запоминается: switch-client не уходит', async () => {
+      const { fake, link } = await up();
+      const from = fake.commands().length;
+      link.resize(120, 40, false);
+      expect(sent(fake, from)).toEqual(['refresh-client -C 120x40']);
+    });
+
+    it('та же просьба без заявки второй раз tmux не шлётся', async () => {
+      const { fake, link } = await up();
+      link.resize(120, 40, false);
+      const from = fake.commands().length;
+      link.resize(120, 40, false);
+      link.resize(120, 40, false);
+      expect(sent(fake, from)).toEqual([]);
+    });
+
+    it('первая заявка уходит и при совпавшем размере панели: сведения о ней бывают устаревшими', async () => {
+      const { fake, link } = await up('80 24');
+      const from = fake.commands().length;
+      link.resize(80, 24, true); // совпадает с просьбой при открытии и с известной панелью
+      link.resize(80, 24, true); // повтор без смены размера панели — уже нет
+      expect(sent(fake, from)).toEqual(['switch-client -t =sess:', 'refresh-client -C 80x24']);
+    });
+
+    it('панель под нас не встала: повторная заявка на ту же просьбу не уходит', async () => {
+      const { fake, link } = await up('40 12'); // окно поделено: панель вдвое уже
+      const from = fake.commands().length;
+      link.resize(100, 30, true);
+      link.resize(100, 30, true);
+      link.resize(100, 30, true);
+      expect(sent(fake, from)).toEqual(['switch-client -t =sess:', 'refresh-client -C 100x30']);
+    });
+
+    it('размер панели сменился после заявки (его забрал другой) — новая заявка уходит', async () => {
+      const { fake, link } = await up('40 12');
+      link.resize(100, 30, true);
+      fake.feed(reply(3)); // switch-client
+      fake.feed(reply(4)); // refresh-client
+      fake.feed('%layout-change @0 x x *\n'); // команда 5: переспрос панели
+      await tick();
+      fake.feed(reply(5, '%0 @0 0 50 15'));
+      await tick();
+      const from = fake.commands().length;
+      link.resize(100, 30, true);
+      expect(sent(fake, from)).toEqual(['switch-client -t =sess:', 'refresh-client -C 100x30']);
+    });
+
+    it('после своей заявки экран пересобирается, даже если размер панели для нас не менялся', async () => {
+      // Окно забирал другой клиент, но ответ о размере до нас не дошёл: было 80×24 и стало 80×24.
+      const { fake, link } = await up('80 24');
+      link.resize(80, 24, true);
+      fake.feed(reply(3)); // switch-client
+      fake.feed(reply(4)); // refresh-client → панель спрашиваем сами
+      await tick();
+      expect(fake.commands().at(-1)).toContain('display-message -p "#{pane_id}');
+      fake.feed(reply(5, '%0 @0 0 80 24'));
+      await tick();
+      expect(fake.commands().at(-2)).toBe('capture-pane -t %0 -p -e');
+    });
+
+    it('без заявки пересборки на прежнем размере нет', async () => {
+      const { fake, link } = await up('80 24');
+      link.resize(90, 24, false);
+      fake.feed(reply(3));
+      fake.feed('%session-window-changed $0 @0\n'); // повод переспросить панель
+      await tick();
+      fake.feed(reply(4, '%0 @0 0 80 24'));
+      await tick();
+      expect(fake.commands().some((c) => c.startsWith('capture-pane'))).toBe(false);
+    });
+
+    it('по умолчанию заявка есть — так ведёт себя клиент, который поля не знает', async () => {
+      const { fake, link } = await up();
+      const from = fake.commands().length;
+      link.resize(120, 40);
+      expect(sent(fake, from)).toEqual(['switch-client -t =sess:', 'refresh-client -C 120x40']);
+    });
   });
 
   it('размер панели сообщается при подключении и при смене раскладки окна', async () => {

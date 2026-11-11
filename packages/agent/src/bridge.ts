@@ -37,7 +37,8 @@ const EMPTY = new Uint8Array(0);
 /** Управление живым терминалом поверх tmux-сессии. */
 export interface TerminalHandle {
   write(b: Uint8Array): void;
-  resize(c: number, r: number): void;
+  /** `claim` — см. Link.resize: забирать ли размер окна себе (по умолчанию да). */
+  resize(c: number, r: number, claim?: boolean): void;
   /** Приостановить чтение из pty (backpressure: медленный WS-потребитель). */
   pause(): void;
   /** Возобновить чтение из pty после слива буфера WS. */
@@ -224,8 +225,8 @@ export function attachTerminal(opts: {
     write(b: Uint8Array): void {
       link.write(b);
     },
-    resize(c: number, r: number): void {
-      link.resize(c, r);
+    resize(c: number, r: number, claim?: boolean): void {
+      link.resize(c, r, claim);
       firstResize?.();
       firstResize = undefined;
     },
@@ -304,14 +305,15 @@ export function wireTerminalWs(opts: {
         return; // битый фрейм — игнорируем
       }
       if (frame.type === FrameType.Resize) {
-        let dims: { cols: number; rows: number; mode?: string };
+        let dims: { cols: number; rows: number; mode?: string; claim?: unknown };
         try {
-          dims = frameJson<{ cols: number; rows: number; mode?: string }>(frame);
+          dims = frameJson<{ cols: number; rows: number; mode?: string; claim?: unknown }>(frame);
         } catch {
           return;
         }
         if (handle) {
-          handle.resize(dims.cols, dims.rows);
+          // Поля `claim` у старого клиента нет — он забирал размер всегда, так и остаётся.
+          handle.resize(dims.cols, dims.rows, dims.claim !== false);
           return;
         }
         // Первое сообщение (RESIZE) даёт размеры и просьбу о способе подключения —

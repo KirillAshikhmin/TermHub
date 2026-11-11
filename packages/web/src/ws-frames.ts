@@ -20,8 +20,20 @@ export function dataFrame(payload: Uint8Array): Uint8Array {
  *  агент не спавнит pty. На нём же едет просьба о способе подключения (`mode`):
  *  в LAN это первый кадр, которым клиент открывает терминал, и к следующим
  *  ресайзам решение агентом уже принято. */
-export function resizeFrame(cols: number, rows: number, mode?: TerminalMode): Uint8Array {
-  return jsonFrame(FrameType.Resize, LAN_CHANNEL, mode ? { cols, rows, mode } : { cols, rows });
+export function resizeFrame(cols: number, rows: number, mode?: TerminalMode, claim?: boolean): Uint8Array {
+  return jsonFrame(FrameType.Resize, LAN_CHANNEL, resizePayload(cols, rows, mode, claim));
+}
+
+/** Тело RESIZE — одно на оба провода. `claim: false` — «размер пересчитался сам, человек
+ *  здесь сейчас не работает»: агент запомнит просьбу, но размер окна у другого клиента не
+ *  отберёт. Поле не названо вовсе — как у старого клиента: заявка есть. */
+export function resizePayload(
+  cols: number,
+  rows: number,
+  mode?: TerminalMode,
+  claim?: boolean,
+): { cols: number; rows: number; mode?: TerminalMode; claim?: boolean } {
+  return { cols, rows, ...(mode ? { mode } : {}), ...(claim === undefined ? {} : { claim }) };
 }
 
 /** Полезная нагрузка ERROR-фрейма — причина, по которой сервер рвёт сессию. */

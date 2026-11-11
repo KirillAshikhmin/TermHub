@@ -657,6 +657,30 @@ describe('wireTerminalWs и режим подключения', () => {
     expect(opts.configMode).toBe('control');
   });
 
+  it('признак заявки размера из RESIZE доезжает до терминала; без поля — заявка есть', () => {
+    const resizes: Array<[number, number, boolean | undefined]> = [];
+    const attach = (() => ({
+      write: () => {},
+      resize: (c: number, r: number, claim?: boolean) => resizes.push([c, r, claim]),
+      pause: () => {},
+      resume: () => {},
+      dispose: () => {},
+    })) as unknown as typeof attachTerminal;
+    const { ws, emit } = makeFakeWs();
+    wireTerminalWs({ attach })(ws as never, 'sess');
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 80, rows: 24 }))); // открывает терминал
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 100, rows: 30, claim: false })));
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 100, rows: 30, claim: true })));
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 90, rows: 20 }))); // клиент, который поля не знает
+    emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 90, rows: 20, claim: 'no' }))); // мусор — не отказ
+    expect(resizes.slice(-4)).toEqual([
+      [100, 30, false],
+      [100, 30, true],
+      [90, 20, true],
+      [90, 20, true],
+    ]);
+  });
+
   it('нестроковая просьба режима отбрасывается так же, как на relay-пути', () => {
     const { opts, attach } = captureAttach();
     const { ws, emit } = makeFakeWs();

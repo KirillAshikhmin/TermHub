@@ -133,7 +133,14 @@ export interface OpenedTerm {
 
 /** Транспорт-заглушка: openTerm отдаёт канал, пишущий кадры (в порядке отправки) в
  *  общий журнал frames; статус/конец сессии тест дёргает через opened[i].opts. */
-export function termTransport(): { transport: Transport; frames: Frame[]; opened: OpenedTerm[] } {
+export function termTransport(): {
+  transport: Transport;
+  frames: Frame[];
+  opened: OpenedTerm[];
+  /** Признак заявки размера каждого кадра RESIZE, в порядке отправки. */
+  claims: Array<boolean | undefined>;
+} {
+  const claims: Array<boolean | undefined> = [];
   const frames: Frame[] = [];
   const opened: OpenedTerm[] = [];
   const decoder = new TextDecoder();
@@ -150,7 +157,8 @@ export function termTransport(): { transport: Transport; frames: Frame[]; opened
         write: (bytes: Uint8Array): void => {
           frames.push({ kind: 'data', text: decoder.decode(bytes) });
         },
-        resize: (cols: number, rows: number): void => {
+        resize: (cols: number, rows: number, claim?: boolean): void => {
+          claims.push(claim);
           frames.push({ kind: 'resize', text: `${cols}x${rows}` });
         },
         close: (): void => {
@@ -160,7 +168,7 @@ export function termTransport(): { transport: Transport; frames: Frame[]; opened
     },
     close: () => {},
   } as unknown as Transport;
-  return { transport, frames, opened };
+  return { transport, frames, opened, claims };
 }
 
 /** happy-dom без ResizeObserver, а term.ts наблюдает за host'ом — ставим заглушку. */

@@ -3027,42 +3027,6 @@ main.th-gradle {
   white-space: nowrap;
 }
 
-/* Пометка приложения, ушедшего в альтернативный экран: у такого истории не бывает.
-   Нажатие объясняет причину словами (на телефоне подсказки по наведению нет). */
-/* Способ подключения терминала: одной буквой (C — control mode, A — attach),
-   слово целиком живёт в подсказке. Показывает режим, который вернул агент, и служит
-   переключателем просьбы на следующее открытие (is-pending — просьба ждёт его). */
-.th-termbar__mode {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  color: var(--text-dim);
-  background: none;
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 700;
-  line-height: 1;
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  cursor: pointer;
-}
-
-.th-termbar__mode.is-pending {
-  color: var(--accent);
-  border-color: var(--accent);
-  border-style: dashed;
-}
-
-/* Агент подключил не тем способом, который просили (настройка агента или откат). */
-.th-termbar__mode.is-overridden {
-  color: var(--claude);
-  border-color: var(--claude);
-}
-
 /* Индикатор активности сессии — маленький кружок перед именем, «гуляющий» между
    двумя позициями (как индикатор в IDE). Кружок нарисован CSS (без шрифтовых
    артефактов брайля), движение — transform (надёжно везде). */

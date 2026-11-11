@@ -30,7 +30,7 @@ import {
 
 import { openRelaySocket } from './relay-socket';
 import { b64, unb64 } from './b64';
-import { parseTerminalState } from './ws-frames';
+import { parseTerminalState, resizePayload } from './ws-frames';
 import { feedQuery } from './api';
 import type { CaffeinateState, DeviceInfo, DeviceScope, FeedOptions, FeedResult, FileStat, ShareInfo } from './api';
 import type {
@@ -1401,7 +1401,8 @@ export class RelayTransport implements Transport {
     if (this.state === 'streaming') this.sendEncrypted(jsonFrame(FrameType.Open, channel, openPayload(entry)));
     return {
       write: (bytes: Uint8Array): void => this.sendFrame(encodeFrame({ type: FrameType.Data, channel, payload: bytes })),
-      resize: (cols: number, rows: number): void => this.sendFrame(jsonFrame(FrameType.Resize, channel, { cols, rows })),
+      resize: (cols: number, rows: number, claim?: boolean): void =>
+        this.sendFrame(jsonFrame(FrameType.Resize, channel, resizePayload(cols, rows, undefined, claim))),
       close: (): void => {
         if (this.terminals.delete(channel) && this.state === 'streaming')
           this.sendFrame(jsonFrame(FrameType.Close, channel, {}));

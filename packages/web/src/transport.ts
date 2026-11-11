@@ -57,7 +57,8 @@ export interface TermChannelOpts {
 /** Дуплекс терминала: ввод/ресайз/закрытие. */
 export interface TermChannel {
   write(bytes: Uint8Array): void;
-  resize(cols: number, rows: number): void;
+  /** `claim` — забирать ли размер окна себе (см. resizePayload); не назван — да. */
+  resize(cols: number, rows: number, claim?: boolean): void;
   close(): void;
 }
 
@@ -272,11 +273,11 @@ class LanTermChannel implements TermChannel {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(dataFrame(bytes));
   }
 
-  resize(cols: number, rows: number): void {
+  resize(cols: number, rows: number, claim?: boolean): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     const mode = this.modePending ? this.opts.mode : undefined;
     this.modePending = false;
-    this.ws.send(resizeFrame(cols, rows, mode));
+    this.ws.send(resizeFrame(cols, rows, mode, claim));
   }
 
   close(): void {

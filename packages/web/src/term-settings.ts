@@ -12,7 +12,13 @@ import {
   type TermBg,
   type TermFont,
 } from './term-prefs';
-import { lastTerminalMode, setTerminalModeRequest, terminalModeName, terminalModeRequest } from './term-mode';
+import {
+  lastTerminalMode,
+  sessionTerminalMode,
+  setTerminalModeRequest,
+  terminalModeName,
+  terminalModeRequest,
+} from './term-mode';
 import type { TerminalMode } from './transport';
 import { THEME_CHOICES, setThemeChoice, themeChoice, type ThemeChoice } from './theme';
 import { iconButton, openModal } from './ui';
@@ -63,7 +69,7 @@ function segment<T>(
   return field(label, seg);
 }
 
-export function openTermSettings(): void {
+export function openTermSettings(ctx: { session?: string } = {}): void {
   openModal((close) => {
     const box = document.createElement('div');
     box.className = 'th-termview';
@@ -208,7 +214,9 @@ export function openTermSettings(): void {
     );
     const modeHint = document.createElement('p');
     modeHint.className = 'th-settings__hint';
-    const last = lastTerminalMode();
+    // Открыто из терминала — называем режим именно его сессии: «последний ответ любого
+    // терминала» соврал бы там, где один из двух откатился на attach.
+    const last = (ctx.session !== undefined ? sessionTerminalMode(ctx.session) : undefined) ?? lastTerminalMode();
     modeHint.textContent = `${last ? t('termview.modeNow', { mode: terminalModeName(last) }) : t('term.modeUnknown')}. ${t('termview.modeHint')}`;
 
     const section = (name: string, ...rows: HTMLElement[]): HTMLElement => {

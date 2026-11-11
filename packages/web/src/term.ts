@@ -19,10 +19,12 @@ import { resetDocumentTitle, setSessionDocumentTitle } from './document-title';
 import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
 import { mountSessionTabs, pickNeighbor } from './tabs';
+import { correctMirrorMouse } from './mirror-mouse';
 import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
 import {
   noteTerminalMode,
+  terminalModeName,
   terminalModeRequest,
 } from './term-mode';
 import { markBellSeen, recordBell, unseenBellCount } from './bell-seen';
@@ -41,6 +43,8 @@ import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderH
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 // Потолок очереди ввода до подключения (см. sendData): не влезающий чанк отбрасывается целиком.
 const INPUT_QUEUE_MAX = 8 * 1024;
+/** Сколько после действия человека экран считается рабочим (см. activeHere). */
+const ACTIVE_WINDOW_MS = 10_000;
 
 // Открыта ли compose-строка — на уровне модуля, чтобы состояние переживало
 // переключение вкладок (пере-монтирование term-экрана). Содержимое не храним:
@@ -196,6 +200,9 @@ export function mountTerminal(
   // в кадр открытия ниже. Выбирают её в окне настроек — там же названо, каким способом
   // агент подключил на самом деле (его настройка старше просьбы, возможен откат на attach).
   const openedMode: TerminalMode = terminalModeRequest();
+  let modeWarned = false;
+  /** Масштаб зеркала (fitForeign); 1 — экран в натуральную величину. */
+  let mirrorScale = 1;
   // Пометка экрана и размер панели живут ровно одним подключением: их знает только агент,
   // и приходят они кадром состояния. Пережить смену канала им нельзя — иначе «включён» от
   // терминала, открытого до перезапуска агента, горит над новой сессией, которой оно не
@@ -205,6 +212,8 @@ export function mountTerminal(
     setAltScreen(false);
     paneSize = undefined;
     sentSize = ''; // новому терминалу агента размер ещё не называли
+    claimedFor = '';
+    paneMovedSinceClaim = true;
   };
 
   const dot = document.createElement('span');
@@ -223,7 +232,7 @@ export function mountTerminal(
   viewBtn.title = t('termview.title');
   viewBtn.setAttribute('aria-label', t('termview.title'));
   viewBtn.addEventListener('mousedown', (e) => e.preventDefault());
-  viewBtn.addEventListener('click', () => openTermSettings());
+  viewBtn.addEventListener('click', () => openTermSettings({ session }));
   bar.append(...(tabs ? [tabs.el] : []), toggleSlot, viewBtn, dot);
   if (!embedded) screen.append(bar);
 
@@ -327,6 +336,10 @@ export function mountTerminal(
   // Касание или клик по терминалу — тоже работа здесь (см. claimSize).
   const onPointerClaim = (): void => claimSize();
   host.addEventListener('pointerdown', onPointerClaim);
+  const offMirrorMouse = correctMirrorMouse(
+    () => term.element?.querySelector<HTMLElement>('.xterm-screen'),
+    () => mirrorScale,
+  );
   host.addEventListener('mouseup', onSelectionEnd);
 
   // Кликабельные пути: путь в выводе открывает ПРОВОДНИК СЕССИИ (переключение вкладки,
@@ -487,9 +500,19 @@ export function mountTerminal(
   // зеркалом (fitForeign), а действие здесь забирает размер себе (claimSize).
   let wanted = { cols: term.cols, rows: term.rows };
   let sentSize = '';
-  const sendResize = (): void => {
+  /** Когда человек последний раз что-то делал на этом экране (ввод, касание, клик). */
+  let lastAction = -Infinity;
+  const noteAction = (): void => {
+    lastAction = performance.now();
+  };
+  /** Работают ли сейчас здесь. Просьба размера от экрана, на котором не работают
+   *  (пересчёт раскладки пассивной вкладки: схлопнулась адресная строка телефона,
+   *  показалась вкладка), размер окна у другого клиента отбирать не должна. */
+  const activeHere = (): boolean => performance.now() - lastAction < ACTIVE_WINDOW_MS;
+  /** `claim` — забирать ли размер окна себе; по умолчанию — если здесь работают. */
+  const sendResize = (claim = activeHere()): void => {
     sentSize = `${wanted.cols}x${wanted.rows}`;
-    channel?.resize(wanted.cols, wanted.rows);
+    channel?.resize(wanted.cols, wanted.rows, claim);
   };
   /** Размер панели не наш: его держит другой клиент — тот, с которым работали последним. */
   const foreignSize = (): boolean =>
@@ -505,6 +528,7 @@ export function mountTerminal(
     const sw = screenEl?.offsetWidth ?? 0;
     const sh = screenEl?.offsetHeight ?? 0;
     const k = foreignSize() && sw > 0 && sh > 0 ? Math.min(1, host.clientWidth / sw, host.clientHeight / sh) : 1;
+    mirrorScale = k; // мышь над зеркалом пересчитывается в систему экрана (mirror-mouse.ts)
     if (k < 1) {
       xt.style.width = `${sw}px`;
       xt.style.height = `${sh}px`;
@@ -517,16 +541,24 @@ export function mountTerminal(
     }
   };
   /** Действие пользователя на этом экране: размер задаёт тот клиент, с которым работают.
-   *  Просьба уходит заново — агент делает нас «последним» клиентом tmux, и панель
-   *  принимает наш размер. Не чаще раза в секунду: панель могла не принять размер
-   *  (пределы агента), и каждое нажатие иначе слало бы просьбу. */
-  let lastClaim = 0;
+   *  Просьба уходит заново с заявкой — агент делает нас «последним» клиентом tmux, и панель
+   *  принимает наш размер.
+   *
+   *  Панель может не встать под нас никогда: окно tmux поделено на панели, `window-size`
+   *  задан вручную, просьба вне пределов агента. Поэтому на одну и ту же просьбу заявка
+   *  уходит один раз — и снова только после того, как размер панели сменился (его забрал
+   *  кто-то ещё). Иначе каждое нажатие слало бы заявку, а с ней — перерисовку экрана у
+   *  всех клиентов сессии. */
+  let claimedFor = '';
+  let paneMovedSinceClaim = true;
   const claimSize = (): void => {
+    noteAction();
     if (!connected || readOnly || !foreignSize()) return;
-    const now = performance.now();
-    if (now - lastClaim < 1000) return;
-    lastClaim = now;
-    sendResize();
+    const ask = `${wanted.cols}x${wanted.rows}`;
+    if (ask === claimedFor && !paneMovedSinceClaim) return;
+    claimedFor = ask;
+    paneMovedSinceClaim = false;
+    sendResize(true);
   };
   const doFit = (): void => {
     try {
@@ -621,9 +653,19 @@ export function mountTerminal(
       if (disposed) return;
       // Поля независимы: пришло одно — второе не трогаем.
       // Работающий способ подключения запоминается для окна настроек и диагностики.
-      if (state.mode) noteTerminalMode(state.mode);
+      if (state.mode) {
+        noteTerminalMode(state.mode, session);
+        // Агент подключил не тем способом, о котором просили (его настройка старше, либо
+        // control mode не поднялся и он откатился): сказать об этом надо у этого терминала —
+        // общая настройка называет лишь последний ответ любого из них.
+        if (state.mode !== openedMode && !modeWarned) {
+          modeWarned = true;
+          toast(t('term.modeOverridden', { mode: terminalModeName(openedMode) }));
+        }
+      }
       if (state.altScreen !== undefined) setAltScreen(state.altScreen);
       if (state.cols !== undefined && state.rows !== undefined) {
+        if (paneSize?.cols !== state.cols || paneSize?.rows !== state.rows) paneMovedSinceClaim = true;
         paneSize = { cols: state.cols, rows: state.rows };
         doFit();
       }
@@ -636,6 +678,9 @@ export function mountTerminal(
         // Новое подключение — новый терминал у агента: всё, что он называл прошлому,
         // здесь недействительно (см. forgetAgentState).
         forgetAgentState();
+        // Терминал открыл человек, который сейчас смотрит на эту страницу, — это его
+        // действие; переподключение вкладки в фоне им не является.
+        if (document.hasFocus()) noteAction();
         banner.classList.remove('is-shown');
         doFit();
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.
@@ -922,8 +967,9 @@ export function mountTerminal(
   // идёт серией событий, и одна потерянная или обогнанная в пути просьба оставляет агенту
   // прежний размер: tmux рисует в меньшую область, а ниже остаётся старая картинка. Через
   // треть секунды после последнего события размер меряется заново и уходит ещё раз — даже
-  // если с точки зрения клиента он уже был отправлен. Повтор безвреден: тот же размер
-  // агент применяет без последствий.
+  // если с точки зрения клиента он уже был отправлен. Повтор безвреден: ту же просьбу
+  // агент второй раз tmux не шлёт, а заявку на размер окна она несёт, только если здесь
+  // работают (sendResize) — пассивная вкладка размер у другого клиента не отбирает.
   let resendTimer: ReturnType<typeof setTimeout> | undefined;
   const resendSoon = (): void => {
     if (resendTimer) clearTimeout(resendTimer);
@@ -968,6 +1014,7 @@ export function mountTerminal(
       selectionDisp.dispose();
       host.removeEventListener('mousedown', onSelectionStart);
       host.removeEventListener('pointerdown', onPointerClaim);
+      offMirrorMouse();
       host.removeEventListener('mouseup', onSelectionEnd);
       stopTouchScroll?.();
       stopTouchSelect?.();
