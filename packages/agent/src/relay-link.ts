@@ -416,8 +416,10 @@ export class RelayLink {
    *  ограничение доступа для спариваемого устройства (шаринг одной сессии). */
   async openPairing(
     scope?: DeviceScope,
+    /** Готовый код: один и тот же пейринг открывается на нескольких relay (см. sharePairing). */
+    preset?: { code: string; roomId: string; secret: string },
   ): Promise<{ code: string; expiresAt: number; done: Promise<AuthorizedDevice> }> {
-    const { code, roomId, secret } = generatePairingCode();
+    const { code, roomId, secret } = preset ?? generatePairingCode();
     const key = pairKey(secret);
     this.failPairing(new Error('replaced by a new pairing'));
 
@@ -444,6 +446,11 @@ export class RelayLink {
     // За время ожидания пейринг мог быть заменён/истечь — шлём pair-open только если он всё ещё активен.
     if (this.pairing === pairing && !pairing.settled) this.send({ t: 'pair-open', roomId });
     return { code, expiresAt: Date.now() + PAIR_TTL_MS, done };
+  }
+
+  /** Снимает открытый пейринг (код использован на другом relay). */
+  cancelPairing(reason: string): void {
+    this.failPairing(new Error(reason));
   }
 
   // ── Соединение и register-хендшейк ──────────────────────────────────────────

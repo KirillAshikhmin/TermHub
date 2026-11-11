@@ -138,6 +138,53 @@ access" prompt); alternatively you can add it to the config manually and restart
 the agent. On a successful connection, the agent log shows the line
 `Relay bridge enabled: wss://...`.
 
+## A relay on the agent's own machine (no VPS)
+
+If the machine has a public address and the router can forward a port, the relay does not
+have to live on a VPS: the agent starts it itself. What faces the internet is then the
+relay, not the password login — access is still granted by pairing, every device has its
+own key, revocation is per device, and the traffic is end-to-end encrypted. The password
+login stays on the local network.
+
+It is switched on by one field in `~/.termhub/config.json` (absent by default, and nothing
+changes without it):
+
+```json
+"localRelay": { "port": 7720 }
+```
+
+| Field | Meaning |
+|---|---|
+| `port` | Relay port. Must differ from the agent port. |
+| `host` | Bind address, `0.0.0.0` by default. |
+| `tls` | `{ "cert": path, "key": path }` — the relay certificate. Absent — the agent's certificate (`tls`) is used. `null` — plain HTTP. |
+
+Restart the agent after the change. What happens:
+
+- the relay runs as a separate process next to the agent and is restarted if it crashes;
+  it stops together with the agent. Its log goes to the agent log with the `[relay]` prefix;
+- the agent connects to it over loopback with a second bridge. `relayUrl`, if set, keeps
+  working as before — both relays are active at once;
+- `termhub share` and "Share" issue one code for both relays: the device enters it on the
+  page it opened. A paired device is bound to the page address, so the phone pairs again
+  for a new address (each address has its own device key);
+- relay settings from the agent's environment (`RELAY_CHUNKED`, `RELAY_CLIENT_TRANSPORT`,
+  `RTC_PORT_RANGE`, `RTC_PUBLIC_IP`) apply to the local relay too.
+
+Router forwarding: any external port (443 is fine) to `localRelay.port` on the agent's
+machine. Do not forward the agent's own port (the password login).
+
+**Certificate.** The browser needs HTTPS with a certificate for the name you open the page
+by: point a domain at the public address, issue a certificate for it (Let's Encrypt) and
+put the paths into `localRelay.tls`. The certificate is read when the relay starts —
+restart the agent after renewal. Without TLS (`"tls": null`, e.g. on port 80) the page
+opens, but the application code travels in clear text: anyone on the path can replace it
+and take the device key. Service worker and PWA install do not work without HTTPS either.
+Plain HTTP is for testing only.
+
+The local relay state is shown in the connection details window ("Local relay" row) and in
+`/api/diag` (`localRelay`).
+
 ## Networks where the provider throttles each connection
 
 If the relay page opens as a blank screen and the agent keeps losing its link although the

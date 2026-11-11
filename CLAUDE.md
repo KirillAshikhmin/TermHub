@@ -310,6 +310,17 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - Кука получает `Secure` по соединению (`req.socket.encrypted`), а не по наличию `tls` в конфиге — иначе вход по паролю на HTTP-входе не работал бы в Safari.
 - Тесты — `packages/agent/test/local-entrance.test.ts` (настоящий `openssl` во временном каталоге).
 
+## Свой relay на машине агента
+
+Пользовательское описание — раздел в `docs/remote.ru.md` / `docs/remote.md`.
+
+- `localRelay: {port, host?, tls?}` в config.json (`readLocalRelay` в `packages/agent/src/local-relay.ts`): поля нет — ничего не меняется. `tls` не задан — сертификат агента, `null` — обычный HTTP.
+- Relay — отдельный процесс (`LocalRelay`: `fork` бинаря `@termhub/relay`, перезапуск с паузой 1–30 с, настройки через окружение `PORT`/`HOST`/`TLS_CERT`/`TLS_KEY`): он разбирает трафик из интернета, и его падение не должно ронять агента. Потеряв родителя (`disconnect` канала fork), relay выходит сам — иначе держал бы порт.
+- Мостов `RelayLink` у агента теперь список (`cli.ts`): на `relayUrl` и на свой relay по loopback (`dial.insecure` — сертификат выписан на внешнее имя; из конфига флаг не читается). Статус связи в `/api/diag` — первого моста, пересечение возможностей — самого свежего обмена; свой relay — отдельным полем `localRelay`.
+- Код пейринга один на все мосты (`sharePairing`): `RelayLink.openPairing(scope, preset)` принимает готовый код, ответ даёт первый открывший комнату, использованный на одном relay код снимается на остальных (`cancelPairing`). Кадр `Share` от клиента открывает пейринг только на своём мосту.
+- Relay умеет TLS и адрес привязки сам (`RelayOptions.tls`/`host`); занятый порт — отказ `listen()`, а не необработанное событие.
+- Тесты: `packages/agent/test/local-relay.test.ts` (процесс подменён), `packages/relay/test/tls.test.ts` (настоящий `openssl`).
+
 ## Обход удушения потока (ADR 0034)
 
 Пользовательское описание и настройка — `docs/throttling.ru.md` / `docs/throttling.md` (держать синхронными); в `docs/remote*.md` осталась только отсылка.

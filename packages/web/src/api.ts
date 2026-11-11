@@ -224,6 +224,8 @@ export interface DiagInfo {
   tls: boolean;
   roots: string[];
   sessions: number;
+  /** Свой relay на машине агента; поля нет — он не включён (или агент старше). */
+  localRelay?: { port: number; tls: boolean; running: boolean; connected: boolean; clients: number };
   relay:
     | { configured: false }
     | { configured: true; url: string; connected: boolean; agentId: string; clients: number; dial?: string };

@@ -109,6 +109,15 @@ who controls the relay could serve modified code. The CLI client
 machine. If this matters to you, use the CLI or serve the PWA from the agent
 over the LAN.
 
+## Direct access from the internet
+
+Do not expose the agent port (the password login) to the internet: the password is the only
+barrier in front of a shell there, and the attempt limit is per address. For direct access
+over a public address expose the local relay instead (`localRelay`, see
+[remote.md](remote.md)): it knows neither the password nor the content, runs as a separate
+process, and only keys of paired devices grant access. A certificate for the name the page
+is opened by is required: over plain HTTP the application code can be replaced in transit.
+
 ## Protection against arbitrary commands (anti-RCE)
 
 The agent's API does not run just anything:

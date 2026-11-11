@@ -92,10 +92,12 @@ function fillDiag(main: HTMLElement): () => void {
     const card = document.createElement('div');
     card.className = 'th-diag__card';
 
-    const relayOk = d.relay.configured && d.relay.connected;
+    // Внешнего relay нет, но есть свой — плашка говорит о нём.
+    const anyRelay = d.relay.configured || d.localRelay !== undefined;
+    const relayOk = d.relay.configured ? d.relay.connected : d.localRelay?.connected === true;
     const badge = document.createElement('div');
-    badge.className = `th-diag__status ${!d.relay.configured ? 'is-off' : relayOk ? 'is-ok' : 'is-bad'}`;
-    badge.textContent = !d.relay.configured
+    badge.className = `th-diag__status ${!anyRelay ? 'is-off' : relayOk ? 'is-ok' : 'is-bad'}`;
+    badge.textContent = !anyRelay
       ? t('diag.relayOff')
       : relayOk
         ? t('diag.relayOk')
@@ -117,6 +119,14 @@ function fillDiag(main: HTMLElement): () => void {
         [t('diag.clients'), String(d.relay.clients)],
       );
       if (d.relay.dial) rows.push([t('diag.relayDial'), d.relay.dial]);
+    }
+    if (d.localRelay) {
+      const lr = d.localRelay;
+      const state = !lr.running ? t('diag.localRelayDown') : lr.connected ? t('diag.relayOk') : t('diag.relayBad');
+      rows.push([
+        t('diag.localRelay'),
+        `:${lr.port}${lr.tls ? ' · TLS' : ''} · ${state} · ${t('diag.clients')}: ${lr.clients}`,
+      ]);
     }
     rows.push([t('diag.roots'), d.roots.join('\n')]);
 

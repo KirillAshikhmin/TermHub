@@ -82,8 +82,8 @@ function printPairing(result: ShareResult): void {
 /** Точка входа команды `termhub share`. Возвращает код выхода процесса. */
 export async function runShare(): Promise<number> {
   const config = loadConfig();
-  if (!config.relayUrl) {
-    console.error('Relay is not configured: relayUrl is not set in the config. Run `termhub setup` and provide a Relay URL.');
+  if (!config.relayUrl && !config.localRelay) {
+    console.error('Relay is not configured: neither relayUrl nor localRelay is set in the config. Run `termhub setup` and provide a Relay URL.');
     return 1;
   }
   try {

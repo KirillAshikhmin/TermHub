@@ -16,6 +16,7 @@ import { Caffeinate } from './caffeinate.js';
 import { LidAwake, sudoersInstallCommand } from './lid-awake.js';
 import { wireTerminalWs } from './bridge.js';
 import { RelayLink } from './relay-link.js';
+import { LocalRelay, readLocalRelay, localRelayUrl, sharePairing } from './local-relay.js';
 import { runShare } from './share.js';
 import { pairCommand } from './pair-cmd.js';
 import { connectCommand } from './connect-cmd.js';
@@ -45,28 +46,47 @@ async function runStart(): Promise<number> {
   void lidAwake.recover();
   const caffeinate = new Caffeinate({ lid: lidAwake });
 
-  // Relay-мост поднимается только если задан relayUrl (иначе агент — чисто LAN).
-  let relayLink: RelayLink | undefined;
+  // Relay-мосты: на внешний relay (relayUrl) и на свой, запущенный на этой машине
+  // (localRelay). Ни того ни другого — агент чисто LAN. Мосты независимы: устройство
+  // спарено с агентом, а не с relay, и ходит через тот, чью страницу открыло.
   const relayDial = readRelayDial(config);
-  if (config.relayUrl) {
+  const localRelayCfg = readLocalRelay(config);
+  const localRelay = localRelayCfg ? new LocalRelay(localRelayCfg) : undefined;
+  const links: RelayLink[] = [];
+  let localLink: RelayLink | undefined;
+  if (config.relayUrl || localRelayCfg) {
     await initCrypto();
-    relayLink = new RelayLink({
-      url: config.relayUrl,
-      dial: relayDial,
-      identity: loadIdentity(),
-      authorized: () => loadAuthorized(),
-      sessions,
-      caffeinate,
-      push,
-      files,
-      vcs,
-      roots: config.sessionRoots,
-      socketName: TMUX_SOCKET,
-      configMode: terminalMode,
-      localUrls: () => localUrls({ port: config.port, tls: config.tls !== null }),
-    });
+    const identity = loadIdentity();
+    const makeLink = (url: string, dial: typeof relayDial): RelayLink =>
+      new RelayLink({
+        url,
+        dial,
+        identity,
+        authorized: () => loadAuthorized(),
+        sessions,
+        caffeinate,
+        push,
+        files,
+        vcs,
+        roots: config.sessionRoots,
+        socketName: TMUX_SOCKET,
+        configMode: terminalMode,
+        localUrls: () => localUrls({ port: config.port, tls: config.tls !== null }),
+      });
+    if (config.relayUrl) links.push(makeLink(config.relayUrl, relayDial));
+    if (localRelayCfg) {
+      localLink = makeLink(localRelayUrl(localRelayCfg), { insecure: true });
+      links.push(localLink);
+    }
   }
-  const link = relayLink;
+  // Статус для диагностики: связь — основного моста (внешний, а без него свой),
+  // пересечение возможностей — самого свежего обмена среди всех.
+  const relayStatus = (): ReturnType<RelayLink['status']> | null => {
+    if (links.length === 0) return null;
+    const all = links.map((l) => l.status());
+    const freshest = all.reduce((a, b) => (b.capsAt > a.capsAt ? b : a));
+    return { ...all[0], caps: freshest.caps, capsAt: freshest.capsAt };
+  };
 
   const server = new AgentServer({
     config,
@@ -76,26 +96,45 @@ async function runStart(): Promise<number> {
     push,
     caffeinate,
     socketName: TMUX_SOCKET,
-    onShare: link
-      ? (scope) => link.openPairing(scope).then((p) => ({ code: p.code, expiresAt: p.expiresAt }))
-      : undefined,
-    relayStatus: () => link?.status() ?? null,
+    onShare: links.length > 0 ? (scope) => sharePairing(links, scope) : undefined,
+    relayStatus,
+    localRelay:
+      localRelay && localLink
+        ? () => {
+            const st = localLink.status();
+            return {
+              port: localRelay.config.port,
+              tls: localRelay.config.tls !== null,
+              running: localRelay.running,
+              connected: st.connected,
+              clients: st.clients,
+            };
+          }
+        : undefined,
   });
   server.attachTerminalWs(wireTerminalWs({ socketName: TMUX_SOCKET, configMode: terminalMode }));
   sessions.onBell((name, task) => void push.notifyBell(name, task));
   const port = await server.listen();
   sessions.startPolling();
-  link?.start();
+  localRelay?.start();
+  for (const l of links) l.start();
   console.log(`TermHub agent listening on ${config.host}:${port} (${config.tls ? 'https' : 'http'})`);
   const loopbackPort = server.loopbackPort();
   if (loopbackPort !== undefined) console.log(`Local http entrance: http://localhost:${loopbackPort}`);
-  if (link) console.log(`Relay bridge enabled: ${config.relayUrl} (${describeDial(relayDial)})`);
+  if (config.relayUrl) console.log(`Relay bridge enabled: ${config.relayUrl} (${describeDial(relayDial)})`);
+  if (localRelayCfg) {
+    console.log(`Local relay: ${localRelayCfg.tls ? 'https' : 'http'} on ${localRelayCfg.host}:${localRelayCfg.port}`);
+    if (!localRelayCfg.tls) console.warn('Local relay runs without TLS: do not expose it to the internet as is.');
+  }
 
   const shutdown = (): void => {
     sessions.stopPolling();
     caffeinate.set(false); // отпускаем удержание сна при остановке агента
     lidAwake.release(); // и возвращаем сон по закрытой крышке
-    void Promise.resolve(link?.stop()).finally(() => server.close().finally(() => process.exit(0)));
+    void Promise.allSettled(links.map((l) => l.stop())).finally(() => {
+      localRelay?.stop();
+      void server.close().finally(() => process.exit(0));
+    });
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

@@ -23,6 +23,10 @@ export interface RelayDial {
   connect?: string;
   disguise?: Disguise;
   transport?: 'ws' | 'poll';
+  /** Не проверять сертификат relay. Только для своего relay на loopback (local-relay.ts):
+   *  его сертификат выписан на внешнее имя, а не на 127.0.0.1. Из конфига не читается.
+   *  Relay и так не доверенная сторона: содержимое закрыто сквозным шифрованием. */
+  insecure?: boolean;
 }
 
 interface DialSource {
@@ -89,7 +93,9 @@ export function describeDial(dial: RelayDial): string {
  *  как ws.WebSocket в той части, которой пользуются мост агента и CLI. */
 export function openRelaySocket(url: string, dial: RelayDial = {}): WebSocket {
   if (dial.transport === 'poll') return new PollWs(url) as unknown as WebSocket;
-  if (!dial.connect && !dial.disguise) return new WebSocket(url);
+  if (!dial.connect && !dial.disguise) {
+    return dial.insecure ? new WebSocket(url, { rejectUnauthorized: false }) : new WebSocket(url);
+  }
   const target = new URL(url);
   const secure = target.protocol === 'wss:';
   const to = (dial.connect && splitHostPort(dial.connect)) || {

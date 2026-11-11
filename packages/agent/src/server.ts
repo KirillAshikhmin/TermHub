@@ -148,8 +148,20 @@ function parseCookies(header: string | undefined): Map<string, string> {
   return map;
 }
 
+/** Состояние своего relay для /api/diag. */
+export interface LocalRelayStatus {
+  port: number;
+  tls: boolean;
+  /** Жив ли процесс relay. */
+  running: boolean;
+  /** Зарегистрирован ли на нём агент. */
+  connected: boolean;
+  clients: number;
+}
+
 /** HTTP/WS-сервер агента. */
 export class AgentServer {
+  private readonly localRelay?: () => LocalRelayStatus;
   private readonly config: TermhubConfig;
   private readonly sessions: SessionService;
   private readonly files?: FileService;
@@ -191,6 +203,8 @@ export class AgentServer {
     vcs?: VcsService;
     onShare?: (scope?: DeviceScope) => Promise<{ code: string; expiresAt: number }>;
     relayStatus?: () => { connected: boolean; agentId: string; clients: number; caps: string[]; capsAt: number } | null;
+    /** Свой relay на этой машине (local-relay.ts): состояние для диагностики. */
+    localRelay?: () => LocalRelayStatus;
     push?: PushService;
     caffeinate?: CaffeinateController;
     /** Сокет tmux рабочих сессий (в проде — config.TMUX_SOCKET). */
@@ -207,6 +221,7 @@ export class AgentServer {
     this.vcs = opts.vcs;
     this.onShare = opts.onShare;
     this.relayStatus = opts.relayStatus;
+    this.localRelay = opts.localRelay;
     this.push = opts.push;
     this.caffeinate = opts.caffeinate;
     this.socketName = opts.socketName;
@@ -551,6 +566,7 @@ export class AgentServer {
       roots: this.config.sessionRoots,
       sessions: sessions.length,
       caps: { agent: AGENT_CAPS, negotiated: rs && rs.capsAt > this.lanCapsAt ? rs.caps : this.lanCaps },
+      localRelay: this.localRelay?.(),
       relay: this.config.relayUrl
         ? {
             configured: true,

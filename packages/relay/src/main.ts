@@ -17,8 +17,18 @@ function resolveStaticDir(): string {
 export async function main(): Promise<void> {
   const port = Number(process.env.PORT ?? DEFAULT_PORT);
   const staticDir = resolveStaticDir();
-  const handle = await startRelay({ port, staticDir });
-  console.log(`[relay] listening on :${handle.port} (static: ${staticDir})`);
+  // HOST — адрес привязки; TLS_CERT + TLS_KEY — relay сам отвечает по HTTPS (без прокси
+  // перед ним: так его запускает агент на своей машине, см. local-relay.ts агента).
+  const host = process.env.HOST || undefined;
+  const tls =
+    process.env.TLS_CERT && process.env.TLS_KEY
+      ? { cert: process.env.TLS_CERT, key: process.env.TLS_KEY }
+      : undefined;
+  // Запущен дочерним процессом агента: не стало родителя — не нужен и relay (иначе он
+  // остался бы держать порт, и следующий запуск агента свой relay не поднял бы).
+  if (typeof process.send === 'function') process.on('disconnect', () => process.exit(0));
+  const handle = await startRelay({ port, host, tls, staticDir });
+  console.log(`[relay] listening on ${host ?? ''}:${handle.port} (${tls ? 'https' : 'http'}, static: ${staticDir})`);
   // Порт маскировки (см. disguise-port.ts): DISGUISE_PORT включает его, DISGUISE_UPSTREAM
   // говорит, куда отдавать поток после преамбулы, — по умолчанию на сам relay, но за
   // TLS-прокси нужен адрес прокси (например caddy:9443), иначе клиент придёт без TLS.

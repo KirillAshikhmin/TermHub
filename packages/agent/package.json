@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@termhub/protocol": "*",
+    "@termhub/relay": "*",
     "node-pty": "^1.1.0",
     "qrcode-terminal": "^0.12.0",
     "web-push": "^3.6.7",

@@ -4,6 +4,8 @@
 // расшифровывает содержимое, ничего не пишет на диск. Только node:http + ws.
 
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import net from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -34,6 +36,11 @@ const WS_PATH = '/relay';
 
 export interface RelayOptions {
   port: number;
+  /** Адрес привязки; по умолчанию — все интерфейсы. */
+  host?: string;
+  /** Пути к сертификату и ключу: relay сам отвечает по HTTPS/WSS, без прокси перед ним
+   *  (relay на машине агента). Без поля — обычный HTTP, TLS снимает прокси. */
+  tls?: { cert: string; key: string };
   /** Каталог собранного web-бандла; без него отдаётся заглушка. */
   staticDir?: string;
   /** TTL pair-комнаты в мс (для тестов). */
@@ -167,12 +174,21 @@ class RelayServer {
       }
     }, HEARTBEAT_MS);
     if (typeof this.heartbeat.unref === 'function') this.heartbeat.unref();
-    this.server = http.createServer((req, res) => this.handleHttp(req, res));
+    const handler = (req: IncomingMessage, res: ServerResponse): void => this.handleHttp(req, res);
+    this.server = opts.tls
+      ? (https.createServer({ cert: fs.readFileSync(opts.tls.cert), key: fs.readFileSync(opts.tls.key) }, handler) as unknown as Server)
+      : http.createServer(handler);
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
 
   async listen(): Promise<RelayHandle> {
-    await new Promise<void>((resolve) => this.server.listen(this.opts.port, resolve));
+    await new Promise<void>((resolve, reject) => {
+      this.server.once('error', reject);
+      this.server.listen(this.opts.port, this.opts.host, () => {
+        this.server.off('error', reject);
+        resolve();
+      });
+    });
     const addr = this.server.address();
     const port = typeof addr === 'object' && addr ? addr.port : this.opts.port;
     return { port, close: () => this.close() };
