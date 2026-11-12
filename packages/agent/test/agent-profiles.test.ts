@@ -98,6 +98,16 @@ describe('профиль Codex', () => {
     );
     expect([waiting?.[1], waiting?.[2]]).toEqual(['Waiting for background terminal', '1m 00s']);
     expect(profile.screen.status.test('Waiting for background terminal')).toBe(false);
+    // Списки подстановки: при них Tab и Enter вставляют выбранное (замер).
+    expect(profile.screen.picker!.test('  enter/tab insert · esc close · ↑/↓ select · ←/→ filter')).toBe(true);
+    expect(profile.screen.picker!.test('  enter select · esc back')).toBe(false);
+    const mention = profile.screen.mention!;
+    expect(mention.test('look at @READ')).toBe(true);
+    expect(mention.test('@')).toBe(true);
+    expect(mention.test('look at @README.md please')).toBe(false);
+    expect(mention.test('mail user@example')).toBe(false);
+    expect(profileOf('claude').screen.picker).toBeUndefined();
+    expect(profileOf('claude').screen.mention).toBeUndefined();
   });
 
   it('ожидающий вопрос: два приглашения, у каждого своя клавиша', () => {

@@ -22,7 +22,7 @@ import type {
 } from '@termhub/protocol/chat';
 
 import { profileOf, isTested, type AgentProfile, type NotesSign } from './agent-profiles.js';
-import { readPending, readScreen, type PendingInvite } from './agent-screen.js';
+import { readPending, readPicker, readPopup, readScreen, type PendingInvite } from './agent-screen.js';
 import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
@@ -273,6 +273,14 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
     const cleared = await clearInput(ctx);
     if (!cleared) return fail('stale', 'agent input line did not clear');
   }
+  // Список упоминаний открывается с задержкой, и при нём клавиша очереди вставляет
+  // выбранное: такой текст работающему агенту не шлём вовсе.
+  if (screen.kind === 'working' && profile.keys.queue !== undefined && profile.screen.mention?.test(text)) {
+    return fail(
+      'busy',
+      'agent is working: a message ending with an @mention can be sent when the agent finishes its turn',
+    );
+  }
   await ctx.src.paste(ctx.session, text, ctx.pane);
   const typed = await until(ctx, (s) => atInput(s) && !!s.input);
   if (!typed.met) {
@@ -285,6 +293,10 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   }
   // Работающему агенту запрос ставится в очередь клавишей профиля, если она у него своя.
   const queue = typed.screen.kind === 'working' ? profile.keys.queue : undefined;
+  if (profile.keys.queue !== undefined) {
+    const blocked = await listOpen(ctx, queue !== undefined);
+    if (blocked) return blocked;
+  }
   await press(ctx, queue ?? profile.keys.submit);
   const sent = await until(ctx, (s) => !atInput(s) || !s.input);
   if (queue === undefined || sent.met) return done(sent.screen);
@@ -296,15 +308,34 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   );
 }
 
-/** Убирает текст из строки ввода работающего агента клавишей `clearBusy` профиля: она
- *  стирает строку и работу не трогает. Нажатие идёт только по экрану, где агент работает
- *  и строка непуста; строк несколько — нажатий до двух на строку (текст, затем перенос). */
+/** Список подстановки над строкой ввода, при котором клавиша отправила бы не то, что
+ *  набрано: список упоминаний — всегда; список команд — у работающего агента, если
+ *  набранное не единственная его строка целиком (тогда клавиша очереди ставит команду
+ *  как есть — замер). Открыт — вставленное убирается, ответ — отказ; нет — `undefined`. */
+async function listOpen(ctx: Ctx, working: boolean): Promise<ChatFailure | undefined> {
+  const seen = await peekSeen(ctx);
+  if (!atInput(seen.screen) || !seen.screen.input) {
+    return fail('stale', 'the agent screen changed after the paste; the pasted text may be left in the agent input line');
+  }
+  const list = working ? readPopup(seen.lines, ctx.profile) : [];
+  const exact = list.length === 1 && `/${list[0]!.name}` === seen.screen.input;
+  if (!readPicker(seen.lines, ctx.profile) && (list.length === 0 || exact)) return undefined;
+  const swept = await sweepInput(ctx, seen.screen);
+  return fail(
+    working ? 'busy' : 'stale',
+    `the agent shows a completion list at its input line${working ? ': the command can be sent when the agent finishes its turn' : ''}; the pasted text ${swept ? 'was removed from' : 'is left in'} the agent input line`,
+  );
+}
+
+/** Убирает текст из строки ввода агента клавишей `clearBusy` профиля: она стирает строку
+ *  и работу не трогает. Нажатие идёт только по экрану со строкой ввода, и строка непуста;
+ *  строк несколько — нажатий до двух на строку (текст, затем перенос). */
 async function sweepInput(ctx: Ctx, from: ScreenState): Promise<boolean> {
   const key = ctx.profile.keys.clearBusy;
   if (key === undefined) return false;
   let now = from;
   const limit = 2 * (now.input ?? '').split('\n').length + 2;
-  for (let i = 0; i < limit && now.kind === 'working' && !!now.input; i++) {
+  for (let i = 0; i < limit && atInput(now) && !!now.input; i++) {
     await press(ctx, key);
     await ctx.src.sleep(KEY_GAP_MS);
     now = await peek(ctx);

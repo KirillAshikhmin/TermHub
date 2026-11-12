@@ -159,6 +159,11 @@ export interface ScreenSigns {
   popup: RegExp;
   /** Продолжение подсказки на следующей строке: группа 1 — текст. */
   popupMore?: RegExp;
+  /** Подсказка списка подстановки прямо над строкой ввода (упоминания по «@»): пока он
+   *  открыт, клавиши отправки и очереди вставляют выбранное, а не отправляют. */
+  picker?: RegExp;
+  /** Конец текста, на котором агент открывает список упоминаний. */
+  mention?: RegExp;
 }
 
 export interface AgentProfile {
@@ -547,6 +552,8 @@ const CODEX: AgentProfile = {
       { id: 'permissions', sign: /^Update Model Permissions$/, footer: /^enter select · esc back$/ },
     ],
     popup: /^[› ]\s\/(\S+)(?:\s{2,}(\S.*))?$/,
+    picker: /^\s{2}enter\/tab insert · esc close\b/,
+    mention: /(?:^|\s)@\S*$/,
   },
 };
 

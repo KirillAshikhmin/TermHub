@@ -339,8 +339,29 @@ Codex выполнял `sleep 90` фоновой командой.
   Чат жмёт его (`keys.clearBusy`) только когда Tab запрос не забрал, и только по экрану, где
   Codex работает и строка непуста. Ctrl+C, Esc и Backspace на работающем Codex не
   пробовались.
+- **Списки над строкой ввода работающего Codex** (домер, панель 100×40):
+  - «/model» целиком: список показывает одну строку — точное совпадение; Tab ставит «/model»
+    в очередь как есть (`queue-slash-exact`). Когда ход закончился, Codex выполнил её
+    командой — открыл меню модели. «/nosuchcmd arg» списка не открывает, Tab ставит в
+    очередь как есть.
+  - «/mo» (часть имени): список открыт, Tab **дополняет** строку до «/model» и в очередь
+    не ставит (`queue-slash-partial`, `queue-slash-completed`).
+  - «look at @READ» (текст кончается на «@токен»): через секунду-две открывается список
+    упоминаний с подсказкой «enter/tab insert · esc close · ↑/↓ select · ←/→ filter»
+    (`queue-mention-list`); Tab **вставляет выбранное** — строка стала «look at
+    @Spreadsheets». Enter по той же подсказке тоже вставляет (не нажимался). Esc закрывает
+    список, ход не прерывая, и после него Tab ставит текст в очередь как есть — чат Esc
+    работающему агенту не шлёт: без списка на экране та же клавиша прерывает ход.
+  - Ctrl+U стирает строку и при открытом списке — обоих видов, работа не тронута.
+  - Чат: текст, кончающийся на «@токен», работающему Codex отклоняется до клавиш (`busy`);
+    список команд открыт, а набранное не единственная его строка целиком — вставленное
+    убирается Ctrl+U, отказ `busy` («можно отправить, когда агент закончит ход»); список
+    упоминаний на экране после вставки — то же, клавиша отправки не идёт.
+  - Со списком упоминаний строка работы оказывается выше, чем её ищет разбор (12 строк над
+    строкой ввода): без строки состояния пользователя такой экран читается как `idle`.
 - Не измерено: что называет строка состояния пользователя («Working» или иное), пока идёт
-  «Waiting for background terminal»; Tab при открытом списке команд по «/».
+  «Waiting for background terminal»; Enter при открытых списках; команда, у имени которой
+  есть более длинные тёзки в списке.
 
 ## Вложения
 
@@ -377,7 +398,7 @@ Codex выполнял `sleep 90` фоновой командой.
 |---|---|---|
 | Ожидание ввода | `idle`, `idle-accept`, `idle-plan`, `idle-auto` | `idle`, `idle-plan` |
 | Работа | `working`, `working-start` | `working`, `working-typing`, `waiting-terminal` |
-| Запрос работающему | — | `queue-hint`, `queue-hint-multiline`, `queue-hint-statusline` (составной), `waiting-terminal-typed`, `queued-followup`, `queued-followup-two` |
+| Запрос работающему | — | `queue-hint`, `queue-hint-multiline`, `queue-hint-statusline` (составной), `waiting-terminal-typed`, `queued-followup`, `queued-followup-two`, `queue-slash-exact`, `queue-slash-partial`, `queue-slash-completed`, `queue-mention-list` |
 | Вопрос | `question`, `question-narrow`, `question-multi`, `question-review`, `question-free`, `question-free-typed`, `question-series`, `question-series-review` (два последних — составные) | `question`, `question-narrow`, `question-described`, `question-notes`, `question-notes-typed`, `question-first-of-two`, `question-last-of-two` |
 | Ожидающий вопрос | — | `pending-side`, `pending-side-wide`, `pending-opened` |
 | Вопрос в очереди отложенного ввода | — | `pending-queued` (обезличенный снимок живой сессии), `pending-queued-timer`, `pending-queued-two`, `pending-queued-opened`, `pending-queued-first-of-two`, `pending-queued-last-of-two`, `pending-queued-other`, `pending-queued-other-typed`, `pending-queued-other-digit` |

@@ -304,6 +304,20 @@ export function readPopup(lines: string[], profile: AgentProfile): ChatCommand[]
   return out.reverse();
 }
 
+/** Открыт ли над строкой ввода список подстановки (`picker` профиля): его подсказка —
+ *  последняя непустая строка над строкой ввода. Нет строки ввода — нет и списка. */
+export function readPicker(lines: string[], profile: AgentProfile): boolean {
+  const sign = profile.screen.picker;
+  if (!sign) return false;
+  const rows = lines.map(strip);
+  const last = lastFilled(rows, rows.length - 1);
+  if (last < 0) return false;
+  const box = findBox(rows, trayOf(rows, last, profile).last, profile);
+  if (typeof box === 'string') return false;
+  const at = lastFilled(rows, box.top - 1);
+  return at >= 0 && sign.test(rows[at]!.text);
+}
+
 function readMenu(rows: Row[], last: number, profile: AgentProfile): string | undefined {
   const bottom = rows[last]!.text.trim();
   const from = Math.max(0, last - MENU_REACH);

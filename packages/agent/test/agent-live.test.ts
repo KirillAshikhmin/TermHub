@@ -334,6 +334,49 @@ describe('sessionAct — запрос работающему Codex', () => {
     expect(screenOf(result).kind).toBe('menu');
   });
 
+  // Домер: при открытом списке по «/» или «@» Tab (и Enter) подставляют выбранное в строку.
+  it('слэш-команда целиком: в списке одно точное совпадение — Tab ставит её в очередь как есть (замер)', async () => {
+    const f = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-slash-exact' : sent === '\t' ? 'queued-followup' : undefined,
+    );
+    expect(screenOf(await act(f, { kind: 'prompt', text: '/model' }))).toMatchObject({ kind: 'working', queued: 1 });
+    expect(f.sent).toEqual(['paste:/model', '\t']);
+  });
+
+  it('список команд открыт, а набрано не имя из него — Tab не идёт: строка стирается Ctrl+U, отказ busy', async () => {
+    const f = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-slash-partial' : sent === '\x15' ? 'queued-followup' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: '/mo' });
+    expect(result).toMatchObject({ ok: false, reason: 'busy' });
+    expect(!result.ok && result.detail).toMatch(/when the agent finishes its turn.*removed from the agent input line/);
+    expect(f.sent).toEqual(['paste:/mo', '\x15']);
+  });
+
+  it('текст кончается на «@токен» — работающему Codex отказ busy до клавиш, даже вставки нет', async () => {
+    const f = fake('codex', 'working');
+    const result = await act(f, { kind: 'prompt', text: 'look at @READ' });
+    expect(result).toMatchObject({ ok: false, reason: 'busy' });
+    expect(!result.ok && result.detail).toMatch(/when the agent finishes its turn/);
+    expect(f.sent).toEqual([]);
+    // «@» в середине текста списка не открывает — запрос идёт в очередь.
+    const mid = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? 'queued-followup' : undefined,
+    );
+    expect(screenOf(await act(mid, { kind: 'prompt', text: 'see @README.md first' })).queued).toBe(1);
+    expect(mid.sent).toEqual(['paste:see @README.md first', '\t']);
+  });
+
+  it('список упоминаний всё же открылся над строкой — ни Tab, ни Enter: строка стирается Ctrl+U, отказ', async () => {
+    const f = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-mention-list' : sent === '\x15' ? 'working' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: 'текст, после которого список открылся' });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.detail).toMatch(/completion list.*removed from the agent input line/);
+    expect(f.sent).toEqual(['paste:текст, после которого список открылся', '\x15']);
+  });
+
   it('«Waiting for background terminal»: over и take-input — busy, Ctrl+C не уходит', async () => {
     const over = fake('codex', 'waiting-terminal-typed');
     expect(await act(over, { kind: 'prompt', text: 'привет', over: true })).toMatchObject({ ok: false, reason: 'busy' });

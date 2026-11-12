@@ -6,7 +6,7 @@ import type { AgentId, ScreenKind } from '@termhub/protocol/chat';
 import { describe, expect, it } from 'vitest';
 
 import { profileOf } from '../src/agent-profiles.js';
-import { readPending, readPopup, readScreen } from '../src/agent-screen.js';
+import { readPending, readPicker, readPopup, readScreen } from '../src/agent-screen.js';
 
 // Снимки сняты с живых агентов на отдельном сокете tmux (`capture-pane -p -e`):
 // рядом с каждым — json с версией агента и размером панели. Ожидания ниже выписаны
@@ -126,6 +126,11 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'queued-followup-two': 'working',
     'waiting-terminal': 'working',
     'waiting-terminal-typed': 'working',
+    'queue-slash-exact': 'working',
+    'queue-slash-partial': 'working',
+    'queue-slash-completed': 'working',
+    // Строка работы выше списка упоминаний, дальше, чем её ищет разбор.
+    'queue-mention-list': 'idle',
   },
 };
 
@@ -926,6 +931,25 @@ describe('Codex: запрос работающему агенту', () => {
       input: 'note four',
       queued: 1,
     });
+  });
+
+  it('списки над строкой ввода работающего Codex: команды по «/» и упоминания по «@»', () => {
+    // Замер: при открытом списке Tab подставляет выбранное вместо постановки в очередь.
+    expect(read('codex', 'queue-slash-exact')).toMatchObject({ kind: 'working', input: '/model' });
+    expect(readPopup(shot('codex', 'queue-slash-exact'), codex)).toEqual([
+      { name: 'model', hint: 'choose what model and reasoning effort to use', source: 'screen' },
+    ]);
+    expect(read('codex', 'queue-slash-partial')).toMatchObject({ kind: 'working', input: '/mo', queued: 1 });
+    expect(readPopup(shot('codex', 'queue-slash-partial'), codex).map((c) => c.name)).toEqual(['model']);
+    expect(readPopup(shot('codex', 'queue-slash-completed'), codex)).toEqual([]);
+    expect(read('codex', 'queue-mention-list')).toMatchObject({ input: 'look at @READ' });
+    expect(readPicker(shot('codex', 'queue-mention-list'), codex)).toBe(true);
+    expect(readPicker(plain(shot('codex', 'queue-mention-list')), codex)).toBe(true);
+    for (const name of ['queue-hint', 'queue-slash-partial', 'statusline-idle', 'idle', 'question']) {
+      expect(readPicker(shot('codex', name), codex)).toBe(false);
+    }
+    expect(readPicker(shot('claude', 'idle'), profileOf('claude'))).toBe(false);
+    expect(readPicker([], codex)).toBe(false);
   });
 
   it('те же слова без скобки с «esc to interrupt» работой не считаются', () => {

@@ -1,0 +1,11 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 100,
+  "rows": 40,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "anonymized": true,
+  "note": "Live probe capture (isolated tmux socket, Codex started with -c tui.animations=false --no-alt-screen, no user status line); only the directory is replaced. Working Codex, «look at @READ» pasted: the mentions list is open above the input line («enter/tab insert · esc close»). Tab and Enter insert the selected entry. The work line is further than the reader looks, so the screen reads as idle."
+}
