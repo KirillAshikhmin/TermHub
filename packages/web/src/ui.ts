@@ -57,6 +57,7 @@ const ICONS: Record<string, string> = {
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   chat: '<path d="M4 4h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M20 9a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2v3l-3.5-3H12"/>',
   bulb: '<path d="M9 18h6M10 21.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4 11.6c.7.6 1 1.3 1 2.1V18h6v-1.8c0-.8.3-1.5 1-2.1a6.5 6.5 0 0 0-4-11.6z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
   bolt: '<path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12z"/>',
   feed: '<path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3.5 21l1.9-5.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 13h4.5"/>',
 };

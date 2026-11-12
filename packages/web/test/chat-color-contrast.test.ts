@@ -65,3 +65,11 @@ describe('контраст красок чата ≥ 4.5', () => {
     expect(rules).not.toMatch(/#[0-9a-fA-F]{3,6}\b/);
   });
 });
+
+describe('значок «Стоп» ≥ 3 на фоне шапки переписки', () => {
+  for (const [name, vars] of THEMES) {
+    it(`${name}: --danger на --bg и --bg-elev`, () => {
+      for (const g of ['--bg', '--bg-elev']) expect(ratio(vars['--danger']!, vars[g]!), g).toBeGreaterThanOrEqual(3);
+    });
+  }
+});

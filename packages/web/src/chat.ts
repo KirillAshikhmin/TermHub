@@ -150,7 +150,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     if (!byButton && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
     composer.focus();
   };
-  const live = mountLive({ ...slots, head: feed.stateSlot, onTerminalClosed }, session, transport, (state, changed) => {
+  const live = mountLive({ ...slots, head: feed.stateSlot, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.
     feed.setBusy(state?.screen.kind === 'working');

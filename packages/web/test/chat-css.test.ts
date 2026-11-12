@@ -202,14 +202,19 @@ describe('переписка по ширине и параметры вида', 
 });
 
 describe('шапка переписки: состояние, «Стоп» и кнопки', () => {
-  it('строка шапки переносится, «Стоп» в ней не ниже 44 px и не сжимается', () => {
+  it('строка шапки переносится, «Стоп» — красная кнопка ряда без рамки и заливки, не ниже 44 px', () => {
     const head = el('div', 'th-feed__head', chat);
     const slot = el('span', 'th-feed__state', head);
     const bar = el('span', 'th-live__bar', slot);
-    const stop = el('button', 'th-live__stop', bar);
+    const tools = el('span', 'th-feed__tools', head);
+    const stop = el('button', 'th-iconbtn th-feed__tool th-live__stop', tools);
     expect(getComputedStyle(head).flexWrap).toBe('wrap');
     expect(getComputedStyle(stop).minHeight).toBe('44px');
     expect(getComputedStyle(stop).flexShrink).toBe('0');
+    expect(getComputedStyle(stop).borderTopWidth).toBe('1px');
+    expect(getComputedStyle(stop).borderTopColor).toBe('transparent');
+    expect(getComputedStyle(stop).backgroundColor).toMatch(/^(transparent|rgba\(0, 0, 0, 0\))$/);
+    expect(getComputedStyle(stop).color).not.toBe(getComputedStyle(tools).color);
     // Полоса в шапке — часть строки: своего фона и нижней границы у неё нет.
     expect(getComputedStyle(bar).borderBottomStyle).toBe('none');
     expect(getComputedStyle(bar).paddingLeft).toMatch(/^0(px)?$/);

@@ -4383,9 +4383,8 @@ main.th-feed {
 .th-feed__state .th-live__state {
   flex: 0 1 auto;
 }
-.th-feed__state .th-live__stop {
-  flex-shrink: 0;
-  min-height: 44px;
+.th-feed__stop {
+  display: contents;
 }
 .th-feed__tools {
   display: inline-flex;
@@ -4594,14 +4593,13 @@ main.th-feed {
 }
 .th-live__stop {
   flex: none;
-  min-height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--danger);
-  border-radius: var(--r-full);
-  background: var(--danger-tint);
   color: var(--danger);
-  font-weight: 600;
-  cursor: pointer;
+}
+.th-live__stop:hover {
+  color: var(--danger);
+}
+.th-live__stop[hidden] {
+  display: none;
 }
 .th-live__stop:disabled,
 .th-live__model:disabled,

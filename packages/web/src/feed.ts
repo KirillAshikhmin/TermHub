@@ -78,6 +78,8 @@ export interface FeedHandle {
   /** Место в строке шапки переписки под состояние агента с экрана (слово состояния, время,
    *  «Стоп») — его наполняет живая часть чата. В ленте без чата не в разметке. */
   stateSlot: HTMLElement;
+  /** Место в ряду кнопок шапки сразу после поиска — под «Стоп» живой части. */
+  stopSlot: HTMLElement;
   /** Состояние агента показано в `stateSlot`: своя подпись «Агент работает» тогда лишняя. */
   setStateShown(on: boolean): void;
   /** Агент сейчас работает: приращение просится раз в секунду, а не раз в три. Условия
@@ -232,6 +234,8 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   usageEl.hidden = true;
   const stateSlot = document.createElement('span');
   stateSlot.className = 'th-feed__state';
+  const stopSlot = document.createElement('span');
+  stopSlot.className = 'th-feed__stop';
   let stateShown = false;
   // В чате вместо чекбоксов с подписями — три кнопки-иконки, как кнопки шапки приложения:
   // поиск по беседе, рассуждения, действия. Чекбоксы остаются носителями состояния (их
@@ -265,7 +269,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   if (chat) {
     const tools = document.createElement('span');
     tools.className = 'th-feed__tools';
-    tools.append(searchBtn, thinkingBtn, actionsBtn);
+    tools.append(searchBtn, stopSlot, thinkingBtn, actionsBtn);
     head.append(agentEl, stateSlot, liveEl, usageEl, tools);
     paintButtons();
   } else head.append(agentEl, liveEl, usageEl, toggleWrap, actionsWrap);
@@ -1179,6 +1183,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     refresh: () => void loadNewer(),
     addLocal,
     stateSlot,
+    stopSlot,
     setStateShown: (on) => {
       stateShown = on;
       paintHeader();

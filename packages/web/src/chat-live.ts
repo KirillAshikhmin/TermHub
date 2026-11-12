@@ -22,7 +22,7 @@ import { mountChatTerm, type ChatTermHandle } from './chat-term';
 import { noteFailure, noteUnknown, versionNoticeDue } from './chat-health';
 import { t } from './i18n';
 import type { Transport } from './transport';
-import { toast } from './ui';
+import { iconButton, toast } from './ui';
 import { allTokens, formatElapsed, formatTokens, sessionUsage, type UsagePage } from './usage';
 
 /** Места оболочки чата, с которыми работает живая часть (поле ввода — не её). */
@@ -31,6 +31,9 @@ export interface LiveHost {
   /** Место в строке шапки переписки: состояние агента, очередь и «Стоп» встают сюда.
    *  Места нет (живая часть без переписки) — они встают в `status`. */
   head?: HTMLElement;
+  /** Место в ряду кнопок шапки переписки (сразу после поиска): «Стоп» встаёт сюда.
+   *  Места нет — кнопка встаёт в полосу состояния. */
+  stop?: HTMLElement;
   question: HTMLElement;
   terminal: HTMLElement;
   /** Только якорь. Содержимое не трогается. */
@@ -138,9 +141,12 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   stateEl.setAttribute('role', 'status');
   const queuedEl = el('span', 'th-live__queued');
   queuedEl.hidden = true;
-  const stopBtn = button('th-live__stop', t('chat.live.stop'), () => void ui({ kind: 'interrupt' }));
+  const stopBtn = iconButton('stop', t('chat.live.stop'), () => void ui({ kind: 'interrupt' }));
+  stopBtn.classList.add('th-feed__tool', 'th-live__stop');
   stopBtn.hidden = true;
-  bar.append(dot, stateEl, queuedEl, stopBtn);
+  bar.append(dot, stateEl, queuedEl);
+  if (host.stop) host.stop.append(stopBtn);
+  else bar.append(stopBtn);
   (host.head ?? host.status).append(bar);
 
   const controls = el('div', 'th-live__controls');
