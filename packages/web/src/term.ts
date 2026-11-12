@@ -129,7 +129,7 @@ export function mountTerminal(
   root: HTMLElement,
   session: string,
   transport: Transport,
-  opts: { embedded?: boolean; passive?: boolean } = {},
+  opts: { embedded?: boolean; passive?: boolean; autofocus?: boolean } = {},
 ): TerminalHandle {
   // Встроенный терминал (панель сплит-вида): только сам экран — без шапки с вкладками,
   // полосы разделов и панели клавиш; заголовком окна и размером экрана владеет сплит.
@@ -141,6 +141,9 @@ export function mountTerminal(
   // в контейнер масштабом (fitForeign). Без этого окошко, подключившись последним,
   // забирало размер панели себе — и сжимало её до своего контейнера.
   const passive = opts.passive === true;
+  // Брать ли фокус самому — при монтаже и когда открылся канал. Окошко терминала в чате,
+  // открывшееся без нажатия человека, не берёт: фокус там принадлежит полю ввода чата.
+  const autofocus = opts.autofocus !== false;
   root.replaceChildren();
   if (!embedded) setSessionDocumentTitle(session, session);
   let disposed = false;
@@ -172,7 +175,7 @@ export function mountTerminal(
     transport,
     current: session,
     onSwitch: goTo,
-    onCurrent: () => term.focus(),
+    onCurrent: () => takeFocus(),
     onKill: (name) => void killSession(name),
     onCreate: () => openCreateModal(transport),
     onCurrentTitle: (title) => setSessionDocumentTitle(title, session),
@@ -453,7 +456,17 @@ export function mountTerminal(
   // Кому этот фокус достаётся: на пути openTerminal/remote.ts — экрану сразу; на пути
   // workspace вид в момент монтажа ещё скрыт (без is-active), браузер такой фокус
   // игнорирует, и рабочий фокус там даёт show('term') после показа вкладки.
-  term.focus();
+  //
+  // «Игнорирует» здесь записано правилом, а не оставлено браузеру: терминал, чья вкладка
+  // рабочего пространства не показана, фокус не берёт никогда — в том числе отложенно,
+  // когда канал открылся уже после ухода человека в чат. Иначе фокус уезжал из поля ввода
+  // чата в поле xterm.
+  const takeFocus = (): void => {
+    const view = root.closest('.th-ws-view');
+    if (view && !view.classList.contains('is-active')) return;
+    term.focus();
+  };
+  if (autofocus) takeFocus();
 
   // ── Соединение (через транспорт) ─────────────────────────────────────
   // Канал владеет жизненным циклом соединения (WS/E2E, backoff-реконнект);
@@ -680,7 +693,7 @@ export function mountTerminal(
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.
         openWithSize();
         // Фокус (и клавиатуру) на connect — только если клавиатура включена.
-        if (keyboardEnabled) term.focus();
+        if (keyboardEnabled && autofocus) takeFocus();
       } else if (state === 'reconnecting') {
         banner.classList.add('is-shown');
       } else {
@@ -1041,7 +1054,7 @@ export function mountTerminal(
   reposition();
 
   return {
-    focus: () => term.focus(),
+    focus: () => takeFocus(),
     teardown: (): void => {
       disposed = true;
       offPrefs();

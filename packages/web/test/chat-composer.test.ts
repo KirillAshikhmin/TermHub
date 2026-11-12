@@ -1022,4 +1022,61 @@ describe('сообщение в очереди агента: «Изменить�
     expect(fx.locals[0]!.note).toContain('the agent queue has changed');
     expect(fx.field.value).toBe('');
   });
+
+  // Слепая приёмка: «808ms CLICK edit → 1022ms live q=null → 1286ms act:unqueue» — опрос
+  // экрана внутри действия показывает пустую очередь (сообщение уже вытащено клавишей).
+  const pendingAct = (): { resolve(res: ActResult): void } => {
+    let resolve!: (res: ActResult) => void;
+    fx.nextAct.value = new Promise<ActResult>((r) => (resolve = r));
+    return { resolve };
+  };
+  const queuedOne = async (text: string): Promise<void> => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp([text]);
+    fx.screen.value = working({ queued: 1, queue: [{ text }], queueEdit: 'last' });
+    fx.emit();
+  };
+
+  it('«Отменить»: опрос экрана посреди действия видит пустую очередь — запись не помечается «отправлено» и убирается', async () => {
+    await queuedOne('лишнее');
+    const act = pendingAct();
+    fx.locals[0]!.actions[1]!.run();
+    await flush();
+    fx.screen.value = working();
+    fx.emit();
+    expect(fx.locals[0]).toMatchObject({ state: 'queued', removed: false });
+    act.resolve({ ok: true, screen: working(), taken: 'лишнее' });
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ state: 'queued', removed: true });
+    expect(fx.field.value).toBe('');
+  });
+
+  it('«Изменить»: тот же опрос посреди действия — запись убрана, её текст в поле ввода', async () => {
+    await queuedOne('поправлю');
+    const act = pendingAct();
+    fx.locals[0]!.actions[0]!.run();
+    await flush();
+    fx.screen.value = { kind: 'idle', input: '' };
+    fx.emit();
+    expect(fx.locals[0]!.state).toBe('queued');
+    act.resolve({ ok: true, screen: working(), taken: 'поправлю' });
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ state: 'queued', removed: true });
+    expect(fx.field.value).toBe('поправлю');
+  });
+
+  it('отказ посреди действия возвращает запись под обычную сверку: пустая очередь экрана снимает пометку', async () => {
+    await queuedOne('останется');
+    const act = pendingAct();
+    fx.locals[0]!.actions[1]!.run();
+    await flush();
+    fx.screen.value = working();
+    fx.emit();
+    expect(fx.locals[0]!.state).toBe('queued');
+    act.resolve({ ok: false, reason: 'stale', detail: 'the agent queue has changed' });
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ state: 'sent', removed: false, delivered: true });
+  });
 });

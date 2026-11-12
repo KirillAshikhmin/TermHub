@@ -44,6 +44,17 @@ describe('chat terminal window', () => {
     expect(w.visible()).toBe(true);
   });
 
+  it('окно, открывшееся само, фокус не берёт; открытое человеком — берёт', async () => {
+    const w = mountChatTerm(host, 'work', transport);
+    w.show();
+    await tick();
+    expect(mounted[0]!.opts).toMatchObject({ autofocus: false });
+    w.hide();
+    w.show({ focus: true });
+    await tick();
+    expect(mounted[1]!.opts).toMatchObject({ autofocus: true });
+  });
+
   it('сворачивание снимает терминал и прячет окошко; новый показ создаёт заново', async () => {
     const w = mountChatTerm(host, 'work', transport);
     w.show();

@@ -82,6 +82,10 @@ export interface FeedHandle {
   stopSlot: HTMLElement;
   /** Состояние агента показано в `stateSlot`: своя подпись «Агент работает» тогда лишняя. */
   setStateShown(on: boolean): void;
+  /** Опрос состояния чата ответил, что агента в панели нет: шапка не называет его
+   *  работающим (ответ ленты об этом отстаёт), а свою строку отказа «агента нет» под
+   *  загруженной перепиской лента не показывает — об этом говорит чат. */
+  setAgentGone(on: boolean): void;
   /** Агент сейчас работает: приращение просится раз в секунду, а не раз в три. Условия
    *  опроса те же — вкладка активна, страница видима, очередь запросов пуста. */
   setBusy(on: boolean): void;
@@ -240,6 +244,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   const stopSlot = document.createElement('span');
   stopSlot.className = 'th-feed__stop';
   let stateShown = false;
+  let agentGone = false;
+  /** Причина отказа, показанного сейчас строкой под перепиской. */
+  let noticeReason: string | undefined;
   // В чате вместо чекбоксов с подписями — три кнопки-иконки, как кнопки шапки приложения:
   // поиск по беседе, рассуждения, действия. Чекбоксы остаются носителями состояния (их
   // слушают те же обработчики), но в разметку не идут.
@@ -384,9 +391,15 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     // сообщение и «Повторить». Но когда беседа уже загружена, сбой одного запроса
     // её не стирает: экран остаётся читаемым, а отказ говорит строкой.
     if (items.length === 0) noticeEl.replaceChildren(errorScreen(text, () => void enqueue(tailJob)));
-    else noticeEl.replaceChildren(document.createTextNode(text));
+    else if (chat && agentGone && reason === 'no-agent') {
+      // Чат уже сказал «агент не запущен» по опросу состояния — второй строкой не повторяем.
+      clearNotice();
+      return;
+    } else noticeEl.replaceChildren(document.createTextNode(text));
+    noticeReason = items.length > 0 ? reason : undefined;
   };
   const clearNotice = (): void => {
+    noticeReason = undefined;
     noticeEl.replaceChildren();
     noticeEl.hidden = true;
   };
@@ -418,7 +431,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
 
   const paintHeader = (): void => {
     agentEl.textContent = agentKnown ? t(`feed.${agent}`) : '';
-    liveEl.hidden = !live || stateShown;
+    liveEl.hidden = !live || stateShown || agentGone;
     skippedEl.textContent = t('feed.skipped', { n: skipped });
     skippedEl.hidden = skipped === 0;
   };
@@ -1316,6 +1329,12 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     stopSlot,
     setStateShown: (on) => {
       stateShown = on;
+      paintHeader();
+    },
+    setAgentGone: (on) => {
+      if (agentGone === on) return;
+      agentGone = on;
+      if (on && noticeReason === 'no-agent') clearNotice();
       paintHeader();
     },
     setBusy: (on) => {

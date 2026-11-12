@@ -517,6 +517,34 @@ describe('место карточки', () => {
   });
 });
 
+describe('агента в панели нет', () => {
+  it('ответ `no-agent` называет агента отсутствующим; иной отказ и обрыв — нет; состояние вернулось — снова есть', async () => {
+    const fx = fixture(live(IDLE));
+    const h = await mount(fx);
+    const seen: boolean[] = [];
+    h.subscribe(() => seen.push(h.absent()));
+    expect(h.absent()).toBe(false);
+    fx.next({ ok: false, reason: 'no-agent', detail: 'the agent has left the pane' });
+    await run(1000);
+    expect(h.absent()).toBe(true);
+    expect(h.state()).toBeNull();
+    expect(seen.at(-1)).toBe(true);
+    fx.next({ ok: false, reason: 'lookup-failed', detail: 'tmux' });
+    await run(1000);
+    expect(h.absent()).toBe(false);
+    fx.next({ ok: false, reason: 'no-agent', detail: '' });
+    await run(1000);
+    expect(h.absent()).toBe(true);
+    fx.next(new Error('offline'));
+    await run(1000);
+    expect(h.absent()).toBe(true); // обрыв ничего не говорит об агенте
+    fx.next(live(IDLE));
+    await run(1000);
+    expect(h.absent()).toBe(false);
+    expect(seen.at(-1)).toBe(false);
+  });
+});
+
 describe('окно терминала закрылось', () => {
   it('сообщает оболочке: кнопкой окна и «Скрыть терминал» — byButton, само после узнанного экрана — нет', async () => {
     const closed: boolean[] = [];
@@ -714,6 +742,17 @@ describe('окошко терминала', () => {
     await run(0);
     expect(mountedTerms[0]!.torn).toBe(true);
   });
+  it('окно, открывшееся само на неузнанном экране, фокус у поля ввода не забирает; открытое кнопкой — берёт', async () => {
+    const fx = fixture(live({ kind: 'unknown' }));
+    await mount(fx);
+    await run(1000);
+    expect(mountedTerms[0]!.opts).toMatchObject({ autofocus: false });
+    q<HTMLButtonElement>('.th-chat-term__close')!.click();
+    q<HTMLButtonElement>('.th-live__term-btn')!.click();
+    await run(0);
+    expect(mountedTerms[1]!.opts).toMatchObject({ autofocus: true });
+  });
+
   it('закрытое кнопкой окно само не возвращается, пока экран не стал знакомым и снова неузнанным', async () => {
     const fx = fixture(live({ kind: 'unknown' }));
     await mount(fx);

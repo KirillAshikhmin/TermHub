@@ -4524,6 +4524,21 @@ main.th-feed {
   font-size: 0.8rem;
   text-align: center;
 }
+.th-chat__gone {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.th-composer.is-disabled {
+  opacity: 0.55;
+}
 .th-chat__empty {
   display: flex;
   flex-direction: column;

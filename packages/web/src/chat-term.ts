@@ -12,7 +12,9 @@ import type { Transport } from './transport';
 export interface ChatTermHandle {
   /** Корень окошка (место `terminal` оболочки). */
   el: HTMLElement;
-  show(): void;
+  /** `focus` — окно открыл сам человек (кнопкой), и ввод идёт в него. Окно, открывшееся
+   *  само на неузнанном экране, фокус не берёт: он остаётся в поле ввода чата. */
+  show(opts?: { focus?: boolean }): void;
   hide(): void;
   visible(): boolean;
   /** Почему окно открыто — строкой в шапке; пустая строка её прячет. */
@@ -58,14 +60,14 @@ export function mountChatTerm(host: HTMLElement, session: string, transport: Tra
   /** Номер показа: быстрый показ-скрытие-показ не должен смонтировать терминал дважды. */
   let epoch = 0;
 
-  const show = (): void => {
+  const show = (o: { focus?: boolean } = {}): void => {
     if (disposed || shown) return;
     shown = true;
     el.hidden = false;
     const mine = ++epoch;
     void import('./term').then(({ mountTerminal }) => {
       if (disposed || !shown || mine !== epoch) return;
-      teardownTerm = mountTerminal(body, session, transport, { embedded: true, passive: true }).teardown;
+      teardownTerm = mountTerminal(body, session, transport, { embedded: true, passive: true, autofocus: o.focus === true }).teardown;
     });
   };
   const hide = (): void => {

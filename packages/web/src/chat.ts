@@ -100,11 +100,33 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   offlineEl.textContent = t('chat.offline');
   offlineEl.hidden = true;
 
+  // Агент вышел при открытом чате (опрос состояния отвечает `no-agent`): переписка остаётся,
+  // писать некому — строка под перепиской и переход в терминал.
+  const toTerminal = (): HTMLButtonElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'th-btn th-chat__to-term';
+    btn.textContent = t('chat.toTerminal');
+    btn.addEventListener('click', () => {
+      setSessionViewPref(session, 'term');
+      location.hash = termHash(session);
+    });
+    return btn;
+  };
+  const goneEl = document.createElement('div');
+  goneEl.className = 'th-chat__gone';
+  goneEl.setAttribute('role', 'status');
+  const goneText = document.createElement('span');
+  goneText.className = 'th-chat__gone-text';
+  goneText.textContent = t('chat.noAgent');
+  goneEl.append(goneText, toTerminal());
+  goneEl.hidden = true;
+
   const slots: ChatSlots = { status: slot('status'), question: slot('question'), terminal: slot('terminal'), composer: slot('composer') };
   const thread = document.createElement('div');
   thread.className = 'th-chat__thread';
   thread.setAttribute('aria-label', t('chat.thread'));
-  root.append(offlineEl, slots.status, thread, slots.terminal, slots.question, slots.composer);
+  root.append(offlineEl, slots.status, thread, goneEl, slots.terminal, slots.question, slots.composer);
   host.append(sbar.el, toolbar, root);
   hideBar = wireToolbar({ toolbars: [toolbar], floatMount: root, toggleMount: sbar.toggleSlot }).hide;
 
@@ -136,15 +158,9 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
       const hint = document.createElement('p');
       hint.className = 'th-chat__empty-hint';
       hint.textContent = t('chat.noAgentHint');
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'th-btn th-chat__to-term';
-      btn.textContent = t('chat.toTerminal');
-      btn.addEventListener('click', () => {
-        setSessionViewPref(session, 'term');
-        location.hash = termHash(session);
-      });
-      box.append(text, hint, btn);
+      box.append(text, hint, toTerminal());
+      // Пустое состояние уже говорит «агент не запущен»: строка под перепиской его не повторяет.
+      queueMicrotask(() => syncGone());
       return box;
     },
   });
@@ -205,12 +221,25 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   const offOverlay = onOverlayClosed(onReturned);
   document.addEventListener('visibilitychange', onVisible);
   window.addEventListener('focus', onReturned);
-  const live = mountLive({ ...slots, head: feed.stateSlot, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
+  // Агента в панели нет — по опросу состояния, а не по ленте: её `live` отстаёт, и шапка
+  // называла вышедшего агента работающим. Агент вернулся — всё оживает тем же опросом.
+  let wasGone = false;
+  const syncGone = (): void => {
+    const gone = liveHandle?.absent() ?? false;
+    feed.setAgentGone(gone);
+    composer?.setDisabled(gone);
+    goneEl.hidden = !gone || !!thread.querySelector('.th-chat__empty .th-chat__to-term');
+    if (wasGone && !gone) claimFocus('returned');
+    wasGone = gone;
+  };
+  let liveHandle: LiveHandle | null = null;
+  const live = (liveHandle = mountLive({ ...slots, head: feed.stateSlot, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
+    syncGone();
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.
     feed.setBusy(state?.screen.kind === 'working');
     if (changed) feed.refresh();
-  });
+  }));
 
   // Поле ввода — тем, у кого есть право ввода; зрителю места под него нет вовсе.
   const readOnly = !!transport.clientScope && !transport.clientScope.write;

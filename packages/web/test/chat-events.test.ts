@@ -273,9 +273,17 @@ describe('состояние агента в строке шапки переп�
     await open();
     expect(q('.th-feed__live')!.hidden).toBe(true);
     chat!.teardown();
-    screen = { ok: false, reason: 'no-agent', detail: '' };
+    // Состояния с экрана нет (посмотреть не удалось) — подпись ленты на месте.
+    screen = { ok: false, reason: 'lookup-failed', detail: '' };
     await open();
     expect(q('.th-feed__live')!.hidden).toBe(false);
+    expect(q('.th-feed__head .th-live__bar')!.hidden).toBe(true);
+    chat!.teardown();
+    // Опрос состояния говорит, что агента в панели нет, — работающим шапка его не называет,
+    // что бы ни отвечала лента.
+    screen = { ok: false, reason: 'no-agent', detail: '' };
+    await open();
+    expect(q('.th-feed__live')!.hidden).toBe(true);
     expect(q('.th-feed__head .th-live__bar')!.hidden).toBe(true);
   });
 

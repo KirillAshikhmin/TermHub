@@ -210,6 +210,71 @@ describe('оболочка чата', () => {
     chat.teardown();
   });
 
+  it('агент вышел при открытом чате: шапка не называет его работающим, «агент не запущен» с переходом в терминал, поле неактивно; вернулся — чат оживает', async () => {
+    let feedGone = false;
+    const { transport } = fixture(() =>
+      feedGone ? { ok: false, reason: 'no-agent', detail: '' } : page({ entries: [HUMAN, AGENT], live: true }),
+    );
+    let liveAnswer: unknown = { ok: true, agent: 'claude', tested: true, screen: { kind: 'idle' }, modes: [], models: [] };
+    (transport as unknown as { live: () => Promise<unknown> }).live = async () => liveAnswer;
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    const field = host.querySelector<HTMLTextAreaElement>('.th-composer__field')!;
+    const send = host.querySelector<HTMLButtonElement>('.th-composer__send')!;
+    const gone = (): HTMLElement => host.querySelector<HTMLElement>('.th-chat__gone')!;
+    const working = (): HTMLElement => host.querySelector<HTMLElement>('.th-feed__live')!;
+    expect(gone().hidden).toBe(true);
+    expect(field.disabled).toBe(false);
+    field.value = 'недописанный запрос';
+    field.dispatchEvent(new Event('input'));
+    expect(send.disabled).toBe(false);
+
+    // Опрос состояния отвечает `no-agent`, а лента ещё называет агента живым.
+    liveAnswer = { ok: false, reason: 'no-agent', detail: 'the agent has left the pane' };
+    await chat.live.refresh();
+    expect(working().hidden).toBe(true);
+    expect(host.querySelector<HTMLElement>('.th-live__bar')!.hidden).toBe(true);
+    expect(gone().hidden).toBe(false);
+    expect(gone().textContent).toContain(t('chat.noAgent'));
+    expect(field.disabled).toBe(true);
+    expect(send.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('.th-composer__attach')!.disabled).toBe(true);
+    // Лента узнала о том же: своей строки отказа под перепиской она не показывает.
+    feedGone = true;
+    chat.feed.refresh();
+    await flush();
+    expect(host.textContent).not.toContain(t('feed.fail.noAgent'));
+    expect(host.querySelectorAll('.th-feed__entry').length).toBe(2);
+    feedGone = false;
+
+    // Агент вернулся: чат оживает сам, набранное на месте.
+    liveAnswer = { ok: true, agent: 'claude', tested: true, screen: { kind: 'idle' }, modes: [], models: [] };
+    await chat.live.refresh();
+    expect(gone().hidden).toBe(true);
+    expect(field.disabled).toBe(false);
+    expect(field.value).toBe('недописанный запрос');
+    expect(send.disabled).toBe(false);
+
+    liveAnswer = { ok: false, reason: 'no-agent', detail: '' };
+    await chat.live.refresh();
+    gone().querySelector<HTMLButtonElement>('.th-chat__to-term')!.click();
+    expect(location.hash).toBe('#/term/work');
+    expect(sessionViewPref('work')).toBe('term');
+    chat.teardown();
+  });
+
+  it('пустая беседа без агента: «агент не запущен» сказано один раз — пустым состоянием', async () => {
+    const { transport } = fixture(() => ({ ok: false, reason: 'no-agent', detail: '' }));
+    (transport as unknown as { live: () => Promise<unknown> }).live = async () => ({ ok: false, reason: 'no-agent', detail: '' });
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    await chat.live.refresh();
+    expect(host.querySelector('.th-chat__empty')!.textContent).toContain(t('chat.noAgent'));
+    expect(host.querySelector<HTMLElement>('.th-chat__gone')!.hidden).toBe(true);
+    expect(host.querySelector<HTMLTextAreaElement>('.th-composer__field')!.disabled).toBe(true);
+    chat.teardown();
+  });
+
   it('обрыв связи оставляет переписку и говорит «нет связи»; вернулась связь — плашка уходит', async () => {
     vi.useFakeTimers();
     let broken = false;

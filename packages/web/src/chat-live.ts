@@ -47,6 +47,9 @@ export interface LiveHost {
 export interface LiveHandle {
   /** Последнее известное состояние экрана; null — агента нет или ответа ещё не было. */
   state(): LiveState | null;
+  /** Опрос состояния ответил `no-agent`: агента в панели нет (вышел или не запускался).
+   *  Обрыв связи и иной отказ этого не говорят; ответ с состоянием снимает признак. */
+  absent(): boolean;
   /** Действие в сессию. Экран из ответа применяется сразу; сеть сломалась — исключение
    *  (и «нет связи» на экране). Отказ агента — значение `{ok:false}`. */
   act(action: ChatAction): Promise<ActResult>;
@@ -129,6 +132,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
 
   let state: LiveState | null = null;
   let offline = false;
+  /** Последний ответ опроса — `no-agent`. */
+  let absent = false;
   let busy = false;
   let disposed = false;
   let inflight = false;
@@ -270,6 +275,9 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   let dismissedTerm = false;
   /** Окно сейчас закрывает сам человек (кнопкой окна или «Скрыть терминал»). */
   let closingByButton = false;
+  /** Окно сейчас открывает сам человек («Показать терминал», меню моделей по нажатию):
+   *  только тогда оно берёт фокус. Открывшееся само фокус у поля ввода не отбирает. */
+  let openingByHuman = false;
   // Эпизод неузнанного экрана: начинается, когда экран неузнан (или показывает меню)
   // SETTLE_FRAMES кадров подряд, кончается, когда он столько же кадров подряд узнан.
   // Окно открывается и сворачивается только на границах эпизода.
@@ -435,10 +443,11 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
 
   const syncTerminal = (): void => {
     const was = term.visible();
-    if (manualTerm || (state && episode && !dismissedTerm)) term.show();
+    if (manualTerm || (state && episode && !dismissedTerm)) term.show({ focus: openingByHuman });
     else term.hide();
     if (was && !term.visible()) host.onTerminalClosed?.(closingByButton);
     closingByButton = false;
+    openingByHuman = false;
     term.setReason(termReason());
     termBtn.textContent = term.visible() ? t('chat.live.hideTerm') : t('chat.live.showTerm');
   };
@@ -450,6 +459,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       closingByButton = true;
     } else {
       manualTerm = true;
+      openingByHuman = true;
     }
     syncTerminal();
   };
@@ -590,6 +600,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       }
       streak = 0;
       episode = needs;
+      // Кадр, которого человек добивался сам (меню моделей), — окно открывает он.
+      if (needs && sure) openingByHuman = true;
       // Граница эпизода: закрытое кнопкой окно получает право открыться в следующем.
       dismissedTerm = false;
       episodeNoted = false;
@@ -629,11 +641,16 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     try {
       const res = await transport.live(session);
       if (disposed) return;
+      const was = absent;
+      absent = !res.ok && res.reason === 'no-agent';
       if (res.ok) apply(res);
       else {
         offline = false;
         apply(null);
       }
+      // Кадр мог быть придержан (`apply` ждёт второго подряд) — о смене «агент есть / агента
+      // нет» подписчики узнают всё равно сразу.
+      if (absent !== was) emit(false);
     } catch {
       if (!disposed) setOffline();
     } finally {
@@ -733,6 +750,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
 
   return {
     state: () => state,
+    absent: () => absent,
     act,
     refresh: poll,
     subscribe: (fn) => {

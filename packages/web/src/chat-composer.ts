@@ -33,6 +33,8 @@ export interface ComposerHandle {
   setText(text: string): void;
   /** Текст поля сейчас. */
   text(): string;
+  /** Агента в панели нет: поле, отправка и вложения неактивны, набранное остаётся на месте. */
+  setDisabled(on: boolean): void;
   /** Подписка на любую смену текста поля (набор, вставка, очистка); возвращает отписку. */
   onText(fn: () => void): () => void;
   teardown(): void;
@@ -143,6 +145,8 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   const filesAllowed = !transport.clientScope || transport.clientScope.files;
   let disposed = false;
   let sending = false;
+  /** Писать некому (агента в панели нет): поле и кнопки неактивны. */
+  let blocked = false;
   let uploading = 0;
   let nextId = 1;
   const attachments: Attachment[] = [];
@@ -196,7 +200,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
 
   // ── Состояние кнопки и высоты ────────────────────────────────────────
   const syncSend = (): void => {
-    sendBtn.disabled = sending || uploading > 0 || field.value.trim() === '';
+    sendBtn.disabled = blocked || sending || uploading > 0 || field.value.trim() === '';
   };
   const fit = (): void => {
     field.style.height = 'auto';
@@ -316,6 +320,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     }
   };
   const attach = (files: File[]): void => {
+    if (blocked) return;
     for (const file of files) {
       const name = file.name || 'file';
       if (file.size > MAX_FILE) {
@@ -415,12 +420,17 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     note?: string;
   }
   const inQueue: Queued[] = [];
+  /** Идёт возврат из очереди. Клавиша возврата вынимает сообщение раньше, чем приходит
+   *  ответ на действие, и опрос экрана посреди него видит пустую очередь — сверка приняла
+   *  бы снятое сообщение за доставленное. Пока действие в пути, очередь не сверяется; отказ
+   *  возвращает её под обычную сверку (`finally` в `unqueue`). */
+  let unqueuing = false;
   const bare = (text: string): string => text.replace(/\s+/gu, '');
   /** Наше ли сообщение стоит в очереди агента: обрезанное агентом сверяется по началу. */
   const sameQueued = (drawn: { text: string; cut?: boolean }, text: string): boolean =>
     drawn.cut ? bare(text).startsWith(bare(drawn.text)) : bare(text) === bare(drawn.text);
   const syncQueue = (): void => {
-    if (disposed) return;
+    if (disposed || unqueuing) return;
     const screen = live.state()?.screen;
     // Экран со строкой ввода называет очередь; на прочих (вопрос, меню) её не видно.
     if (!screen || (screen.kind !== 'idle' && screen.kind !== 'working')) return;
@@ -467,7 +477,10 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     const scope = screen?.queueEdit;
     const last = inQueue[inQueue.length - 1];
     if (!scope || !last) return;
+    // Что именно снимается, решено до действия: очередь за его время сверкой не меняется.
+    const taken = scope === 'all' ? [...inQueue] : [last];
     sending = true;
+    unqueuing = true;
     syncSend();
     try {
       let res: ActResult;
@@ -482,8 +495,11 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
         last.note = t('chat.composer.unqueueFailed', { reason: failText(res) });
         return;
       }
-      const gone = scope === 'all' ? inQueue.splice(0) : inQueue.splice(-1);
-      for (const item of gone) item.msg.remove();
+      const gone = taken.filter((item) => inQueue.includes(item));
+      for (const item of gone) {
+        inQueue.splice(inQueue.indexOf(item), 1);
+        item.msg.remove();
+      }
       if (keep) {
         // Свой текст точнее прочитанного с экрана: там длинная строка перенесена, а большая
         // вставка стоит заглушкой.
@@ -493,6 +509,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
       thread.refresh();
     } finally {
       sending = false;
+      unqueuing = false;
       if (!disposed) {
         syncSend();
         syncQueue();
@@ -640,7 +657,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
 
   const send = (): void => {
     const text = field.value.trim();
-    if (!text || sending || uploading > 0) return;
+    if (!text || blocked || sending || uploading > 0) return;
     const state: LocalState = working() ? 'queued' : 'sending';
     const msg = thread.addLocal(text, state);
     for (const att of [...attachments]) forget(att);
@@ -876,11 +893,22 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   return {
     el: root,
     focus: (opts) => {
+      if (blocked) return;
       if (opts?.quiet && coarsePointer()) field.setAttribute('inputmode', 'none');
       field.focus();
     },
     setText: (text) => setField(text),
     text: () => field.value,
+    setDisabled: (on) => {
+      if (blocked === on) return;
+      blocked = on;
+      field.disabled = on;
+      attachBtn.disabled = on;
+      if (cameraBtn) cameraBtn.disabled = on;
+      root.classList.toggle('is-disabled', on);
+      if (on) closeSuggest();
+      syncSend();
+    },
     onText: (fn) => {
       textListeners.add(fn);
       return () => textListeners.delete(fn);
