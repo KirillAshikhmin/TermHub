@@ -76,6 +76,19 @@ describe('живая часть чата', () => {
     win.hidden = true;
     expect(getComputedStyle(win).display).toBe('none');
   });
+
+  it('лист фоновых агентов — внутри области чата (absolute, не fixed), закрытие не меньше 44 px', () => {
+    const sheet = el('div', 'th-live__sheet', chat);
+    expect(getComputedStyle(sheet).position).toBe('absolute');
+    sheet.hidden = true;
+    expect(getComputedStyle(sheet).display).toBe('none');
+    const close = el('button', 'th-live__sheet-close', sheet);
+    expect(getComputedStyle(close).minHeight).toBe('44px');
+    expect(getComputedStyle(close).minWidth).toBe('44px');
+    const row = el('li', 'th-live__sheet-row', sheet);
+    expect(getComputedStyle(row).overflowWrap).toBe('anywhere');
+  });
+
 });
 
 describe('окно терминала — в границах области чата', () => {

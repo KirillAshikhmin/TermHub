@@ -4593,6 +4593,175 @@ main.th-feed {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* Фоновая работа агента: метки в ряду управления и лист со списком агентов. */
+.th-live__bg {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+}
+.th-live__bg--agents {
+  cursor: pointer;
+}
+.th-live__bg--shells {
+  color: var(--text-dim);
+}
+/* Компактная метка — только на телефоне. */
+.th-live__bg-compact {
+  display: none;
+}
+/* Лист живёт в области чата (якорь — .th-chat), как окно терминала: не fixed — под
+   боковую панель вкладок и шапку сессии он не заходит. На десктопе — окошко над рядом
+   управления, на телефоне — лист снизу во всю ширину. */
+.th-live__sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  padding: 12px;
+  min-width: 0;
+  pointer-events: none;
+}
+.th-live__sheet[hidden] {
+  display: none;
+}
+.th-live__sheet-back {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+.th-live__sheet-box {
+  position: relative;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 520px);
+  max-height: 70%;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  overflow: hidden;
+}
+.th-live__sheet-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.th-live__sheet-title {
+  flex: none;
+  font-weight: 600;
+}
+.th-live__sheet-sum {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.th-live__sheet-close {
+  flex: none;
+  margin-left: auto;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.th-live__sheet-close:hover,
+.th-live__sheet-close:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.th-live__sheet-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.th-live__sheet-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.th-live__sheet-row:last-child {
+  border-bottom: none;
+}
+.th-live__sheet-type {
+  font-weight: 600;
+}
+.th-live__sheet-task {
+  flex: 1 1 12ch;
+  min-width: 0;
+}
+.th-live__sheet-meta {
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.th-live__sheet-note {
+  padding: 10px 12px;
+  color: var(--text-dim);
+}
+@media (max-width: 600px) {
+  .th-live__bg {
+    display: none;
+  }
+  .th-live__bg-compact {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-full);
+    background: var(--bg-elev-2);
+    color: var(--text);
+    font: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .th-live__sheet {
+    padding: 0;
+    align-items: stretch;
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.35);
+  }
+  .th-live__sheet-box {
+    width: auto;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+}
 .th-live-q {
   display: flex;
   flex-direction: column;

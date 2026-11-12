@@ -632,3 +632,147 @@ describe('для поля ввода', () => {
     expect(seen).toEqual(['idle']);
   });
 });
+
+describe('фоновые агенты и команды', () => {
+  const AGENTS = [
+    { type: 'general-purpose', task: 'Run the tests', elapsed: 122, tokens: 94_300 },
+    { type: 'Explore', task: 'Check the build' },
+  ];
+  const BG: ScreenState = { ...IDLE, shells: 1, agents: AGENTS };
+  const sheet = (): HTMLElement => q('.th-live__sheet')!;
+  const rows = (): string[] => qa('.th-live__sheet-row').map((n) => n.textContent ?? '');
+
+  it('после контекста стоят «агенты: N» и «команды: N»; экран без них — пунктов нет', async () => {
+    const fx = fixture(live(BG));
+    await mount(fx);
+    const agents = q('.th-live__bg--agents')!;
+    const shells = q('.th-live__bg--shells')!;
+    expect(agents.hidden).toBe(false);
+    expect(agents.textContent).toBe(t('chat.live.bgAgents', { n: 2 }));
+    expect(shells.hidden).toBe(false);
+    expect(shells.textContent).toBe(t('chat.live.bgShells', { n: 1 }));
+    const order = [...q('.th-live__controls')!.children];
+    expect(order.indexOf(agents)).toBeGreaterThan(order.indexOf(q('.th-live__ctx')!));
+    expect(order.indexOf(shells)).toBeGreaterThan(order.indexOf(agents));
+    expect(q('.th-live__bg-compact')!.hidden).toBe(false);
+
+    fx.next(live(IDLE));
+    await run(1000);
+    expect(agents.hidden).toBe(true);
+    expect(shells.hidden).toBe(true);
+    expect(q('.th-live__bg-compact')!.hidden).toBe(true);
+  });
+
+  it('по отдельности: только команды — метки агентов нет; только число агентов из подвала — без списка', async () => {
+    const fx = fixture(live({ ...IDLE, shells: 3 }));
+    await mount(fx);
+    expect(q('.th-live__bg--agents')!.hidden).toBe(true);
+    expect(q('.th-live__bg--shells')!.textContent).toBe(t('chat.live.bgShells', { n: 3 }));
+
+    fx.next(live({ ...IDLE, agentCount: 2 }));
+    await run(1000);
+    expect(q('.th-live__bg--shells')!.hidden).toBe(true);
+    expect(q('.th-live__bg--agents')!.textContent).toBe(t('chat.live.bgAgents', { n: 2 }));
+    q('.th-live__bg--agents')!.click();
+    expect(sheet().hidden).toBe(false);
+    expect(rows()).toEqual([]);
+    expect(sheet().textContent).toContain(t('chat.live.bgNoList'));
+  });
+
+  it('нажатие на «агенты» открывает список: тип, задача, время и токены — что есть', async () => {
+    const fx = fixture(live(BG));
+    await mount(fx);
+    expect(sheet().hidden).toBe(true);
+    q('.th-live__bg--agents')!.click();
+    expect(sheet().hidden).toBe(false);
+    expect(q('.th-live__bg--agents')!.getAttribute('aria-expanded')).toBe('true');
+    const list = rows();
+    expect(list).toHaveLength(2);
+    expect(list[0]).toContain('general-purpose');
+    expect(list[0]).toContain('Run the tests');
+    expect(list[0]).toContain('2m 2s');
+    expect(list[0]).toContain(t('chat.live.tokens', { n: '94.3k' }));
+    expect(list[1]).toContain('Explore');
+    expect(list[1]).toContain('Check the build');
+    expect(qa('.th-live__sheet-row')[1]!.querySelector('.th-live__sheet-meta')).toBeNull();
+    expect(sheet().textContent).toContain(t('chat.live.bgShells', { n: 1 }));
+  });
+
+  it('список обновляется с опросом экрана и закрывается, когда агентов не осталось', async () => {
+    const fx = fixture(live(BG));
+    await mount(fx);
+    q('.th-live__bg--agents')!.click();
+    fx.next(live({ ...IDLE, shells: 1, agents: [{ type: 'Explore', task: 'Check the build', elapsed: 61 }] }));
+    await run(1000);
+    expect(sheet().hidden).toBe(false);
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]).toContain('1m 1s');
+    expect(q('.th-live__bg--agents')!.textContent).toBe(t('chat.live.bgAgents', { n: 1 }));
+
+    fx.next(live({ ...IDLE, shells: 1 }));
+    await run(1000);
+    expect(sheet().hidden).toBe(true);
+  });
+
+  it('компактная метка несёт оба числа и открывает тот же лист; закрытие кнопкой и Esc', async () => {
+    const fx = fixture(live(BG));
+    await mount(fx);
+    const compact = q<HTMLButtonElement>('.th-live__bg-compact')!;
+    expect(compact.textContent).toContain('2');
+    expect(compact.textContent).toContain('1');
+    expect(compact.getAttribute('aria-label')).toBe(
+      `${t('chat.live.bgAgents', { n: 2 })}, ${t('chat.live.bgShells', { n: 1 })}`,
+    );
+    compact.click();
+    expect(sheet().hidden).toBe(false);
+    q('.th-live__sheet-close')!.click();
+    expect(sheet().hidden).toBe(true);
+
+    compact.click();
+    expect(sheet().hidden).toBe(false);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(sheet().hidden).toBe(true);
+    // Лист закрыт — Esc больше не слушается и опрос его сам не открывает.
+    await run(1000);
+    expect(sheet().hidden).toBe(true);
+  });
+
+  it('компактная метка при одних командах открывает лист с их числом, и он не закрывается сам', async () => {
+    const fx = fixture(live({ ...IDLE, shells: 2 }));
+    await mount(fx);
+    q('.th-live__bg-compact')!.click();
+    expect(sheet().hidden).toBe(false);
+    expect(sheet().textContent).toContain(t('chat.live.bgShells', { n: 2 }));
+    await run(1000);
+    expect(sheet().hidden).toBe(false);
+    fx.next(live(IDLE));
+    await run(1000);
+    expect(sheet().hidden).toBe(true);
+  });
+
+  it('лист живёт в области чата, а не на странице; гость видит числа и список наравне с владельцем', async () => {
+    const chat = document.createElement('div');
+    chat.className = 'th-chat';
+    document.body.append(chat);
+    chat.append(host.status, host.question, host.terminal, host.composer);
+    const fx = fixture(live(BG), { write: false, files: false });
+    await mount(fx);
+    expect(sheet().parentElement).toBe(chat);
+    // Слот поля ввода остаётся последним в оболочке.
+    expect(chat.lastElementChild).toBe(host.composer);
+    expect(q('.th-live__bg--agents')!.hidden).toBe(false);
+    expect(q('.th-live__bg--shells')!.hidden).toBe(false);
+    q('.th-live__bg--agents')!.click();
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('teardown убирает лист и перестаёт слушать Esc', async () => {
+    const fx = fixture(live(BG));
+    const h = await mount(fx);
+    q('.th-live__bg--agents')!.click();
+    h.teardown();
+    handle = undefined;
+    expect(q('.th-live__sheet')).toBeNull();
+    expect(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))).not.toThrow();
+  });
+});

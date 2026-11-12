@@ -95,7 +95,7 @@ describe('sessionLive — что на экране агента', () => {
       version: '2.1.322',
       tested: true,
       model: 'Fable 5.2',
-      screen: { kind: 'idle', mode: 'plan', input: '' },
+      screen: { kind: 'idle', mode: 'plan', input: '', agentCount: 2 },
       modes: [
         { id: 'manual', label: 'Manual' },
         { id: 'accept', label: 'Accept edits' },
@@ -499,7 +499,7 @@ describe('sessionAct — прерывание, режим, модель, сжа�
     const f = fake('claude', 'input', (_sent, index) => (index === 1 ? 'idle' : undefined));
     expect(await act(f, { kind: 'take-input' })).toEqual({
       ok: true,
-      screen: { kind: 'idle', mode: 'auto', input: '' },
+      screen: { kind: 'idle', mode: 'auto', input: '', agentCount: 2 },
       taken: 'hello draft text',
     });
     expect(f.sent).toEqual(['\x1b', '\x1b']);

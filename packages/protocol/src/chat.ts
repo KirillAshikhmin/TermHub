@@ -36,6 +36,17 @@ export interface ScreenQuestion {
   freeText?: boolean;
 }
 
+/** Фоновый агент из списка, который рисует сам агент. Заполнено только нарисованное. */
+export interface BackgroundAgent {
+  /** Тип агента, как он назван в списке («general-purpose»). */
+  type?: string;
+  /** Описание задачи. */
+  task?: string;
+  /** Сколько работает, секунды. */
+  elapsed?: number;
+  tokens?: number;
+}
+
 export interface ScreenState {
   kind: ScreenKind;
   /** Строка работы, как её рисует агент. */
@@ -46,6 +57,12 @@ export interface ScreenState {
   tokens?: number;
   /** Сколько фоновых агентов ждёт агент («Waiting for 2 background agents to finish»). */
   waiting?: number;
+  /** Фоновых команд оболочки («1 shell» в подвале). Агент не рисует — поля нет. */
+  shells?: number;
+  /** Фоновые агенты списком, когда агент рисует сам список. */
+  agents?: BackgroundAgent[];
+  /** Число фоновых агентов из подвала («← 2 agents») — только когда списка на экране нет. */
+  agentCount?: number;
   /** Для `question` и `permission`. */
   question?: ScreenQuestion;
   /** id режима из профиля. */

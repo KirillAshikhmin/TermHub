@@ -28,6 +28,14 @@ function read(agent: AgentId, name: string) {
   return readScreen(shot(agent, name), profileOf(agent));
 }
 
+/** Фоновая работа снимков agents-*: выписано глазами с подвала («1 shell») и списка под
+ *  ним («◯ general-purpose  Run the tests … 2m 2s · ↓ 94.3k tokens»). */
+const LISTED_AGENTS = [
+  { type: 'general-purpose', task: 'Run the tests', elapsed: 122, tokens: 94_300 },
+  { type: 'general-purpose', task: 'Check the build', elapsed: 30, tokens: 102_600 },
+];
+const LISTED = { shells: 1, agents: LISTED_AGENTS };
+
 const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
   claude: {
     idle: 'idle',
@@ -235,7 +243,8 @@ describe.each(AGENTS)('снимки %s: один набор проверок н�
 
 describe('Claude Code', () => {
   it('ожидание ввода: режим из подвала, подсказка-заглушка — не текст', () => {
-    expect(read('claude', 'idle')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    // В подвале снимка стоит «← 2 agents».
+    expect(read('claude', 'idle')).toEqual({ kind: 'idle', mode: 'auto', input: '', agentCount: 2 });
     expect(read('claude', 'idle-accept')).toMatchObject({ mode: 'accept', input: '' });
     expect(read('claude', 'idle-plan')).toMatchObject({ mode: 'plan', input: '' });
     expect(read('claude', 'idle-auto')).toMatchObject({ mode: 'auto', input: '' });
@@ -263,12 +272,14 @@ describe('Claude Code', () => {
       tokens: 179,
       mode: 'manual',
       input: '',
+      agentCount: 2,
     });
     expect(read('claude', 'working-start')).toEqual({
       kind: 'working',
       status: 'Cooking…',
       mode: 'auto',
       input: '',
+      agentCount: 2,
     });
   });
 
@@ -281,6 +292,7 @@ describe('Claude Code', () => {
       mode: 'manual',
       input: '',
       queued: 1,
+      agentCount: 2,
     });
   });
 
@@ -524,25 +536,28 @@ describe('Claude Code с фоновыми агентами', () => {
       waiting: 2,
       mode: 'auto',
       input: '',
+      ...LISTED,
     });
   });
 
   it('ожидание ввода и текст в строке ввода', () => {
-    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '' });
+    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '', ...LISTED });
     expect(read('claude', 'agents-input')).toEqual({
       kind: 'idle',
       waiting: 2,
       mode: 'auto',
       input: 'hello draft text',
+      ...LISTED,
     });
   });
 
-  it('список от 1 до 10 строк вердикт не меняет и в ответ не попадает', () => {
+  it('список от 1 до 10 строк вердикт не меняет; в ответе он только полем agents', () => {
     const working = read('claude', 'agents-working');
     const idle = read('claude', 'agents-input');
     for (let count = 1; count <= 10; count++) {
-      expect(readScreen(withAgents('agents-working', count), claude)).toEqual(working);
-      expect(readScreen(withAgents('agents-input', count), claude)).toEqual(idle);
+      const agents = Array.from({ length: count }, () => LISTED_AGENTS[0]);
+      expect(readScreen(withAgents('agents-working', count), claude)).toEqual({ ...working, agents });
+      expect(readScreen(withAgents('agents-input', count), claude)).toEqual({ ...idle, agents });
     }
   });
 
@@ -567,7 +582,7 @@ describe('Claude Code с фоновыми агентами', () => {
       ...lines.slice(at + 4),
     ];
     expect(moved).toHaveLength(lines.length);
-    expect(readScreen(moved, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(readScreen(moved, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '', ...LISTED });
   });
 
   it('вопрос и разрешение над списком — тот же отпечаток, что без списка', () => {
@@ -575,15 +590,17 @@ describe('Claude Code с фоновыми агентами', () => {
       const bare = read('claude', name);
       const listed = read('claude', `agents-${name}`);
       expect(bare.question?.stamp).toMatch(/^[0-9a-f]{16}$/);
-      expect(listed).toEqual(bare);
+      // Сверх вопроса — только сам список полем agents.
+      expect(listed).toEqual({ ...bare, agents: LISTED_AGENTS });
       for (let count = 1; count <= 10; count++) {
-        expect(readScreen(withAgents(`agents-${name}`, count), claude)).toEqual(bare);
+        const agents = Array.from({ length: count }, () => LISTED_AGENTS[0]);
+        expect(readScreen(withAgents(`agents-${name}`, count), claude)).toEqual({ ...bare, agents });
       }
     }
   });
 
   it('подвал с подсказкой в скобках, пунктом «⧉ имя» и счётчиком агентов — режим назван', () => {
-    expect(read('claude', 'idle-footer-item')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(read('claude', 'idle-footer-item')).toEqual({ kind: 'idle', mode: 'auto', input: '', agentCount: 2 });
     // Тот же подвал над списком фоновых агентов и во время работы.
     const footer = shot('claude', 'idle-footer-item').findLast((l) => l.includes('auto mode on'))!;
     for (const [name, kind] of [['agents-idle', 'idle'], ['agents-working', 'working']] as const) {
@@ -601,13 +618,24 @@ describe('Claude Code с фоновыми агентами', () => {
     for (const item of ['⧉ index', '3 shells', 'some new thing 42', '✦ whatever (ctrl+q)']) {
       const footer = `  ⏵⏵ auto mode on (shift+tab to cycle) · ${item} · ← 2 agents · ${item}`;
       const swapped = [...lines.slice(0, at), footer, ...lines.slice(at + 1)];
-      expect(readScreen(swapped, claude)).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '' });
+      // «3 shells» — пункт знакомый: он называет число фоновых команд.
+      const shells = item === '3 shells' ? { shells: 3 } : {};
+      expect(readScreen(swapped, claude)).toEqual({
+        kind: 'idle',
+        waiting: 2,
+        mode: 'auto',
+        input: '',
+        agents: LISTED_AGENTS,
+        ...shells,
+      });
       const bare = shot('claude', 'idle-auto');
       const last = bare.findLastIndex((l) => l.includes('auto mode on'));
       expect(readScreen([...bare.slice(0, last), footer, ...bare.slice(last + 1)], claude)).toEqual({
         kind: 'idle',
         mode: 'auto',
         input: '',
+        agentCount: 2,
+        ...shells,
       });
     }
   });
@@ -638,8 +666,14 @@ describe('Claude Code: подпись сессии в линейке рамки 
   const claude = profileOf('claude');
 
   it('рамка с подписью — рамка: ожидание ввода, режим из подвала', () => {
-    expect(read('claude', 'idle-labeled')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
-    expect(read('claude', 'idle-labeled-shell')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(read('claude', 'idle-labeled')).toEqual({ kind: 'idle', mode: 'auto', input: '', agentCount: 2 });
+    expect(read('claude', 'idle-labeled-shell')).toEqual({
+      kind: 'idle',
+      mode: 'auto',
+      input: '',
+      shells: 1,
+      agentCount: 2,
+    });
   });
 
   it('текст в рамке с подписью и работа по подвалу', () => {
@@ -647,7 +681,12 @@ describe('Claude Code: подпись сессии в линейке рамки 
     const at = lines.findLastIndex((l) => plain([l])[0] === '❯ ');
     expect(at).toBeGreaterThan(0);
     const typed = [...lines.slice(0, at), `${lines[at]!}hello draft text`, ...lines.slice(at + 1)];
-    expect(readScreen(typed, claude)).toEqual({ kind: 'idle', mode: 'auto', input: 'hello draft text' });
+    expect(readScreen(typed, claude)).toEqual({
+      kind: 'idle',
+      mode: 'auto',
+      input: 'hello draft text',
+      agentCount: 2,
+    });
     const last = lines.findLastIndex((l) => l.includes('auto mode on'));
     const busy = [...lines.slice(0, last), `${lines[last]!} · esc to interrupt`];
     expect(readScreen(busy, claude)).toMatchObject({ kind: 'working', mode: 'auto' });
@@ -954,6 +993,7 @@ describe('Claude Code: токены в строке работы и ожидан
       tokens: 2100,
       mode: 'manual',
       input: '',
+      agentCount: 2,
     });
   });
 
@@ -975,6 +1015,7 @@ describe('Claude Code: токены в строке работы и ожидан
       waiting: 2,
       mode: 'auto',
       input: '',
+      ...LISTED,
     });
   });
 
@@ -984,11 +1025,11 @@ describe('Claude Code: токены в строке работы и ожидан
     const only = [...lines.slice(0, at - 1), ...lines.slice(at + 1)];
     expect(plain(only).some((l) => STATUS.test(l))).toBe(false);
     // В подвале снимка стоит «esc to interrupt» — агент ещё работает.
-    expect(readScreen(only, claude)).toEqual({ kind: 'working', waiting: 2, mode: 'auto', input: '' });
+    expect(readScreen(only, claude)).toEqual({ kind: 'working', waiting: 2, mode: 'auto', input: '', ...LISTED });
     const one = only.map((l) => (plain([l])[0]!.includes('Waiting for') ? '✻ Waiting for 1 background agent to finish' : l));
     expect(readScreen(one, claude)).toMatchObject({ kind: 'working', waiting: 1 });
     // Ход окончен, агент ждёт фоновых: строка ввода свободна — это ожидание ввода.
-    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '' });
+    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '', ...LISTED });
   });
 
   it('строка ожидания выше по переписке (старая) состоянием не считается', () => {
@@ -1002,11 +1043,121 @@ describe('Claude Code: токены в строке работы и ожидан
     const stale = [...lines];
     stale[wait] = lines[talk]!;
     stale[talk] = lines[wait]!;
-    expect(readScreen(stale, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(readScreen(stale, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '', ...LISTED });
   });
 
   it('Codex: строка работы токенов не рисует — поля нет', () => {
     expect(read('codex', 'working')).not.toHaveProperty('tokens');
     expect(read('codex', 'statusline-working')).not.toHaveProperty('tokens');
+  });
+});
+
+describe('фоновые агенты и команды оболочки', () => {
+  // Ожидания выписаны глазами со снимков: подвал «1 shell», «← 2 agents» и список под
+  // подвалом «◯ <тип>  <задача>      <время> · ↓ <токены> tokens».
+  const claude = profileOf('claude');
+
+  it('подвал и список вместе: число команд и агенты списком, число из подвала не дублируется', () => {
+    for (const name of ['agents-working', 'agents-idle', 'agents-input']) {
+      const screen = read('claude', name);
+      expect(screen.shells).toBe(1);
+      expect(screen.agents).toEqual([
+        { type: 'general-purpose', task: 'Run the tests', elapsed: 122, tokens: 94_300 },
+        { type: 'general-purpose', task: 'Check the build', elapsed: 30, tokens: 102_600 },
+      ]);
+      expect(screen).not.toHaveProperty('agentCount');
+    }
+  });
+
+  it('список под вопросом и разрешением: агенты есть, подвала нет — числа команд тоже', () => {
+    for (const name of ['agents-permission', 'agents-question']) {
+      const screen = read('claude', name);
+      expect(screen.agents).toEqual(LISTED_AGENTS);
+      expect(screen).not.toHaveProperty('shells');
+      expect(screen).not.toHaveProperty('agentCount');
+    }
+  });
+
+  it('списка нет: число агентов и команд из подвала, пункты по отдельности и вместе', () => {
+    const both = read('claude', 'idle-labeled-shell');
+    expect(both.shells).toBe(1);
+    expect(both.agentCount).toBe(2);
+    expect(both).not.toHaveProperty('agents');
+    for (const name of ['idle-labeled', 'idle-footer-item']) {
+      const only = read('claude', name);
+      expect(only.agentCount).toBe(2);
+      expect(only).not.toHaveProperty('shells');
+      expect(only).not.toHaveProperty('agents');
+    }
+    // Только команды, во множественном числе, среди других пунктов.
+    const lines = shot('claude', 'idle-auto');
+    const last = lines.findLastIndex((l) => l.includes('auto mode on'));
+    const footer = '  ⏵⏵ auto mode on · 3 shells · ⧉ index · ↓ to manage';
+    const shells = readScreen([...lines.slice(0, last), footer, ...lines.slice(last + 1)], claude);
+    expect(shells).toEqual({ kind: 'idle', mode: 'auto', input: '', shells: 3 });
+    const one = '  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent';
+    expect(readScreen([...lines.slice(0, last), one, ...lines.slice(last + 1)], claude)).toEqual({
+      kind: 'idle',
+      mode: 'auto',
+      input: '',
+      agentCount: 1,
+    });
+  });
+
+  it('экран без фоновых — полей нет вовсе', () => {
+    for (const name of ['input', 'slash', 'question', 'permission', 'menu-model', 'shell']) {
+      const screen = read('claude', name);
+      expect(screen).not.toHaveProperty('shells');
+      expect(screen).not.toHaveProperty('agents');
+      expect(screen).not.toHaveProperty('agentCount');
+    }
+  });
+
+  it('Codex: «← for agents» — подсказка без числа, списка он не рисует: полей нет', () => {
+    for (const name of ['statusline-idle', 'statusline-working', 'statusline-working-wide', 'idle', 'working']) {
+      const screen = read('codex', name);
+      expect(screen.kind).not.toBe('unknown');
+      expect(screen).not.toHaveProperty('shells');
+      expect(screen).not.toHaveProperty('agents');
+      expect(screen).not.toHaveProperty('agentCount');
+    }
+  });
+
+  it('указатель списка стоит на агенте — строка агента читается так же, «main» в список не входит', () => {
+    const lines = plain(shot('claude', 'agents-permission'));
+    const main = lines.findIndex((l) => l === '  ⏺ main');
+    expect(main).toBeGreaterThan(0);
+    const moved = [...lines];
+    moved[main] = '  ◯ main';
+    moved[main + 1] = lines[main + 1]!.replace('◯', '⏺');
+    const screen = readScreen(moved, claude);
+    expect(screen.agents).toEqual(LISTED_AGENTS);
+    expect(screen.question?.stamp).toBe(read('claude', 'permission').question?.stamp);
+  });
+
+  it('строка списка без задачи или только с временем: что нарисовано, остальное опущено', () => {
+    const lines = plain(shot('claude', 'agents-idle'));
+    const first = lines.findIndex((l) => /^\s{2}◯ general-purpose\s/.test(l));
+    const odd = [...lines.slice(0, first), '  ◯ Explore', '  ◯ code-reviewer  Review the diff      45s'];
+    expect(readScreen(odd, claude).agents).toEqual([
+      { type: 'Explore' },
+      { type: 'code-reviewer', task: 'Review the diff', elapsed: 45 },
+    ]);
+  });
+
+  it('строки списка не попадают во ввод, статус и очередь', () => {
+    const idle = read('claude', 'agents-input');
+    expect(idle.input).toBe('hello draft text');
+    expect(idle).not.toHaveProperty('status');
+    expect(idle).not.toHaveProperty('queued');
+    const working = read('claude', 'agents-working');
+    expect(working.status).toBe('Bloviating…');
+    expect(working.input).toBe('');
+    expect(working).not.toHaveProperty('queued');
+  });
+
+  it('неузнанный экран со списком под ним фоновых не называет', () => {
+    const tray = shot('claude', 'agents-working').slice(-4);
+    expect(Object.keys(readScreen([...shot('claude', 'shell'), ...tray], claude)).sort()).toEqual(['kind', 'why']);
   });
 });

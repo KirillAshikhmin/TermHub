@@ -12,6 +12,7 @@
 
 import { questionStamp } from '@termhub/protocol/chat';
 import type {
+  BackgroundAgent,
   ChatCommand,
   ScreenOption,
   ScreenQuestion,
@@ -110,8 +111,18 @@ export function readScreen(lines: string[], profile: AgentProfile): ScreenState 
   const rows = lines.map(strip);
   const bottom = lastFilled(rows, rows.length - 1);
   if (bottom < 0) return unknown('empty screen');
+  const tray = trayOf(rows, bottom, profile);
+  const state = readAbove(rows, tray.last, profile);
+  // Неузнанный экран фоновых не называет: список под ним ничего не доказывает.
+  if (state.kind === 'unknown' || tray.agents.length === 0) return state;
+  // Список нарисован — число из подвала рядом с ним лишнее.
+  const { agentCount: _count, ...rest } = state;
+  return { ...rest, agents: tray.agents };
+}
+
+/** Экран без списка под подвалом: `last` — его последняя строка. */
+function readAbove(rows: Row[], last: number, profile: AgentProfile): ScreenState {
   const signs = profile.screen;
-  const last = aboveTray(rows, bottom, profile);
 
   // Подсказка под вариантами бывает перенесена на две строки.
   const above = lastFilled(rows, last - 1);
@@ -147,18 +158,64 @@ function unknown(why: string): ScreenState {
   return { kind: 'unknown', why };
 }
 
-/** Последняя строка экрана над списком под подвалом (`tray` профиля). Списка нет или
- *  он устроен иначе — прежняя последняя строка: лишнее под подвалом экран не узнаёт. */
-function aboveTray(rows: Row[], last: number, profile: AgentProfile): number {
+/** Список под подвалом (`tray` профиля): `last` — последняя строка экрана над ним,
+ *  `agents` — его строки, кроме первой («main»). Списка нет или он устроен иначе —
+ *  прежняя последняя строка и пусто: лишнее под подвалом экран не узнаёт. */
+function trayOf(rows: Row[], last: number, profile: AgentProfile): { last: number; agents: BackgroundAgent[] } {
+  const none = { last, agents: [] };
   const tray = profile.screen.tray;
-  if (!tray) return last;
+  if (!tray) return none;
   let head = last;
   while (head >= 0 && !blank(rows[head]) && tray.item.test(rows[head]!.text)) head--;
   head++;
   const count = last - head;
-  if (count < 1 || count > tray.max || !tray.head.test(rows[head]!.text)) return last;
-  if (head < 2 || !blank(rows[head - 1]) || blank(rows[head - 2])) return last;
-  return head - 2;
+  if (count < 1 || count > tray.max || !tray.head.test(rows[head]!.text)) return none;
+  if (head < 2 || !blank(rows[head - 1]) || blank(rows[head - 2])) return none;
+  const agents: BackgroundAgent[] = [];
+  for (let i = head + 1; i <= last; i++) {
+    const found = tray.entry.exec(rows[i]!.text);
+    if (found) agents.push(agentOf(found[1]!, found[2]));
+  }
+  return { last: head - 2, agents };
+}
+
+/** Строка списка: тип, а за ним колонками — задача и «2m 2s · ↓ 94.3k tokens». Время и
+ *  токены читаются только из последней колонки и только если в ней больше ничего нет. */
+function agentOf(type: string, rest: string | undefined): BackgroundAgent {
+  const parts = (rest ?? '').split(/\s{2,}/u).filter((part) => part !== '');
+  const tail = parts[parts.length - 1];
+  let elapsed: number | undefined;
+  let tokens: number | undefined;
+  if (tail !== undefined && TRAY_TAIL.test(tail)) {
+    elapsed = secondsOf(tail);
+    tokens = tokensOf(tail);
+    parts.pop();
+  }
+  const task = parts.join('  ');
+  return {
+    type,
+    ...(task ? { task } : {}),
+    ...(elapsed === undefined ? {} : { elapsed }),
+    ...(tokens === undefined ? {} : { tokens }),
+  };
+}
+
+/** Колонка времени и токенов целиком: «30s», «2m 2s · ↓ 94.3k tokens», «↓ 12 tokens». */
+const TRAY_TAIL =
+  /^(?=\S)(?:(?:\d+h\s*)?(?:\d+m\s*)?\d+s)?(?:\s*·\s*)?(?:[↓↑]\s*\d+(?:\.\d+)?[kKmM]?\s+tokens)?$/u;
+
+/** Счётчики фоновой работы из подвала: пункт, целиком совпавший с признаком профиля. */
+function backgroundOf(footer: string, profile: AgentProfile): { shells?: number; agentCount?: number } {
+  const signs = profile.screen.background;
+  if (!signs) return {};
+  const out: { shells?: number; agentCount?: number } = {};
+  for (const item of footer.split(signs.sep)) {
+    const shells = signs.shells.exec(item.trim());
+    if (shells) out.shells = Number(shells[1]);
+    const agents = signs.agents.exec(item.trim());
+    if (agents) out.agentCount = Number(agents[1]);
+  }
+  return out;
 }
 
 /** Список команд, который агент показывает над строкой ввода по «/». Нет списка или
@@ -167,7 +224,7 @@ export function readPopup(lines: string[], profile: AgentProfile): ChatCommand[]
   const rows = lines.map(strip);
   const last = lastFilled(rows, rows.length - 1);
   if (last < 0) return [];
-  const box = findBox(rows, aboveTray(rows, last, profile), profile);
+  const box = findBox(rows, trayOf(rows, last, profile).last, profile);
   if (typeof box === 'string') return [];
   const signs = profile.screen;
 
@@ -508,6 +565,7 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
     input,
     ...(queued > 0 ? { queued } : {}),
     ...(model === undefined ? {} : { model }),
+    ...backgroundOf(box.footer, profile),
   };
 }
 

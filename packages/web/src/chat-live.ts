@@ -2,12 +2,21 @@
 // секунду) и что на него отвечает. Полоса состояния и «Стоп», карточка вопроса или запроса
 // разрешения, режим, модель, занятость контекста с расходом, число сообщений в очереди,
 // окошко живого терминала для экрана, которого чат не узнал, и плашка непроверенной версии.
+// Там же — фоновая работа агента: сколько у него фоновых агентов и команд оболочки и
+// список этих агентов (то, что агент сам рисует в подвале и под ним).
 //
 // Принцип: не узнали — молчим. На экране `unknown` и `menu` нет ни карточки, ни
 // переключателей — только окошко терминала; клавиши по догадке в сессию не идут. Любое
 // действие уходит вместе с отпечатком показанного вопроса (его считает агент), и если на
 // экране уже другое, агент отказывает `stale`.
-import type { ActResult, ChatAction, LiveState, ScreenQuestion, ScreenState } from '@termhub/protocol/chat';
+import type {
+  ActResult,
+  BackgroundAgent,
+  ChatAction,
+  LiveState,
+  ScreenQuestion,
+  ScreenState,
+} from '@termhub/protocol/chat';
 
 import { mountChatTerm, type ChatTermHandle } from './chat-term';
 import { noteFailure, noteUnknown, versionNoticeDue } from './chat-health';
@@ -89,6 +98,23 @@ function stateText(screen: ScreenState, label: string): string {
   return parts.join(' · ');
 }
 
+/** Сколько фоновых агентов называет экран: список, а без него — число из подвала. */
+function agentsOf(screen: ScreenState | undefined): number {
+  return screen?.agents?.length ?? screen?.agentCount ?? 0;
+}
+
+/** Строка списка фоновых агентов: тип, задача, время и токены — только нарисованное. */
+function agentRow(agent: BackgroundAgent): HTMLElement {
+  const row = el('li', 'th-live__sheet-row');
+  if (agent.type) row.append(el('span', 'th-live__sheet-type', agent.type));
+  if (agent.task) row.append(el('span', 'th-live__sheet-task', agent.task));
+  const meta: string[] = [];
+  if (agent.elapsed !== undefined) meta.push(formatElapsed(agent.elapsed));
+  if (agent.tokens !== undefined) meta.push(t('chat.live.tokens', { n: formatTokens(agent.tokens) }));
+  if (meta.length > 0) row.append(el('span', 'th-live__sheet-meta', meta.join(' · ')));
+  return row;
+}
+
 export function mountLive(host: LiveHost, session: string, transport: Transport, onState?: StateListener): LiveHandle {
   const readOnly = !!transport.clientScope && !transport.clientScope.write;
   const listeners = new Set<StateListener>();
@@ -125,8 +151,90 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   const compactBtn = button('th-live__compact', t('chat.live.compact'), () => void ui({ kind: 'compact' }));
   compactBtn.title = t('chat.live.compactTitle');
   const termBtn = button('th-live__term-btn', t('chat.live.showTerm'), () => toggleTerminal());
-  controls.append(modeSel, modelBtn, ctxEl, compactBtn, termBtn);
+  // Фоновая работа: на десктопе две метки, на телефоне — одна компактная (выбирает CSS).
+  const agentsBtn = button('th-live__bg th-live__bg--agents', '', () => toggleSheet());
+  agentsBtn.title = t('chat.live.bgOpen');
+  agentsBtn.setAttribute('aria-expanded', 'false');
+  agentsBtn.hidden = true;
+  const shellsEl = el('span', 'th-live__bg th-live__bg--shells');
+  shellsEl.hidden = true;
+  const bgBtn = button('th-live__bg-compact', '', () => toggleSheet());
+  bgBtn.title = t('chat.live.bgOpen');
+  bgBtn.setAttribute('aria-expanded', 'false');
+  bgBtn.hidden = true;
+  controls.append(modeSel, modelBtn, ctxEl, agentsBtn, shellsEl, bgBtn, compactBtn, termBtn);
   host.composer.before(controls);
+
+  // Лист со списком — в области чата (якорь .th-chat), как окно терминала: не fixed.
+  const sheet = el('div', 'th-live__sheet');
+  sheet.hidden = true;
+  sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-label', t('chat.live.bgTitle'));
+  const sheetBack = el('div', 'th-live__sheet-back');
+  sheetBack.addEventListener('click', () => closeSheet());
+  const sheetBox = el('div', 'th-live__sheet-box');
+  const sheetHead = el('div', 'th-live__sheet-head');
+  const sheetSum = el('span', 'th-live__sheet-sum');
+  const sheetClose = button('th-live__sheet-close', '×', () => closeSheet());
+  sheetClose.setAttribute('aria-label', t('chat.live.dismiss'));
+  sheetHead.append(el('span', 'th-live__sheet-title', t('chat.live.bgTitle')), sheetSum, sheetClose);
+  const sheetList = el('ul', 'th-live__sheet-list');
+  const sheetNote = el('div', 'th-live__sheet-note', t('chat.live.bgNoList'));
+  sheetBox.append(sheetHead, sheetList, sheetNote);
+  sheet.append(sheetBack, sheetBox);
+  // Рядом с рядом управления: слот поля ввода остаётся последним в оболочке.
+  controls.before(sheet);
+
+  /** Лист открыт, пока в нём были агенты: их не осталось — закрывается сам. */
+  let sheetHadAgents = false;
+  const onSheetKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') closeSheet();
+  };
+  const closeSheet = (): void => {
+    if (sheet.hidden) return;
+    sheet.hidden = true;
+    document.removeEventListener('keydown', onSheetKey);
+    agentsBtn.setAttribute('aria-expanded', 'false');
+    bgBtn.setAttribute('aria-expanded', 'false');
+  };
+  const toggleSheet = (): void => {
+    if (!sheet.hidden) return closeSheet();
+    sheetHadAgents = agentsOf(state?.screen) > 0;
+    sheet.hidden = false;
+    document.addEventListener('keydown', onSheetKey);
+    agentsBtn.setAttribute('aria-expanded', 'true');
+    bgBtn.setAttribute('aria-expanded', 'true');
+    syncBackground();
+  };
+
+  const syncBackground = (): void => {
+    const screen = state?.screen;
+    const agents = agentsOf(screen);
+    const shells = screen?.shells ?? 0;
+    const agentsText = agents > 0 ? t('chat.live.bgAgents', { n: agents }) : '';
+    const shellsText = shells > 0 ? t('chat.live.bgShells', { n: shells }) : '';
+    agentsBtn.hidden = agents <= 0;
+    agentsBtn.textContent = agentsText;
+    shellsEl.hidden = shells <= 0;
+    shellsEl.textContent = shellsText;
+    const full = [agentsText, shellsText].filter((part) => part !== '').join(', ');
+    bgBtn.hidden = full === '';
+    bgBtn.textContent = [
+      agents > 0 ? t('chat.live.bgAgentsShort', { n: agents }) : '',
+      shells > 0 ? t('chat.live.bgShellsShort', { n: shells }) : '',
+    ]
+      .filter((part) => part !== '')
+      .join(' · ');
+    bgBtn.setAttribute('aria-label', full);
+
+    if (sheet.hidden) return;
+    if (agents > 0) sheetHadAgents = true;
+    if (full === '' || (sheetHadAgents && agents <= 0)) return closeSheet();
+    sheetSum.textContent = full;
+    sheetList.replaceChildren(...(screen?.agents ?? []).map(agentRow));
+    sheetList.hidden = !screen?.agents?.length;
+    sheetNote.hidden = agents <= 0 || !!screen?.agents?.length;
+  };
 
   let manualTerm = false;
   let dismissedTerm = false;
@@ -348,6 +456,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       ctxEl.title = c.hint;
     }
     termBtn.hidden = !s;
+    syncBackground();
 
     // Карточка вопроса.
     const q = s && (kind === 'question' || kind === 'permission') ? s.screen.question : undefined;
@@ -542,6 +651,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       clearInterval(usageTimer);
       document.removeEventListener('visibilitychange', onVisible);
       term.teardown();
+      closeSheet();
+      sheet.remove();
       controls.remove();
       bar.remove();
       notice?.remove();
