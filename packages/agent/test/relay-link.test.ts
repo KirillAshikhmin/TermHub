@@ -42,6 +42,19 @@ import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
 import { saveAuthorized, loadAuthorized } from '../src/config.js';
 import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON, USAGE_PAGE, USAGE_PAGE_JSON } from './feed-fixture.js';
+import type { ChatAction } from '@termhub/protocol/chat';
+import {
+  ACT_ACTION,
+  ACT_BAD_JSON,
+  ACT_DONE,
+  ACT_DONE_JSON,
+  CHAT_FORBIDDEN_SESSION_JSON,
+  CHAT_FORBIDDEN_WRITE_JSON,
+  LIVE_CRASH_JSON,
+  LIVE_STATE,
+  LIVE_STATE_JSON,
+  withId,
+} from './chat-fixture.js';
 import type { AuthorizedDevice } from '../src/config.js';
 
 /** Доступен ли tmux (иначе happy-LIST пропускается). */
@@ -1364,6 +1377,11 @@ describe('RelayLink — лента сессии через relay', () => {
   let lidOn = false;
   /** Подставная лента бросает вместо ответа: сорванное чтение обязано доехать телом. */
   let crash = false;
+  /** Чат: чей экран спросили и какие действия дошли до панели. */
+  let liveAsked: string[] = [];
+  let acted: { session: string; action: ChatAction }[] = [];
+  /** Задержка ответа на экран по имени сессии: ответы приходят не в порядке запросов. */
+  const liveDelay = new Map<string, number>();
 
   beforeAll(() => {
     feedIdentity = generateIdentity();
@@ -1382,6 +1400,16 @@ describe('RelayLink — лента сессии через relay', () => {
       usage: async (session) => {
         usageAsked.push(session);
         return USAGE_PAGE;
+      },
+      live: async (session) => {
+        if (crash) throw new Error('pane vanished');
+        liveAsked.push(session);
+        await delay(liveDelay.get(session) ?? 0);
+        return LIVE_STATE;
+      },
+      act: async (session, action) => {
+        acted.push({ session, action });
+        return ACT_DONE;
       },
       caffeinate: {
         supported: true,
@@ -1403,6 +1431,9 @@ describe('RelayLink — лента сессии через relay', () => {
   beforeEach(() => {
     asked = [];
     crash = false;
+    liveAsked = [];
+    acted = [];
+    liveDelay.clear();
   });
 
   interface FeedClient {
@@ -1549,5 +1580,89 @@ describe('RelayLink — лента сессии через relay', () => {
       detail: 'session not shared',
     });
     expect(asked).toEqual([]);
+  }, 25000);
+
+  it('владелец: кадр Live отвечает LiveResult — тем же телом, что GET /api/live, с id запроса', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Live, 0, { id: 7, session: OWN_SESSION }));
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.LiveResult);
+    expect(td.decode(frame!.payload)).toBe(withId(7, LIVE_STATE_JSON));
+    expect(liveAsked).toEqual([OWN_SESSION]);
+  }, 25000);
+
+  it('владелец: кадр Act отвечает ActResult — тем же телом, что POST /api/act, с id запроса', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Act, 0, { id: 8, session: OWN_SESSION, action: { ...ACT_ACTION, path: '/etc/passwd' } }));
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.ActResult);
+    expect(td.decode(frame!.payload)).toBe(withId(8, ACT_DONE_JSON));
+    expect(acted).toEqual([{ session: OWN_SESSION, action: ACT_ACTION }]);
+  }, 25000);
+
+  it('два запроса подряд получают каждый свой ответ, даже если ответы пришли не по порядку', async () => {
+    const c = await feedClient();
+    liveDelay.set(OWN_SESSION, 150);
+    c.send(jsonFrame(FrameType.Live, 0, { id: 21, session: OWN_SESSION }));
+    c.send(jsonFrame(FrameType.Live, 0, { id: 22, session: OTHER_SESSION }));
+    const first = await c.next();
+    const second = await c.next();
+    // Быстрый ответ обогнал медленный, и каждый несёт id своего запроса.
+    expect(td.decode(first!.payload)).toBe(withId(22, LIVE_STATE_JSON));
+    expect(td.decode(second!.payload)).toBe(withId(21, LIVE_STATE_JSON));
+    expect(liveAsked).toEqual([OWN_SESSION, OTHER_SESSION]);
+  }, 25000);
+
+  it('гость без write: экран своей сессии отдаётся, действие — forbidden и до панели не доходит', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Live, 0, { id: 1, session: OWN_SESSION }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(1, LIVE_STATE_JSON));
+
+    c.send(jsonFrame(FrameType.Act, 0, { id: 2, session: OWN_SESSION, action: ACT_ACTION }));
+    const refused = await c.next();
+    expect(refused?.type).toBe(FrameType.ActResult);
+    expect(td.decode(refused!.payload)).toBe(withId(2, CHAT_FORBIDDEN_WRITE_JSON));
+    expect(acted).toEqual([]);
+  }, 25000);
+
+  it('гость с write отвечает на вопрос в своей сессии', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: true, files: false });
+    c.send(jsonFrame(FrameType.Act, 0, { id: 3, session: OWN_SESSION, action: ACT_ACTION }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(3, ACT_DONE_JSON));
+    expect(acted).toEqual([{ session: OWN_SESSION, action: ACT_ACTION }]);
+  }, 25000);
+
+  it('гость с полными правами: чужая и сборочная сессии — forbidden на оба кадра, экран не читается', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: true, files: true });
+    c.send(jsonFrame(FrameType.Live, 0, { id: 4, session: OTHER_SESSION }));
+    const live = await c.next();
+    expect(live?.type).toBe(FrameType.LiveResult);
+    expect(td.decode(live!.payload)).toBe(withId(4, CHAT_FORBIDDEN_SESSION_JSON));
+
+    c.send(jsonFrame(FrameType.Act, 0, { id: 5, session: OTHER_SESSION, action: ACT_ACTION }));
+    const act = await c.next();
+    expect(act?.type).toBe(FrameType.ActResult);
+    expect(td.decode(act!.payload)).toBe(withId(5, CHAT_FORBIDDEN_SESSION_JSON));
+
+    c.send(jsonFrame(FrameType.Act, 0, { id: 6, session: buildSessionName(OWN_SESSION), action: ACT_ACTION }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(6, CHAT_FORBIDDEN_SESSION_JSON));
+    expect(liveAsked).toEqual([]);
+    expect(acted).toEqual([]);
+  }, 25000);
+
+  it('битое действие и сорванное чтение экрана отвечают теми же телами, что по LAN; мост жив', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Act, 0, { id: 9, session: OWN_SESSION, action: { kind: 'rm -rf' } }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(9, ACT_BAD_JSON));
+    c.send(jsonFrame(FrameType.Act, 0, null));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(0, ACT_BAD_JSON));
+    expect(acted).toEqual([]);
+
+    crash = true;
+    c.send(jsonFrame(FrameType.Live, 0, { id: 10, session: OWN_SESSION }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(10, LIVE_CRASH_JSON));
+    crash = false;
+    c.send(jsonFrame(FrameType.Live, 0, { id: 11, session: OWN_SESSION }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(11, LIVE_STATE_JSON));
   }, 25000);
 });

@@ -28,6 +28,8 @@ import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
 import { sessionFeed, sessionUsage } from './session-feed.js';
 import type { UsageReader } from './transcript-usage.js';
 import { feedPage, type FeedReader } from './feed-request.js';
+import { sessionAct, sessionLive } from './agent-live.js';
+import { actPage, livePage, type ActRunner, type LiveReader } from './chat-request.js';
 import { PasteStore } from './paste-image.js';
 import { AGENT_CAPS, intersect, parseCaps } from '@termhub/protocol';
 
@@ -185,6 +187,9 @@ export class AgentServer {
    *  поэтому ответ обоих транспортов — один и тот же объект. */
   private readonly feed: FeedReader;
   private readonly usage: UsageReader;
+  /** Чат: экран агента в сессии и действия в ней. Те же вызовы делает relay. */
+  private readonly live: LiveReader;
+  private readonly act: ActRunner;
   /** Пересечение возможностей с последним клиентом, объявившимся по LAN (ADR 0018),
    *  и время обмена. Relay ведёт такой же счёт у себя (RelayLink.status), диагностика
    *  показывает более поздний: клиент бывает и по LAN, и через relay, а знать нужно
@@ -216,6 +221,9 @@ export class AgentServer {
     /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
     feed?: FeedReader;
     usage?: UsageReader;
+    /** Чат; по умолчанию — настоящая панель на сокете рабочих сессий. */
+    live?: LiveReader;
+    act?: ActRunner;
     /** Приём картинок из буфера клиента; по умолчанию — каталог `~/.termhub/paste`. */
     pastes?: PasteStore;
   }) {
@@ -235,6 +243,8 @@ export class AgentServer {
     // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
     this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
     this.usage = opts.usage ?? ((session) => sessionUsage(session, { socketName: this.socketName }));
+    this.live = opts.live ?? ((session) => sessionLive(session, { socketName: this.socketName }));
+    this.act = opts.act ?? ((session, action) => sessionAct(session, action, { socketName: this.socketName }));
   }
 
   /** Регистрирует обработчик терминальных WS (Task 6). */
@@ -411,6 +421,8 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/diag') return this.diag(res);
     if (method === 'POST' && pathname === '/api/capabilities') return this.capabilities(req, res);
     if (method === 'GET' && pathname === '/api/feed') return this.feedApi(res, url);
+    if (method === 'GET' && pathname === '/api/live') return this.liveApi(res, url);
+    if (method === 'POST' && pathname === '/api/act') return this.actApi(req, res);
     if (method === 'GET' && pathname === '/api/files/list') return this.filesList(res, url);
     if (method === 'GET' && pathname === '/api/files/read') return this.fileRead(res, url);
     if (method === 'GET' && pathname === '/api/files/stat') return this.fileStatHttp(res, url);
@@ -557,6 +569,25 @@ export class AgentServer {
       this.usage,
     );
     return this.sendJson(res, 200, result);
+  }
+
+  /** Экран агента в сессии по LAN. Тело — как у ленты: тот же объект уходит кадром
+   *  LiveResult через relay, отказ едет полем `ok:false`, а не кодом HTTP. */
+  private async liveApi(res: ServerResponse, url: URL): Promise<void> {
+    return this.sendJson(res, 200, await livePage(this.live, { session: url.searchParams.get('session') }));
+  }
+
+  /** Действие чата по LAN: `{session, action}`. Тело, которое не разобрать (не JSON, не
+   *  объект, `null`), — не 400, а тот же отказ, каким relay отвечает на битый кадр. */
+  private async actApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJson(req, res);
+    } catch (err) {
+      if (!(err instanceof BadJsonError)) throw err;
+      body = {};
+    }
+    return this.sendJson(res, 200, await actPage(this.act, body));
   }
 
   /** Диагностика: версия, аптайм, сессии, статус связи с relay, корни. */

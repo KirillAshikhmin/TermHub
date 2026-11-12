@@ -92,6 +92,8 @@ import { buildSessionName } from './gradle.js';
 import { sessionFeed, sessionUsage, type FeedResult } from './session-feed.js';
 import type { UsageReader } from './transcript-usage.js';
 import { feedPage, feedSession, type FeedReader } from './feed-request.js';
+import { sessionAct, sessionLive } from './agent-live.js';
+import { actPage, chatSession, livePage, type ActRunner, type LiveReader } from './chat-request.js';
 import { PasteStore } from './paste-image.js';
 import { VcsService } from './vcs.js';
 
@@ -218,6 +220,9 @@ export class RelayLink {
    *  поэтому ответ обоих транспортов — один и тот же объект. */
   private readonly feed: FeedReader;
   private readonly usage: UsageReader;
+  /** Чат: экран агента в сессии и действия в ней — те же вызовы, что у LAN. */
+  private readonly live: LiveReader;
+  private readonly act: ActRunner;
   private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
@@ -272,6 +277,9 @@ export class RelayLink {
     /** Инжектируется в тестах; по умолчанию — настоящая лента на сокете рабочих сессий. */
     feed?: FeedReader;
     usage?: UsageReader;
+    /** Чат; по умолчанию — настоящая панель на сокете рабочих сессий. */
+    live?: LiveReader;
+    act?: ActRunner;
     /** Приём картинок из буфера клиента; по умолчанию — каталог `~/.termhub/paste`. */
     pastes?: PasteStore;
   }) {
@@ -296,6 +304,8 @@ export class RelayLink {
     // подставляет и ушла бы на сокет tmux по умолчанию, где рабочих сессий нет.
     this.feed = opts.feed ?? ((session, o) => sessionFeed(session, o, { socketName: this.socketName }));
     this.usage = opts.usage ?? ((session) => sessionUsage(session, { socketName: this.socketName }));
+    this.live = opts.live ?? ((session) => sessionLive(session, { socketName: this.socketName }));
+    this.act = opts.act ?? ((session, action) => sessionAct(session, action, { socketName: this.socketName }));
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -840,6 +850,12 @@ export class RelayLink {
           // сессии). Ограничение «только своя сессия» — в doFeed: имя лежит в payload,
           // а он здесь ещё не разобран.
           break;
+        case FrameType.Live:
+        case FrameType.Act:
+          // Чат: экран своей сессии гостю виден, действие требует write. Оба условия
+          // проверяют doLive/doAct — имя сессии лежит в payload, а отказ обязан уехать
+          // ответом с `id` запроса, иначе клиент ждал бы его до срока.
+          break;
         default:
           break;
       }
@@ -945,6 +961,12 @@ export class RelayLink {
         return;
       case FrameType.Feed:
         void this.doFeed(s, frame);
+        return;
+      case FrameType.Live:
+        void this.doLive(s, frame);
+        return;
+      case FrameType.Act:
+        void this.doAct(s, frame);
         return;
       case FrameType.Share:
         void this.doShare(s, frame);
@@ -1164,6 +1186,29 @@ export class RelayLink {
       return;
     }
     this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req, this.usage)));
+  }
+
+  /** Экран агента в сессии через relay: то же тело, что отдаёт `GET /api/live`, с `id`
+   *  запроса первым полем — по нему клиент находит свой ответ. Гостю — только его
+   *  сессия (без сборочной), право write не нужно; чужой экран мост не читает вовсе. */
+  private async doLive(s: ClientSession, frame: Frame): Promise<void> {
+    const req = chatRequest(frame);
+    const result = this.ownsSession(s, chatSession(req), false)
+      ? await livePage(this.live, req)
+      : CHAT_NOT_SHARED;
+    this.sendFrameBytes(s, jsonFrame(FrameType.LiveResult, frame.channel, { id: chatId(req), ...result }));
+  }
+
+  /** Действие чата через relay: то же тело, что у `POST /api/act`. Это клавиши в панель,
+   *  поэтому гостю нужно право write — как на ввод в терминал; отказ едет телом ответа,
+   *  и до панели не доходит ни чтение экрана, ни клавиши. */
+  private async doAct(s: ClientSession, frame: Frame): Promise<void> {
+    const req = chatRequest(frame);
+    let result: Awaited<ReturnType<typeof actPage>>;
+    if (!this.ownsSession(s, chatSession(req), false)) result = CHAT_NOT_SHARED;
+    else if (s.scope && !s.scope.write) result = { ok: false, reason: 'forbidden', detail: 'no write permission' };
+    else result = await actPage(this.act, req);
+    this.sendFrameBytes(s, jsonFrame(FrameType.ActResult, frame.channel, { id: chatId(req), ...result }));
   }
 
   /** Листинг директории файлового браузера через relay. Ошибка (вне корня) —
@@ -1555,4 +1600,21 @@ export class RelayLink {
       else w.resolve();
     }
   }
+}
+
+const CHAT_NOT_SHARED = { ok: false as const, reason: 'forbidden', detail: 'session not shared' };
+
+/** Payload запроса чата. Битый JSON и не-объект (в том числе `null`) — пустой запрос:
+ *  отказ выдаст общий разбор, тем же телом, что по LAN. */
+function chatRequest(frame: Frame): Record<string, unknown> {
+  try {
+    const raw = frameJson<unknown>(frame);
+    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function chatId(req: Record<string, unknown>): number {
+  return typeof req.id === 'number' ? req.id : 0;
 }

@@ -16,6 +16,18 @@ import type { FeedResult } from '../src/session-feed.js';
 import type { FeedOptions } from '../src/transcript-feed.js';
 import type { UsageResult } from '../src/transcript-usage.js';
 import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON, USAGE_PAGE, USAGE_PAGE_JSON } from './feed-fixture.js';
+import type { ActResult, ChatAction, LiveResult } from '@termhub/protocol/chat';
+import {
+  ACT_ACTION,
+  ACT_BAD_JSON,
+  ACT_DONE,
+  ACT_DONE_JSON,
+  ACT_STALE,
+  ACT_STALE_JSON,
+  LIVE_CRASH_JSON,
+  LIVE_STATE,
+  LIVE_STATE_JSON,
+} from './chat-fixture.js';
 import type { SessionInfo } from '@termhub/protocol';
 
 const SECRET = 'test-cookie-secret';
@@ -72,6 +84,8 @@ async function start(opts: {
   feed?: (session: string, opts: FeedOptions) => Promise<FeedResult>;
   usage?: (session: string) => Promise<UsageResult>;
   pastes?: PasteStore;
+  live?: (session: string) => Promise<LiveResult>;
+  act?: (session: string, action: ChatAction) => Promise<ActResult>;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -86,6 +100,8 @@ async function start(opts: {
     feed: opts.feed,
     usage: opts.usage,
     pastes: opts.pastes,
+    live: opts.live,
+    act: opts.act,
   });
   const port = await server.listen();
   return { server, base: `http://127.0.0.1:${port}` };
@@ -1254,5 +1270,122 @@ describe('GET /api/feed — лента сессии по LAN', () => {
     const res = await fetch(`${s!.base}/api/feed?session=work`);
     expect(res.status).toBe(401);
     expect(asked).toEqual([]);
+  });
+});
+
+describe('GET /api/live и POST /api/act — чат по LAN', () => {
+  let s: Started | undefined;
+  let liveAsked: string[] = [];
+  let acted: { session: string; action: ChatAction }[] = [];
+
+  beforeEach(() => {
+    liveAsked = [];
+    acted = [];
+  });
+
+  afterEach(async () => {
+    await s?.server.close();
+    s = undefined;
+  });
+
+  async function startChat(live: LiveResult = LIVE_STATE, done: ActResult = ACT_DONE): Promise<void> {
+    s = await start({
+      live: async (session) => {
+        liveAsked.push(session);
+        return live;
+      },
+      act: async (session, action) => {
+        acted.push({ session, action });
+        return done;
+      },
+    });
+  }
+
+  function post(body: string, headers: Record<string, string> = {}): Promise<Response> {
+    return fetch(`${s!.base}/api/act`, {
+      method: 'POST',
+      headers: { cookie: authCookie(), 'content-type': 'application/json', ...headers },
+      body,
+    });
+  }
+
+  it('live отдаёт состояние экрана как есть — тем же JSON, что и кадр LiveResult', async () => {
+    await startChat();
+    const res = await fetch(`${s!.base}/api/live?session=work`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(LIVE_STATE_JSON);
+    expect(liveAsked).toEqual(['work']);
+  });
+
+  it('live: отказ едет причиной, а не кодом HTTP; сорванное чтение — тем же телом, что через relay', async () => {
+    await startChat({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' });
+    const res = await fetch(`${s!.base}/api/live?session=work`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('{"ok":false,"reason":"no-agent","detail":"pane runs zsh"}');
+    await s!.server.close();
+
+    s = await start({
+      live: async () => {
+        throw new Error('pane vanished');
+      },
+    });
+    const crashed = await fetch(`${s.base}/api/live?session=work`, { headers: { cookie: authCookie() } });
+    expect(crashed.status).toBe(200);
+    expect(await crashed.text()).toBe(LIVE_CRASH_JSON);
+  });
+
+  it('act передаёт действие и отдаёт его итог тем же JSON, что и кадр ActResult', async () => {
+    await startChat();
+    const res = await post(JSON.stringify({ session: 'work', action: { ...ACT_ACTION, path: '/etc/passwd' } }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(ACT_DONE_JSON);
+    // Лишнее поле до действия не доезжает.
+    expect(acted).toEqual([{ session: 'work', action: ACT_ACTION }]);
+  });
+
+  it('act: отказ действия доезжает телом', async () => {
+    await startChat(LIVE_STATE, ACT_STALE);
+    const res = await post(JSON.stringify({ session: 'work', action: ACT_ACTION }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(ACT_STALE_JSON);
+  });
+
+  it('act с битым телом отвечает отказом, до панели не доходит и агент не роняет', async () => {
+    await startChat();
+    const bodies = [
+      'null',
+      '"prompt"',
+      '[1,2]',
+      '{не json',
+      '{}',
+      '{"session":"work"}',
+      '{"session":"work","action":null}',
+      '{"session":"work","action":"interrupt"}',
+      '{"session":"work","action":{"kind":"rm -rf"}}',
+      '{"session":"work","action":{"kind":"prompt"}}',
+      '{"session":"work","action":{"kind":"prompt","text":42}}',
+      '{"session":"work","action":{"kind":"answer","stamp":"x","options":[1]}}',
+      '{"session":"work","action":{"kind":"mode"}}',
+    ];
+    for (const body of bodies) {
+      const res = await post(body);
+      expect(res.status, body).toBe(200);
+      expect(await res.text(), body).toBe(ACT_BAD_JSON);
+    }
+    expect(acted).toEqual([]);
+    // Агент жив: следующий запрос обслуживается.
+    expect(await (await post(JSON.stringify({ session: 'work', action: { kind: 'interrupt' } }))).text()).toBe(ACT_DONE_JSON);
+    expect(acted).toEqual([{ session: 'work', action: { kind: 'interrupt' } }]);
+  });
+
+  it('без cookie — 401, с чужим Origin — 403: ни экран не читается, ни клавиши не идут', async () => {
+    await startChat();
+    expect((await fetch(`${s!.base}/api/live?session=work`)).status).toBe(401);
+    const anon = await fetch(`${s!.base}/api/act`, { method: 'POST', body: '{}' });
+    expect(anon.status).toBe(401);
+    const foreign = await post(JSON.stringify({ session: 'work', action: ACT_ACTION }), { origin: 'https://evil.example' });
+    expect(foreign.status).toBe(403);
+    expect(liveAsked).toEqual([]);
+    expect(acted).toEqual([]);
   });
 });
