@@ -983,6 +983,31 @@ describe('сообщение в очереди агента: «Изменить�
     expect(labels(fx.locals[0]!)).toHaveLength(2);
   });
 
+  it('очередь на экране агента опустела — пометка «в очереди» снята, даже если записи в беседе не будет', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['первое', 'второе']);
+    // Экран ещё не показал очередь — пометка держится.
+    fx.emit();
+    expect(fx.locals.map((l) => l.state)).toEqual(['queued', 'queued']);
+    fx.screen.value = working({ queued: 2, queue: [{ text: 'первое' }, { text: 'второе' }] });
+    fx.emit();
+    // Агент забрал первое сообщение посреди хода.
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'второе' }] });
+    fx.emit();
+    expect(fx.locals.map((l) => l.state)).toEqual(['sent', 'queued']);
+    expect(fx.locals[0]).toMatchObject({ delivered: true, removed: false });
+    // Экран не у строки ввода (вопрос) об очереди ничего не говорит.
+    fx.screen.value = { kind: 'question' };
+    fx.emit();
+    expect(fx.locals[1]!.state).toBe('queued');
+    // Ход закончился, очереди нет.
+    fx.screen.value = { kind: 'idle', input: '' };
+    fx.emit();
+    expect(fx.locals.map((l) => l.state)).toEqual(['sent', 'sent']);
+  });
+
   it('отказ агента: сообщение остаётся «в очереди», поле не тронуто, причина показана', async () => {
     fx = mount();
     fx.screen.value = working();

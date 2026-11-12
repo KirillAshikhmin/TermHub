@@ -1,6 +1,7 @@
 // Общие UI-примитивы: иконки, кнопки-иконки, шапка приложения, модалка, тосты,
 // спиннер. Держим здесь, чтобы dashboard/main не разрастались вёрсткой.
 
+import { noteOverlayClosed } from './overlay-events';
 import type { GradleProject } from '@termhub/protocol/frames';
 
 import { ApiError, type CaffeinateState } from './api';
@@ -216,10 +217,13 @@ export function openModal(builder: (close: ModalClose) => HTMLElement): () => vo
     closed = true;
     overlayDismissers.delete(cleanup);
     overlay.classList.remove('is-shown');
+    // Окно ещё гаснет, но открытым уже не считается.
+    overlay.dataset.closing = '1';
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('popstate', onPop);
     previouslyFocused?.focus();
     setTimeout(() => overlay.remove(), 200);
+    noteOverlayClosed();
   };
   const close: ModalClose = (next) => {
     if (closed) return;
@@ -675,6 +679,7 @@ function buildMenu(
   pop.setAttribute('role', 'menu');
 
   const closeMenu = (): void => {
+    if (wrap.classList.contains('is-open')) queueMicrotask(noteOverlayClosed);
     wrap.classList.remove('is-open');
     trigger.setAttribute('aria-expanded', 'false');
   };

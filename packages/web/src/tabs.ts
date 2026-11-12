@@ -2,6 +2,7 @@
 // tmux-сессиями без возврата на дашборд. Чистые рендеры (тестируются
 // отдельно) + mountSessionTabs, владеющий поллингом списка через транспорт.
 
+import { noteOverlayClosed } from './overlay-events';
 import type { SessionInfo } from '@termhub/protocol';
 
 import type { TFn } from './i18n';
@@ -463,6 +464,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     syncGroupHeaders(list, visible, (name) => cardOf.get(name));
   };
   function closePanel(): void {
+    if (panelOpen) noteOverlayClosed();
     panelOpen = false;
     panel.classList.remove('is-open');
     panel.inert = true; // закрытая панель — вне порядка табуляции и недоступна скринридеру

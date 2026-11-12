@@ -7,6 +7,7 @@
 // Неудача молчит: сообщение остаётся текстом. Отказ агента запоминается (тот же путь второй
 // раз не запрашивается), сбой связи — нет: при возврате связи путь спрашивается снова.
 
+import { noteOverlayClosed } from './overlay-events';
 import { t } from './i18n';
 import { detectPaths } from './termlinks';
 import type { Transport } from './transport';
@@ -120,6 +121,7 @@ export function createChatImages(host: HTMLElement, session: string, transport: 
     const from = view.from;
     view = null;
     if (from?.isConnected) from.focus();
+    noteOverlayClosed();
   };
   const openView = (path: string, url: string, from: HTMLElement): void => {
     if (!view) {

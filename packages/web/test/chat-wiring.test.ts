@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { forgetCaps } from '../src/capabilities';
 import { mountChat } from '../src/chat';
+import { noteOverlayClosed } from '../src/overlay-events';
+import { openModal } from '../src/ui';
 import { setLang } from '../src/i18n';
 import type { FeedOptions, Transport } from '../src/transport';
 
@@ -306,6 +308,88 @@ describe('чат: фокус в поле ввода при показе', () => 
     chat.focusInput();
     expect(document.activeElement).toBe(query);
     chat.teardown();
+  });
+
+  it('закрытие окна поверх чата (настройки, расход, палитра — общий openModal) возвращает фокус в поле ввода', async () => {
+    coarse(false);
+    const chat = await boot();
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    let closeIt: () => void = () => {};
+    openModal((close) => {
+      closeIt = () => close();
+      const card = document.createElement('div');
+      card.append(document.createElement('input'));
+      return card;
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).not.toBe(field(chat));
+    closeIt();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).toBe(field(chat));
+    opener.remove();
+    chat.teardown();
+  });
+
+  it('закрыли одно окно из двух — фокус не перехватывается, пока открыто второе', async () => {
+    coarse(false);
+    const chat = await boot();
+    // Второе окно — другого вида (просмотр картинки): у него своё закрытие.
+    const viewer = document.createElement('div');
+    viewer.className = 'th-imgview';
+    document.body.append(viewer);
+    let closeModal: () => void = () => {};
+    openModal((close) => {
+      closeModal = () => close();
+      const card = document.createElement('div');
+      card.append(document.createElement('input'));
+      return card;
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    closeModal();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).not.toBe(field(chat));
+    viewer.remove();
+    noteOverlayClosed();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).toBe(field(chat));
+    chat.teardown();
+  });
+
+  it('прочие окна сообщают о закрытии тем же событием; возврат на вкладку браузера — тоже фокус в поле', async () => {
+    coarse(false);
+    const chat = await boot();
+    field(chat).blur();
+    noteOverlayClosed();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).toBe(field(chat));
+    field(chat).blur();
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).toBe(field(chat));
+    field(chat).blur();
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).toBe(field(chat));
+    // После снятия чата событие никого не трогает.
+    chat.teardown();
+    expect(() => noteOverlayClosed()).not.toThrow();
+  });
+
+  it('грубый указатель: фокус после закрытия окна — тихий; гость без поля — ничего', async () => {
+    coarse(true);
+    const chat = await boot();
+    noteOverlayClosed();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement).toBe(field(chat));
+    expect(field(chat).getAttribute('inputmode')).toBe('none');
+    chat.teardown();
+    const guest = await boot({ ...transport, clientScope: { write: false, files: false } } as unknown as Transport);
+    noteOverlayClosed();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+    guest.teardown();
   });
 
   it('гость без поля: показ ничего не трогает', async () => {

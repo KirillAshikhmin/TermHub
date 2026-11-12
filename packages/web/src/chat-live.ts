@@ -9,6 +9,7 @@
 // переключателей — только окошко терминала; клавиши по догадке в сессию не идут. Любое
 // действие уходит вместе с отпечатком показанного вопроса (его считает агент), и если на
 // экране уже другое, агент отказывает `stale`.
+import { noteOverlayClosed } from './overlay-events';
 import type {
   ActResult,
   BackgroundAgent,
@@ -224,6 +225,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     document.removeEventListener('keydown', onSheetKey);
     agentsBtn.setAttribute('aria-expanded', 'false');
     bgBtn.setAttribute('aria-expanded', 'false');
+    noteOverlayClosed();
   };
   const toggleSheet = (): void => {
     if (!sheet.hidden) return closeSheet();

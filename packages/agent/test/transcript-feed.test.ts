@@ -99,6 +99,47 @@ describe('parseLine: Claude', () => {
     expect(e).toEqual({ id: 'u1', at: Date.parse('2026-09-14T10:00:00.000Z'), kind: 'human', text: 'привет' });
   });
 
+  it('сообщение из очереди, доставленное посреди хода, — реплика человека без служебной обёртки', () => {
+    // Форма снята с пробной беседы Claude Code 2.1.322: сообщение, отправленное работающему
+    // агенту, пишется не записью `user`, а вложением `queued_command`; рядом — записи
+    // `queue-operation` (enqueue, remove с причиной absorbed_mid_turn), они служебные.
+    const delivered = JSON.stringify({
+      parentUuid: 'p-1',
+      isSidechain: false,
+      type: 'attachment',
+      uuid: 'q-1',
+      timestamp: '2026-11-12T19:02:33.552Z',
+      attachment: {
+        type: 'queued_command',
+        prompt: 'And also check the second file',
+        source_uuid: 's-1',
+        delivery_id: 'd-1',
+        commandMode: 'prompt',
+        origin: { kind: 'human' },
+        timestamp: '2026-11-12T19:02:33.552Z',
+        humanTurn: true,
+      },
+      rendered: [{ content: '<system-reminder>\nThe user sent a new message while you were working:\n' }],
+      renderedRole: 'system',
+    });
+    expect(parseLine(delivered, 'claude')).toEqual({
+      id: 'q-1',
+      at: Date.parse('2026-11-12T19:02:33.552Z'),
+      kind: 'human',
+      text: 'And also check the second file',
+    });
+    // Служебные записи очереди и прочие вложения в ленту не идут.
+    const enqueue = JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: '2026-11-12T19:02:33.552Z', content: 'And also check the second file' });
+    expect(parseLine(enqueue, 'claude')).toBeNull();
+    const other = JSON.stringify({ type: 'attachment', uuid: 'a-1', timestamp: '2026-11-12T19:02:33.552Z', attachment: { type: 'total_tokens_reminder', text: 'x' } });
+    expect(parseLine(other, 'claude')).toBeNull();
+    // Не от человека (уведомление, команда другого вида) — не реплика.
+    const notHuman = delivered.replace('"kind":"human"', '"kind":"task-notification"');
+    expect(parseLine(notHuman, 'claude')).toBeNull();
+    const notPrompt = delivered.replace('"commandMode":"prompt"', '"commandMode":"bash"');
+    expect(parseLine(notPrompt, 'claude')).toBeNull();
+  });
+
   it('делит ответ агента на мышление, текст и вызов инструмента', () => {
     const line = JSON.stringify(
       cAssistant(

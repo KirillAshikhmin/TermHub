@@ -753,8 +753,26 @@ function commandWords(text: string): string {
   return args ? `${name[1]} ${args}` : name[1];
 }
 
+/** Сообщение, отправленное работающему Claude и доставленное ему посреди хода: пишется не
+ *  записью `user`, а вложением `queued_command` (замер 12.11.2026 на 2.1.322; агент видит
+ *  его со служебной обёрткой «The user sent a new message while you were working», она
+ *  лежит отдельно, в `rendered`). В ленте это реплика человека — на месте доставки. Только
+ *  запрос человека: команды иного вида и уведомления репликой не становятся. Сообщение,
+ *  дождавшееся конца хода, Claude пишет обычной записью `user`. */
+function queuedCommand(rec: Record<string, unknown>, offset: number): FeedEntry[] {
+  const att = rec.attachment as Record<string, unknown> | null | undefined;
+  if (typeof att !== 'object' || att === null || att.type !== 'queued_command') return [];
+  if (att.commandMode !== undefined && att.commandMode !== 'prompt') return [];
+  const origin = att.origin as Record<string, unknown> | null | undefined;
+  if (typeof origin === 'object' && origin !== null && origin.kind !== 'human') return [];
+  const words = humanWords(claudeText(att.prompt));
+  if (!words) return [];
+  return [make({ id: str(rec.uuid) || String(offset), at: stamp(rec.timestamp) }, 0, 'human', words)];
+}
+
 function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
   const type = rec.type;
+  if (type === 'attachment') return queuedCommand(rec, offset);
   if (type !== 'user' && type !== 'assistant') return [];
   const base: Base = { id: str(rec.uuid) || String(offset), at: stamp(rec.timestamp) };
   // Имя ветки — только `agentName`: `agentId` из соседнего поля читается человеком как

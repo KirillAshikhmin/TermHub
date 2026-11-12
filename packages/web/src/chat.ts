@@ -9,6 +9,7 @@
 // [поле ввода]. Переписка занимает всё свободное место и прокручивается сама; остальное —
 // по высоте содержимого, поле ввода всегда у нижнего края, карточка вопроса — сразу над ним.
 
+import { onOverlayClosed } from './overlay-events';
 import { mountComposer, type ComposerHandle } from './chat-composer';
 import { createChatImages } from './chat-images';
 import { mountLive, type LiveHandle } from './chat-live';
@@ -62,6 +63,11 @@ function slot(name: keyof ChatSlots): HTMLElement {
   el.setAttribute('aria-label', t(`chat.slot.${name}`));
   return el;
 }
+
+/** Окна, открытые поверх чата: пока есть хоть одно, фокус у него не отбирают. Окно, которое
+ *  уже гаснет (`data-closing`), открытым не считается. */
+const OPEN_LAYERS =
+  '.th-overlay:not([data-closing]), .th-palette, .th-spanel.is-open, .th-imgview, .th-menu.is-open, .th-live__sheet:not([hidden])';
 
 /** Монтирует чат сессии в host. */
 export function mountChat(host: HTMLElement, session: string, transport: Transport): ChatHandle {
@@ -155,7 +161,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   // закрытие окна терминала не спорили. Не перехватывается никогда: у поля своего ответа
   // карточки вопроса. Не перехватывается без нажатия кнопки: у открытого окна (настройки,
   // сведения, окно сессий), палитры и поля поиска по беседе.
-  const claimFocus = (why: 'shown' | 'term-auto' | 'term-button'): void => {
+  const claimFocus = (why: 'shown' | 'returned' | 'term-auto' | 'term-button'): void => {
     if (!composer) return;
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.closest('.th-live-q__free')) return;
@@ -163,7 +169,16 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
       composer.focus();
       return;
     }
-    if (document.querySelector('.th-overlay, .th-palette, .th-spanel.is-open')) return;
+    if (document.querySelector(OPEN_LAYERS)) return;
+    if (why === 'returned') {
+      // Окно поверх чата закрылось либо человек вернулся на вкладку браузера: чат на экране —
+      // фокус в поле ввода, откуда бы он ни вернулся (окно отдаёт его кнопке, что его открыла).
+      const view = root.closest('.th-ws-view');
+      if (!root.isConnected || (view && !view.classList.contains('is-active'))) return;
+      if (document.visibilityState === 'hidden') return;
+      composer.focus({ quiet: true });
+      return;
+    }
     if (active instanceof Element && active.closest('.th-feed__search')) return;
     if (why === 'shown') {
       // На телефоне — без самопоявления клавиатуры (ADR 0010): она выходит по касанию поля.
@@ -177,6 +192,19 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     if (free || (active instanceof Element && active.closest('.th-chat-term'))) composer.focus();
   };
   const onTerminalClosed = (byButton: boolean): void => claimFocus(byButton ? 'term-button' : 'term-auto');
+  // Закрытие любого окна поверх чата и возврат на вкладку — один путь. Фокус берётся
+  // после того, как окно вернуло его своей кнопке и если поверх не осталось другого окна.
+  let returnTimer = 0;
+  const onReturned = (): void => {
+    window.clearTimeout(returnTimer);
+    returnTimer = window.setTimeout(() => claimFocus('returned'), 0);
+  };
+  const onVisible = (): void => {
+    if (document.visibilityState !== 'hidden') onReturned();
+  };
+  const offOverlay = onOverlayClosed(onReturned);
+  document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('focus', onReturned);
   const live = mountLive({ ...slots, head: feed.stateSlot, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.
@@ -202,6 +230,10 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     offline: () => isOffline,
     focusInput: () => claimFocus('shown'),
     teardown: () => {
+      offOverlay();
+      window.clearTimeout(returnTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onReturned);
       unbindView();
       typed.teardown();
       composer?.teardown();
