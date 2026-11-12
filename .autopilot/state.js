@@ -1,66 +1,553 @@
 window.STATE =
 {
-  "slug": "feed-screen",
-  "title": "Экран ленты в приложении: поиск и переход к месту",
-  "mode": "semi",
-  "depth": "normal",
-  "polish": null,
+  "version": 2,
+  "slug": "native-agent-ui",
+  "dir": "2026-11-12-native-agent-ui--wip",
+  "title": "Нативный интерфейс к Claude и Codex поверх терминала",
+  "mode": "interview",
+  "depth": "deep",
   "tier": "T2",
-  "briefFile": "2026-09-14-brief.md",
+  "briefFile": "2026-11-12-brief.md",
   "memoryFile": "CLAUDE.md",
+  "memoryOwner": "autopilot",
   "skillDir": "/Users/asihminkirill/.agents/skills/autopilot",
-  "startedAt": "2026-09-14T17:43:20+03:00",
-  "updatedAt": "2026-09-14T23:48:36+03:00",
-  "finishedAt": "2026-09-14T23:48:36+03:00",
+  "baseCommit": null,
+  "startedAt": "2026-11-12T16:46:07+03:00",
+  "updatedAt": "2026-11-12T17:29:03+03:00",
+  "finishedAt": null,
   "stages": [
-    { "id": "preflight", "status": "done",   "startedAt": "2026-09-14T17:43:20+03:00", "finishedAt": "2026-09-14T17:45:00+03:00" },
-    { "id": "manifest",  "status": "done",   "startedAt": "2026-09-14T17:45:00+03:00", "finishedAt": "2026-09-14T17:47:00+03:00" },
-    { "id": "briefing",  "status": "done",   "startedAt": "2026-09-14T17:47:00+03:00", "finishedAt": "2026-09-14T20:46:35+03:00", "note": "вопрос снят пользователем — вид по умолчанию решён за него" },
-    { "id": "spec",      "status": "done",   "startedAt": "2026-09-14T20:46:35+03:00", "finishedAt": "2026-09-14T20:46:35+03:00", "note": "G2: сверка нашла 4 пропуска и 6 полупокрытий, все закрыты" },
-    { "id": "plan",      "status": "done",   "startedAt": "2026-09-14T20:46:35+03:00", "finishedAt": "2026-09-14T20:46:35+03:00", "note": "3 таска в 3 волны" },
-    { "id": "build",     "status": "done",   "startedAt": "2026-09-14T20:46:35+03:00", "finishedAt": "2026-09-14T21:50:14+03:00", "note": "3 таска, 4 коммита" },
-    { "id": "review",    "status": "done",   "finishedAt": "2026-09-14T21:50:14+03:00", "note": "3 оси, 7 кругов правок" },
-    { "id": "final",     "status": "done",   "startedAt": "2026-09-14T21:50:14+03:00", "finishedAt": "2026-09-14T23:48:36+03:00", "note": "слепая приёмка в браузере нашла три вещи, которых не поймали 377 тестов и три круга ревью" }
+    {
+      "id": "preflight",
+      "status": "done",
+      "startedAt": "2026-11-12T16:46:07+03:00",
+      "finishedAt": "2026-11-12T16:46:27+03:00"
+    },
+    {
+      "id": "manifest",
+      "status": "done",
+      "startedAt": "2026-11-12T16:46:27+03:00",
+      "finishedAt": "2026-11-12T16:46:39+03:00"
+    },
+    {
+      "id": "briefing",
+      "status": "done",
+      "startedAt": "2026-11-12T16:46:39+03:00",
+      "finishedAt": "2026-11-12T17:18:52+03:00"
+    },
+    {
+      "id": "spec",
+      "status": "done",
+      "startedAt": "2026-11-12T17:18:52+03:00",
+      "finishedAt": "2026-11-12T17:29:03+03:00"
+    },
+    {
+      "id": "plan",
+      "status": "active",
+      "startedAt": "2026-11-12T17:29:03+03:00"
+    },
+    {
+      "id": "build",
+      "status": "pending"
+    },
+    {
+      "id": "review",
+      "status": "pending"
+    },
+    {
+      "id": "final",
+      "status": "pending"
+    }
   ],
-  "requirements": { "total": 16, "done": 16, "inTicket": 0, "inSpec": 0, "placeholder": 0, "deferred": 0, "dropped": 0 },
+  "requirements": {
+    "total": 28,
+    "done": 0,
+    "inTicket": 28,
+    "inSpec": 0,
+    "placeholder": 0,
+    "deferred": 0,
+    "dropped": 0
+  },
   "tickets": [
-    { "id": "01", "title": "Клиент ленты: один вызов, два транспорта", "requirements": ["R13i","R09"], "blockedBy": [], "wave": 1, "zone": ["packages/web/src/transport.ts", "packages/web/src/api.ts", "packages/web/src/relay-transport.ts"], "status": "done", "startedAt": "2026-09-14T20:46:35+03:00", "retries": 0, "repairs": 2, "handoffs": 0, "finishedAt": "2026-09-14T21:04:48+03:00", "tests": "14 в своём файле; веб 356, relay-link 37", "commit": "a560e3d" },
-    { "id": "02", "title": "Экран ленты: вкладка, разговор, листание", "requirements": ["R01","R02","R05","R06","R07","R08","R10","R11i","R12i","R14i","R15i","R16i","G01"], "blockedBy": ["01"], "wave": 2, "zone": ["packages/web/src/feed.ts", "packages/web/src/workspace.ts", "packages/web/src/i18n.ts", "packages/web/src/theme.css"], "status": "done", "startedAt": "2026-09-14T20:54:51+03:00", "retries": 0, "repairs": 2, "handoffs": 0, "finishedAt": "2026-09-14T21:48:47+03:00", "tests": "20 в своём файле; веб 377", "commit": "815e7de" },
-    { "id": "03", "title": "Поиск по ленте и переход к месту", "requirements": ["R03","R03.1","R04"], "blockedBy": ["02"], "wave": 3, "zone": ["packages/web/src/feed.ts"], "status": "done", "startedAt": "2026-09-14T21:09:55+03:00", "retries": 0, "repairs": 2, "handoffs": 0, "finishedAt": "2026-09-14T21:50:14+03:00", "tests": "11 в своём файле; веб 377", "commit": "815e7de + fcf5425" }
-    ,
-    { "id": "04", "title": "Лента глазами человека", "requirements": ["R04","R08","R03","G01"], "blockedBy": ["02","03"], "wave": 4, "zone": ["packages/web/src/feed.ts", "packages/web/src/theme.css"], "status": "done", "startedAt": "2026-09-14T21:59:39+03:00", "retries": 1, "repairs": 1, "handoffs": 0, "note": "по слепой приёмке в браузере: прыжок без отметки, дубль ярлыка, поиск мимо вех", "finishedAt": "2026-09-14T23:48:36+03:00", "tests": "384 passed (было 377)", "commit": "0501339" }
+    {
+      "id": "01",
+      "title": "Замеры, профили агентов и распознавание экрана",
+      "requirements": [
+        "R01",
+        "R02",
+        "R17i",
+        "G09"
+      ],
+      "blockedBy": [],
+      "wave": 1,
+      "zone": [
+        "packages/protocol/",
+        "packages/agent/src/agent-profiles.ts",
+        "packages/agent/src/agent-screen.ts",
+        "packages/agent/test/fixtures/screens/",
+        "packages/agent/test/agent-screen.test.ts",
+        "packages/agent/test/agent-profiles.test.ts",
+        "docs/native-agent-ui.ru.md"
+      ],
+      "review": "да — фундамент",
+      "model": "сильная",
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0
+    },
+    {
+      "id": "02",
+      "title": "Агент: экран панели и действия чата на обоих транспортах",
+      "requirements": [
+        "R03",
+        "R05",
+        "R10",
+        "R15i",
+        "R16i",
+        "R18i",
+        "G02",
+        "G05",
+        "G03",
+        "G09"
+      ],
+      "blockedBy": [
+        "01"
+      ],
+      "wave": 2,
+      "zone": [
+        "packages/agent/src/pane-io.ts",
+        "packages/agent/src/agent-live.ts",
+        "packages/agent/src/chat-request.ts",
+        "packages/agent/src/server.ts",
+        "packages/agent/src/relay-link.ts",
+        "packages/agent/src/cli.ts",
+        "packages/agent/test/"
+      ],
+      "review": "нет",
+      "model": "сильная",
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0
+    },
+    {
+      "id": "03",
+      "title": "Агент: команды для подсказок, подробности действий, контекст, любые файлы",
+      "requirements": [
+        "R12",
+        "R13",
+        "R08",
+        "G03",
+        "G06",
+        "R11",
+        "G09"
+      ],
+      "blockedBy": [
+        "01",
+        "02"
+      ],
+      "wave": 3,
+      "zone": [
+        "packages/agent/src/agent-commands.ts",
+        "packages/agent/src/transcript-feed.ts",
+        "packages/agent/src/transcript-usage.ts",
+        "packages/agent/src/session-feed.ts",
+        "packages/agent/src/feed-request.ts",
+        "packages/agent/src/paste-image.ts",
+        "packages/agent/src/server.ts",
+        "packages/agent/src/relay-link.ts",
+        "packages/agent/test/"
+      ],
+      "review": "нет",
+      "model": "обычная",
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0
+    },
+    {
+      "id": "04",
+      "title": "Веб: чат-оболочка, переключатель вида и переписка с оформлением",
+      "requirements": [
+        "R06",
+        "G01",
+        "R07",
+        "R08",
+        "R09",
+        "R04",
+        "G08",
+        "R19i",
+        "R18i",
+        "G09"
+      ],
+      "blockedBy": [
+        "01"
+      ],
+      "wave": 2,
+      "zone": [
+        "packages/web/"
+      ],
+      "review": "нет",
+      "model": "обычная",
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0
+    },
+    {
+      "id": "05",
+      "title": "Веб: состояние агента, вопросы кнопками, управление и окошко терминала",
+      "requirements": [
+        "R10",
+        "R16i",
+        "R15i",
+        "R17i",
+        "G02",
+        "G03",
+        "G05",
+        "G07",
+        "R03",
+        "G04",
+        "G09"
+      ],
+      "blockedBy": [
+        "02",
+        "04"
+      ],
+      "wave": 3,
+      "zone": [
+        "packages/web/"
+      ],
+      "review": "нет",
+      "model": "обычная",
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0
+    },
+    {
+      "id": "06",
+      "title": "Веб: поле ввода, вложения и подсказки",
+      "requirements": [
+        "R14",
+        "G04",
+        "R11",
+        "G06",
+        "R12",
+        "R13",
+        "G09"
+      ],
+      "blockedBy": [
+        "03",
+        "05"
+      ],
+      "wave": 4,
+      "zone": [
+        "packages/web/"
+      ],
+      "review": "нет",
+      "model": "обычная",
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0
+    }
   ],
-  "singlePass": null,
-  "tests": { "at": "2026-09-14T21:51:08+03:00", "command": "npx vitest run", "result": "1064 passed, 76 файлов, всё зелёное" },
-  "debt": { "placeholders": [], "assumptions": [], "emptyEnv": [] },
+  "tests": null,
+  "debt": {
+    "placeholders": [],
+    "assumptions": [],
+    "emptyEnv": []
+  },
   "additions": [],
-  "coverage": { "at": "2026-09-14T20:46:35+03:00", "missing": 4, "half": 6, "fixed": "назначены поля страницы (agent/live/complete/eof/skipped/branch), порог «внизу», исчерпание поиска, повтор cursor-stale, текст гостю, шов экран↔поиск, ADR 0020 и нешифрованная история во «Вне рамок»" },
-  "concerns": [
-    "РАЗБОР 14.09.2026: из 15 отложенных находок 13 закрыты дозапросами по ходу прогона (eof, признак «внизу», feed.loading, регрессы на гонки, поколение gen, две копии hasCap, errorScreen, снимок поиска, [hidden], snippetAt, loadOlder, ветки прокрутки, живая проверка прокрутки). Остались две.",
-    "ОСТАЁТСЯ (в отчёт): план резал таски 02 и 03 по теме, а не по волне — оба правили feed.ts, и починку экрана пришлось держать до возврата поиска. Стоило это одного лишнего круга ожидания.",
-    "ОСТАЁТСЯ (в отчёт, вне зоны): подписи вкладок holo-бара обрезаются на ширине 320 px — предсуществующее, при трёх вкладках «Репозиторий» уже не влезал; пятая ужимает сильнее. Бар чужой, не трогали."
+  "coverage": {
+    "found": 7,
+    "fixed": 6,
+    "deferred": 0,
+    "items": [
+      "провод и швы вынесены в interfaces.md намеренно — не расхождение"
+    ]
+  },
+  "concerns": [],
+  "blind": null,
+  "beats": [
+    "2026-11-12T16:46:07+03:00",
+    "2026-11-12T16:46:27+03:00",
+    "2026-11-12T16:46:39+03:00",
+    "2026-11-12T16:47:10+03:00",
+    "2026-11-12T16:54:09+03:00",
+    "2026-11-12T16:57:25+03:00",
+    "2026-11-12T17:00:00+03:00",
+    "2026-11-12T17:18:14+03:00",
+    "2026-11-12T17:18:52+03:00",
+    "2026-11-12T17:27:06+03:00",
+    "2026-11-12T17:29:03+03:00"
   ],
-
-  "reviewers": { "manifestSpec": "a2a187356ce9bffb2", "craft": "a8b323303a427bacb" },
-  "blind": {
-    "at": "2026-09-14T21:59:00+03:00",
-    "how": "в браузере, на живом агенте и четырёх живых сессиях владельца",
-    "verdict": "лента в приложении есть и читается; переход к месту доезжает наполовину",
-    "confirmed": [
-      "два нажатия от списка сессий до беседы; вкладка держится при смене сессии",
-      "реплики целиком без обрезки, мышление за тумблером, инструменты строкой; пустых записей нет",
-      "открытие на хвосте, подкачка вверх без рывка: высота 4738 → 9456, позиция 0 → 4681",
-      "поиск нашёл и перенёс ленту через ~1900 записей с 12.09 на 14.09; отсутствующее слово дало честный ответ",
-      "терминал рядом жив: уход на вкладку и обратно не порвал сессию"
-    ],
-    "drift": [
-      "прыжок не оставляет отметки: фон записи тот же, что у соседей (замерено 10 раз по 120 мс) — R04 доставлено наполовину",
-      "ярлык инструмента задваивается: «Bash Bash cd …», «exec exec python3 …»",
-      "строка инструмента — сырая команда на две-три строки, а не «что сделал»",
-      "поиск не покрывает записи вида note",
-      "находка, скрытая фильтром мышления, остаётся в списке и ведёт в никуда"
-    ],
-    "not_checked": "ширина 320 px (расширение держало вкладку скрытой с замороженным viewport), гость и сессия без беседы",
-    "ticket": "04"
-  }
+  "rev": 17,
+  "waiting": null,
+  "waits": [
+    {
+      "kind": "briefing",
+      "from": "2026-11-12T16:47:10+03:00",
+      "to": "2026-11-12T17:18:14+03:00"
+    }
+  ],
+  "log": [
+    {
+      "t": "2026-11-12T16:46:07+03:00",
+      "k": "init"
+    },
+    {
+      "t": "2026-11-12T16:46:27+03:00",
+      "k": "stage",
+      "id": "manifest",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-12T16:46:39+03:00",
+      "k": "stage",
+      "id": "briefing",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-12T16:47:10+03:00",
+      "k": "ask",
+      "kind": "briefing",
+      "note": "четыре вопроса — что считать результатом, источник сообщений, где живёт интерфейс, порядок агентов"
+    },
+    {
+      "t": "2026-11-12T16:54:09+03:00",
+      "k": "ask",
+      "kind": "briefing",
+      "note": "второй раунд — слэш-команды, незнакомый экран, вид инструментов, управление агентом"
+    },
+    {
+      "t": "2026-11-12T16:57:25+03:00",
+      "k": "ask",
+      "kind": "briefing",
+      "note": "третий раунд — вид по умолчанию, вложения, opencode, предупреждение о версии агента"
+    },
+    {
+      "t": "2026-11-12T17:00:00+03:00",
+      "k": "ask",
+      "kind": "briefing",
+      "note": "последний раунд — на что должен быть похож чат, деплой по завершении"
+    },
+    {
+      "t": "2026-11-12T17:18:14+03:00",
+      "k": "answered",
+      "kind": "briefing"
+    },
+    {
+      "t": "2026-11-12T17:18:52+03:00",
+      "k": "gate",
+      "g": "G1",
+      "ok": false,
+      "open": 28,
+      "total": 28
+    },
+    {
+      "t": "2026-11-12T17:18:52+03:00",
+      "k": "stage",
+      "id": "spec",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-12T17:27:06+03:00",
+      "k": "gate",
+      "g": "G2",
+      "ok": false,
+      "found": 7,
+      "fixed": 6,
+      "deferred": 0
+    },
+    {
+      "t": "2026-11-12T17:27:06+03:00",
+      "k": "gate",
+      "g": "G1",
+      "ok": true,
+      "open": 0,
+      "total": 28
+    },
+    {
+      "t": "2026-11-12T17:29:03+03:00",
+      "k": "stage",
+      "id": "plan",
+      "act": "start"
+    },
+    {
+      "t": "2026-11-12T17:29:03+03:00",
+      "k": "tier",
+      "v": "T2"
+    },
+    {
+      "t": "2026-11-12T17:29:03+03:00",
+      "k": "tickets",
+      "n": 6
+    },
+    {
+      "t": "2026-11-12T17:29:03+03:00",
+      "k": "gate",
+      "g": "G3",
+      "ok": true,
+      "problems": 0
+    }
+  ],
+  "reqList": [
+    {
+      "id": "R01",
+      "text": "«проанализируй, на сколько возможно реализовать такую фичу»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R02",
+      "text": "«на бекенде claude и codex работают в терминале»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R03",
+      "text": "«мы с нии через наш веб через нативный интерфейс, то есть по сути парсить терминал»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R04",
+      "text": "«Что бы работать удобнее было»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R05",
+      "text": "«использовать именно родной инструмент и не переписывать его»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R06",
+      "text": "«осознаю что с обновлением это может сломаться, поэтому будет переключение между терминалом и нативным интерфейсом»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R07",
+      "text": "«поддерживался вывод сообщений от консоли с всем форматированием»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R08",
+      "text": "«командами и т.д.» (в выводе сообщений)",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R09",
+      "text": "«ссылками в тексте»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R10",
+      "text": "«ответом на вопросы»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R11",
+      "text": "«строкой ввода с изображениями»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R12",
+      "text": "«слэш команды с подсказами»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R13",
+      "text": "«автокомплит в поле ввода»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R14",
+      "text": "«ну и соответсвенно нативное поле ввода запроса»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R15i",
+      "text": "(подразумевается) видно, что агент сейчас делает (думает, работает, ждёт), и его можно прервать",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R16i",
+      "text": "(подразумевается) запросы разрешений агента (выполнить команду, править файл) тоже отвечаются из нативного интерфейса",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R17i",
+      "text": "(подразумевается) парсер не узнал экран (обновление агента) — пользователь это видит и не остаётся с пустым или лживым интерфейсом",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R18i",
+      "text": "(подразумевается) работает и в LAN, и через relay — как остальные функции TermHub",
+      "status": "in-ticket"
+    },
+    {
+      "id": "R19i",
+      "text": "(подразумевается) нативный интерфейс пригоден с телефона",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G01",
+      "text": "«Тогда у вкладки терминала не просто кнопочка, а переключатель вида»",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G02",
+      "text": "«Модель» — показ текущей модели и её смена из чата",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G03",
+      "text": "«Контекст и расход» — сколько контекста занято и расход беседы рядом с полем ввода; сжатие контекста кнопкой",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G04",
+      "text": "«Очередь сообщений» — следующий запрос можно написать, пока агент работает; встаёт в очередь агента",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G05",
+      "text": "«Режим работы» — переключатель режима агента (план / авто-принятие правок / обычный) с показом текущего",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G06",
+      "text": "«…с миниатюрами и добавлением файлов» — к запросу прикладываются и произвольные файлы с устройства, не только картинки",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G07",
+      "text": "«Предупреждение и счётчик сбоев» — в сведениях о подключении счётчик неузнанных экранов по сессиям",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G08",
+      "text": "opencode: «Оставить ленту без ввода» — для него вкладка остаётся прежней лентой только для чтения",
+      "status": "in-ticket"
+    },
+    {
+      "id": "G09",
+      "text": "деплой: «После каждого таска» — готовый таск сразу уезжает на relay (VPS) и в локальный агент",
+      "status": "in-ticket"
+    }
+  ],
+  "gates": {
+    "G1": {
+      "ok": true,
+      "at": "2026-11-12T17:27:06+03:00",
+      "open": 0,
+      "total": 28
+    },
+    "G2": {
+      "ok": false,
+      "at": "2026-11-12T17:27:06+03:00",
+      "found": 7,
+      "fixed": 6,
+      "deferred": 0
+    },
+    "G3": {
+      "ok": true,
+      "at": "2026-11-12T17:29:03+03:00",
+      "problems": 0
+    }
+  },
+  "result": null
 }
