@@ -41,7 +41,18 @@ import { SessionService } from '../src/sessions.js';
 import { buildSessionName } from '../src/gradle.js';
 import type { TerminalHandle } from '../src/bridge.js';
 import { saveAuthorized, loadAuthorized } from '../src/config.js';
-import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON, USAGE_PAGE, USAGE_PAGE_JSON } from './feed-fixture.js';
+import {
+  DETAIL_BODY,
+  DETAIL_BODY_JSON,
+  DETAIL_CURSOR,
+  DETAIL_STALE,
+  DETAIL_STALE_JSON,
+  FEED_CRASH_JSON,
+  FEED_PAGE,
+  FEED_PAGE_JSON,
+  USAGE_PAGE,
+  USAGE_PAGE_JSON,
+} from './feed-fixture.js';
 import type { ChatAction } from '@termhub/protocol/chat';
 import {
   ACT_ACTION,
@@ -50,6 +61,9 @@ import {
   ACT_DONE_JSON,
   CHAT_FORBIDDEN_SESSION_JSON,
   CHAT_FORBIDDEN_WRITE_JSON,
+  COMMANDS_CRASH_JSON,
+  COMMANDS_LIST,
+  COMMANDS_LIST_JSON,
   LIVE_CRASH_JSON,
   LIVE_STATE,
   LIVE_STATE_JSON,
@@ -1117,6 +1131,33 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     viewer.ws.close();
   });
 
+  it('файл любого типа: поле name разрешает тип, расширение берётся из имени; без name — только картинка', async () => {
+    const writer = await guestClient({ session: GUEST_SESSION, write: true, files: false });
+    const done = await fileOp(writer, {
+      action: 'paste-chunk',
+      upload: 'upload-file-1',
+      type: 'application/pdf',
+      name: 'отчёт.PDF',
+      offset: 0,
+      last: true,
+      data: Buffer.from('%PDF').toString('base64'),
+    });
+    const file = (done.result as { path: string }).path;
+    expect(path.dirname(file)).toBe(path.join(root, 'paste'));
+    expect(file).toMatch(/\.pdf$/);
+    expect(fs.readFileSync(file, 'utf8')).toBe('%PDF');
+    const noName = await fileOp(writer, {
+      action: 'paste-chunk',
+      upload: 'upload-file-2',
+      type: 'application/pdf',
+      offset: 0,
+      last: true,
+      data: Buffer.from('%PDF').toString('base64'),
+    });
+    expect(noName.error).toBe('Unsupported image type');
+    writer.ws.close();
+  });
+
   it('гость «только для просмотра» открывает терминал зрителем: размер окна он не задаёт', async () => {
     const readOnly = await guestClient({ session: GUEST_SESSION, write: false, files: false });
     await openTerm(readOnly, { session: GUEST_SESSION });
@@ -1380,6 +1421,8 @@ describe('RelayLink — лента сессии через relay', () => {
   /** Чат: чей экран спросили и какие действия дошли до панели. */
   let liveAsked: string[] = [];
   let acted: { session: string; action: ChatAction }[] = [];
+  let detailAsked: Array<[string, string]> = [];
+  let commandsAsked: string[] = [];
   /** Задержка ответа на экран по имени сессии: ответы приходят не в порядке запросов. */
   const liveDelay = new Map<string, number>();
 
@@ -1411,6 +1454,15 @@ describe('RelayLink — лента сессии через relay', () => {
         acted.push({ session, action });
         return ACT_DONE;
       },
+      detail: async (session, cursor) => {
+        detailAsked.push([session, cursor]);
+        return cursor === DETAIL_CURSOR ? DETAIL_BODY : DETAIL_STALE;
+      },
+      commands: async (session) => {
+        if (crash) throw new Error('pane vanished');
+        commandsAsked.push(session);
+        return COMMANDS_LIST;
+      },
       caffeinate: {
         supported: true,
         isActive: () => false,
@@ -1433,6 +1485,8 @@ describe('RelayLink — лента сессии через relay', () => {
     crash = false;
     liveAsked = [];
     acted = [];
+    detailAsked = [];
+    commandsAsked = [];
     liveDelay.clear();
   });
 
@@ -1511,6 +1565,54 @@ describe('RelayLink — лента сессии через relay', () => {
     const refused = await c.next();
     expect(frameJson<{ ok: boolean; reason: string }>(refused!).reason).toBe('forbidden');
     expect(usageAsked).toEqual([OWN_SESSION]);
+  }, 25000);
+
+  it('поле detail: подробности действия тем же кадром и тем же JSON, что по LAN; ленту при этом не читает', async () => {
+    const c = await feedClient({ session: OWN_SESSION, write: false, files: false });
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, detail: DETAIL_CURSOR }));
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.FeedResult);
+    expect(td.decode(frame!.payload)).toBe(DETAIL_BODY_JSON);
+    c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, detail: '9:9' }));
+    expect(td.decode((await c.next())!.payload)).toBe(DETAIL_STALE_JSON);
+    expect(detailAsked).toEqual([
+      [OWN_SESSION, DETAIL_CURSOR],
+      [OWN_SESSION, '9:9'],
+    ]);
+    expect(asked).toEqual([]);
+    // Чужая сессия: отказ, подробности не читаются.
+    c.send(jsonFrame(FrameType.Feed, 0, { session: 'someone-else', detail: DETAIL_CURSOR }));
+    expect(frameJson<{ reason: string }>((await c.next())!).reason).toBe('forbidden');
+    expect(detailAsked).toHaveLength(2);
+  }, 25000);
+
+  it('владелец: кадр Commands отвечает CommandsResult — тем же телом, что GET /api/commands, с id запроса', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Commands, 0, { id: 31, session: OWN_SESSION }));
+    const frame = await c.next();
+    expect(frame?.type).toBe(FrameType.CommandsResult);
+    expect(td.decode(frame!.payload)).toBe(withId(31, COMMANDS_LIST_JSON));
+    expect(commandsAsked).toEqual([OWN_SESSION]);
+    crash = true;
+    c.send(jsonFrame(FrameType.Commands, 0, { id: 32, session: OWN_SESSION }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(32, COMMANDS_CRASH_JSON));
+  }, 25000);
+
+  it('гость: Commands без write — forbidden, чужая сессия — forbidden; с write своя сессия отвечается', async () => {
+    const viewer = await feedClient({ session: OWN_SESSION, write: false, files: true });
+    viewer.send(jsonFrame(FrameType.Commands, 0, { id: 41, session: OWN_SESSION }));
+    const refused = await viewer.next();
+    expect(refused?.type).toBe(FrameType.CommandsResult);
+    expect(td.decode(refused!.payload)).toBe(withId(41, CHAT_FORBIDDEN_WRITE_JSON));
+    const writer = await feedClient({ session: OWN_SESSION, write: true, files: false });
+    writer.send(jsonFrame(FrameType.Commands, 0, { id: 42, session: OTHER_SESSION }));
+    expect(td.decode((await writer.next())!.payload)).toBe(withId(42, CHAT_FORBIDDEN_SESSION_JSON));
+    writer.send(jsonFrame(FrameType.Commands, 0, { id: 43, session: buildSessionName(OWN_SESSION) }));
+    expect(td.decode((await writer.next())!.payload)).toBe(withId(43, CHAT_FORBIDDEN_SESSION_JSON));
+    expect(commandsAsked).toEqual([]);
+    writer.send(jsonFrame(FrameType.Commands, 0, { id: 44, session: OWN_SESSION }));
+    expect(td.decode((await writer.next())!.payload)).toBe(withId(44, COMMANDS_LIST_JSON));
+    expect(commandsAsked).toEqual([OWN_SESSION]);
   }, 25000);
 
   it('кадр Caffeinate {lid}: режим закрытой крышки тем же телом, что POST /api/caffeinate', async () => {

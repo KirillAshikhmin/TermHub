@@ -36,9 +36,11 @@ import { findSessionId, isExistingSessionName, SESSION_ID_FORMAT } from './tmux-
 import { runTmux, isNoServerError } from './tmux-run.js';
 import {
   limitOf,
+  readDetail,
   readFeed,
   weigh,
   RESPONSE_LIMIT,
+  type DetailResult,
   type FeedEntry,
   type FileAgent,
   type FeedFailure,
@@ -132,6 +134,33 @@ export async function sessionUsage(
     reviews = undefined;
   }
   return withMemory(reviews ? { ...usage, reviews } : usage);
+}
+
+/** Подробности действия по имени сессии и курсору записи. Беседа opencode — строки общей
+ *  базы, подробностей из неё не отдаётся. Курсор, выданный на родителе цепочки Codex,
+ *  читается на родителе — как у страницы ленты. */
+export async function sessionDetail(
+  session: string,
+  cursor: string,
+  sources?: Partial<SessionFeedSources>,
+): Promise<DetailResult> {
+  const src = withDefaults(sources);
+  const located = await locate(session, src);
+  if (!located.ok) return located;
+  const { found, file } = located;
+  if (found.agent === 'opencode') return fail('unknown-format', 'action details are not available for opencode sessions');
+  try {
+    const first = await readDetail(file, found.agent, cursor);
+    if (first.ok || first.reason !== 'cursor-stale') return first;
+    const chain = await chainOf(file, found.agent, src)();
+    for (let i = 1; i < chain.links.length; i += 1) {
+      const retry = await readDetail(chain.links[i].file, found.agent, cursor);
+      if (retry.ok || retry.reason !== 'cursor-stale') return retry;
+    }
+    return first;
+  } catch (err) {
+    return fail('lookup-failed', `cannot read the action details of ${session}: ${describe(err)}`);
+  }
 }
 
 type Located =

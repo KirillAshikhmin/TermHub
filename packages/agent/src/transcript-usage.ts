@@ -11,6 +11,7 @@
 
 import fsp from 'node:fs/promises';
 
+import { profileOf } from './agent-profiles.js';
 import type { FeedFailure, FileAgent } from './transcript-feed.js';
 
 export interface UsageTotals {
@@ -38,6 +39,9 @@ export interface UsagePage {
   /** Проверки Guardian этого потока Codex: отдельные потоки со своим расходом, в `total`
    *  и `today` не входят. Нет поля — проверок не было (или агент не Codex). */
   reviews?: { count: number; total: UsageTotals; today: UsageTotals };
+  /** Занятость контекста по последнему ответу: сколько токенов в окне и, если известен,
+   *  предел. Нет поля — ответов с замером ещё не было. */
+  context?: { used: number; limit?: number };
 }
 
 /** Память процессов сессии в байтах приклеивает `sessionUsage` — и к расходу, и к отказу:
@@ -60,6 +64,9 @@ interface State {
   prev: { input: number; cached: number; cacheWrite: number; output: number } | null;
   started: number;
   last: number;
+  /** Последний замер контекста и модель, по которой ищется предел в профиле. */
+  context: { used: number; limit?: number } | null;
+  model: string;
 }
 
 const states = new Map<string, State>();
@@ -128,7 +135,7 @@ const TS_RE = /"timestamp":"([^"]+)"/;
 function consume(state: State, line: string, agent: FileAgent): void {
   const marker = agent === 'claude' ? '"usage"' : '"token_count"';
   let parsed: Record<string, unknown> | null = null;
-  if (line.includes(marker)) {
+  if (line.includes(marker) || (agent === 'codex' && line.includes('"turn_context"'))) {
     try {
       const value: unknown = JSON.parse(line);
       if (value && typeof value === 'object') parsed = value as Record<string, unknown>;
@@ -152,6 +159,14 @@ function consume(state: State, line: string, agent: FileAgent): void {
     const message = parsed.message as Record<string, unknown> | undefined;
     const usage = message?.usage as Record<string, unknown> | undefined;
     if (!message || !usage) return;
+    // Занятость окна — вход последнего ответа. Служебные ответы (`<synthetic>`) и записи
+    // подагентов окна беседы не описывают.
+    const model = typeof message.model === 'string' ? message.model : '';
+    const used = num(usage.input_tokens) + num(usage.cache_read_input_tokens) + num(usage.cache_creation_input_tokens);
+    if (used > 0 && !model.startsWith('<') && parsed.isSidechain !== true) {
+      state.model = model;
+      state.context = { used };
+    }
     const id = typeof message.id === 'string' ? message.id : '';
     if (id) {
       if (state.seen.has(id)) return;
@@ -166,10 +181,20 @@ function consume(state: State, line: string, agent: FileAgent): void {
     return;
   }
   const payload = parsed.payload as Record<string, unknown> | undefined;
+  if (parsed.type === 'turn_context') {
+    if (typeof payload?.model === 'string') state.model = payload.model;
+    return;
+  }
   if (payload?.type !== 'token_count') return;
   const info = payload.info as Record<string, unknown> | undefined;
   const total = info?.total_token_usage as Record<string, unknown> | undefined;
   if (!total) return;
+  const last = info?.last_token_usage as Record<string, unknown> | undefined;
+  if (last) {
+    const used = num(last.total_tokens) || num(last.input_tokens) + num(last.output_tokens);
+    const window = num(info?.model_context_window);
+    if (used > 0) state.context = { used, ...(window > 0 ? { limit: window } : {}) };
+  }
   const cached = num(total.cached_input_tokens);
   const now = {
     // У Codex входные токены включают кэшированные — разводим, как у Claude.
@@ -204,7 +229,17 @@ async function advance(file: string, agent: FileAgent): Promise<State> {
     let state = states.get(file);
     // Другой файл под тем же путём или файл укоротился — считаем заново.
     if (!state || state.ino !== stat.ino || stat.size < state.offset) {
-      state = { ino: stat.ino, offset: 0, days: new Map(), seen: new Set(), prev: null, started: 0, last: 0 };
+      state = {
+        ino: stat.ino,
+        offset: 0,
+        days: new Map(),
+        seen: new Set(),
+        prev: null,
+        started: 0,
+        last: 0,
+        context: null,
+        model: '',
+      };
       states.set(file, state);
     }
     const buf = Buffer.allocUnsafe(CHUNK);
@@ -269,5 +304,17 @@ export async function readUsage(file: string, agent: FileAgent, now: number = Da
     today: { ...(state.days.get(dayKey(now)) ?? empty()) },
     started: state.started,
     last: state.last,
+    ...(state.context ? { context: withLimit(agent, state.context, state.model) } : {}),
   };
+}
+
+/** Предел окна: назван самой записью (Codex) либо берётся из профиля по модели. */
+function withLimit(
+  agent: FileAgent,
+  context: { used: number; limit?: number },
+  model: string,
+): { used: number; limit?: number } {
+  if (context.limit !== undefined) return { ...context };
+  const known = model ? profileOf(agent).models.find((m) => m.match.test(model))?.context : undefined;
+  return known === undefined ? { used: context.used } : { used: context.used, limit: known };
 }

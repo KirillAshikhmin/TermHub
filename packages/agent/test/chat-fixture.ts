@@ -2,7 +2,7 @@
 // (`GET /api/live`, `POST /api/act`) сверяется с этими строками как есть; payload кадров
 // LiveResult/ActResult — то же тело с `id` запроса первым полем (`withId`).
 
-import type { ActResult, ChatAction, LiveResult } from '@termhub/protocol/chat';
+import type { ActResult, ChatAction, CommandsResult, LiveResult } from '@termhub/protocol/chat';
 
 /** Тип не ослаблять: он и ловит расхождение форм. */
 export const LIVE_STATE: LiveResult = {
@@ -40,6 +40,23 @@ export const ACT_STALE_JSON = '{"ok":false,"reason":"stale","detail":"the questi
 
 /** Отказ на действие, которого не разобрать: до панели оно не доходит. */
 export const ACT_BAD_JSON = '{"ok":false,"reason":"unsupported","detail":"not a chat action"}';
+
+/** Список команд для подсказок (`GET /api/commands`, кадр Commands). */
+export const COMMANDS_LIST: CommandsResult = {
+  ok: true,
+  commands: [
+    { name: 'compact', hint: 'Free up context', source: 'builtin' },
+    { name: 'ship', hint: 'Ship it', source: 'user', args: '<env>' },
+    { name: 'plugin:thing', source: 'screen' },
+  ],
+  verified: true,
+};
+
+export const COMMANDS_LIST_JSON =
+  '{"ok":true,"commands":[{"name":"compact","hint":"Free up context","source":"builtin"},' +
+  '{"name":"ship","hint":"Ship it","source":"user","args":"<env>"},{"name":"plugin:thing","source":"screen"}],"verified":true}';
+
+export const COMMANDS_CRASH_JSON = '{"ok":false,"reason":"lookup-failed","detail":"pane vanished"}';
 
 /** Отказ гостю relay. */
 export const CHAT_FORBIDDEN_SESSION_JSON = '{"ok":false,"reason":"forbidden","detail":"session not shared"}';

@@ -2,12 +2,15 @@
 // query-строку или тело POST, relay — payload кадра, а превращаются они в вызов здесь.
 // Тело ответа у LAN и relay поэтому одно — и на отказе, и на сорванном вызове.
 
-import type { ActResult, ChatAction, LiveResult } from '@termhub/protocol/chat';
+import type { ActResult, ChatAction, CommandsResult, LiveResult } from '@termhub/protocol/chat';
 
 /** Экран агента в сессии. */
 export type LiveReader = (session: string) => Promise<LiveResult>;
 /** Действие чата в сессии. */
 export type ActRunner = (session: string, action: ChatAction) => Promise<ActResult>;
+
+/** Команды агента сессии для подсказок. */
+export type CommandsReader = (session: string) => Promise<CommandsResult>;
 
 /** Имя сессии из запроса. Не строка — пустое имя: отказ выдаст сам вызов. Гостю это имя
  *  сверяют с расшаренной сессией — до всякого чтения экрана. */
@@ -17,6 +20,16 @@ export function chatSession(raw: Record<string, unknown>): string {
 
 /** Состояние экрана по запросу любого транспорта. Не бросает. */
 export async function livePage(read: LiveReader, raw: Record<string, unknown>): Promise<LiveResult> {
+  try {
+    return await read(chatSession(raw));
+  } catch (err) {
+    return { ok: false, reason: 'lookup-failed', detail: (err as Error).message };
+  }
+}
+
+/** Список команд по запросу любого транспорта. Не бросает: сорванный вызов отвечает той же
+ *  причиной, что и прочие запросы чата. */
+export async function commandsPage(read: CommandsReader, raw: Record<string, unknown>): Promise<CommandsResult> {
   try {
     return await read(chatSession(raw));
   } catch (err) {

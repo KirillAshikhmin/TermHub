@@ -25,11 +25,19 @@ import { runRepoAction } from './vcs.js';
 import type { VcsService } from './vcs.js';
 import { runGradleAction } from './gradle-action.js';
 import { issueCookie, checkCookie, LoginRateLimit } from './auth.js';
-import { sessionFeed, sessionUsage } from './session-feed.js';
+import { sessionDetail, sessionFeed, sessionUsage } from './session-feed.js';
+import { sessionCommands } from './agent-commands.js';
 import type { UsageReader } from './transcript-usage.js';
-import { feedPage, type FeedReader } from './feed-request.js';
+import { feedPage, type DetailReader, type FeedReader } from './feed-request.js';
 import { sessionAct, sessionLive } from './agent-live.js';
-import { actPage, livePage, type ActRunner, type LiveReader } from './chat-request.js';
+import {
+  actPage,
+  commandsPage,
+  livePage,
+  type ActRunner,
+  type CommandsReader,
+  type LiveReader,
+} from './chat-request.js';
 import { PasteStore } from './paste-image.js';
 import { AGENT_CAPS, intersect, parseCaps } from '@termhub/protocol';
 
@@ -190,6 +198,8 @@ export class AgentServer {
   /** Чат: экран агента в сессии и действия в ней. Те же вызовы делает relay. */
   private readonly live: LiveReader;
   private readonly act: ActRunner;
+  private readonly detail: DetailReader;
+  private readonly commands: CommandsReader;
   /** Пересечение возможностей с последним клиентом, объявившимся по LAN (ADR 0018),
    *  и время обмена. Relay ведёт такой же счёт у себя (RelayLink.status), диагностика
    *  показывает более поздний: клиент бывает и по LAN, и через relay, а знать нужно
@@ -224,6 +234,8 @@ export class AgentServer {
     /** Чат; по умолчанию — настоящая панель на сокете рабочих сессий. */
     live?: LiveReader;
     act?: ActRunner;
+    detail?: DetailReader;
+    commands?: CommandsReader;
     /** Приём картинок из буфера клиента; по умолчанию — каталог `~/.termhub/paste`. */
     pastes?: PasteStore;
   }) {
@@ -245,6 +257,9 @@ export class AgentServer {
     this.usage = opts.usage ?? ((session) => sessionUsage(session, { socketName: this.socketName }));
     this.live = opts.live ?? ((session) => sessionLive(session, { socketName: this.socketName }));
     this.act = opts.act ?? ((session, action) => sessionAct(session, action, { socketName: this.socketName }));
+    this.detail =
+      opts.detail ?? ((session, cursor) => sessionDetail(session, cursor, { socketName: this.socketName }));
+    this.commands = opts.commands ?? ((session) => sessionCommands(session, { socketName: this.socketName }));
   }
 
   /** Регистрирует обработчик терминальных WS (Task 6). */
@@ -423,6 +438,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/feed') return this.feedApi(res, url);
     if (method === 'GET' && pathname === '/api/live') return this.liveApi(res, url);
     if (method === 'POST' && pathname === '/api/act') return this.actApi(req, res);
+    if (method === 'GET' && pathname === '/api/commands') return this.commandsApi(res, url);
     if (method === 'GET' && pathname === '/api/files/list') return this.filesList(res, url);
     if (method === 'GET' && pathname === '/api/files/read') return this.fileRead(res, url);
     if (method === 'GET' && pathname === '/api/files/stat') return this.fileStatHttp(res, url);
@@ -565,8 +581,10 @@ export class AgentServer {
         after: q.get('after'),
         around: q.get('around'),
         usage: q.get('usage'),
+        detail: q.get('detail'),
       },
       this.usage,
+      this.detail,
     );
     return this.sendJson(res, 200, result);
   }
@@ -575,6 +593,11 @@ export class AgentServer {
    *  LiveResult через relay, отказ едет полем `ok:false`, а не кодом HTTP. */
   private async liveApi(res: ServerResponse, url: URL): Promise<void> {
     return this.sendJson(res, 200, await livePage(this.live, { session: url.searchParams.get('session') }));
+  }
+
+  /** Команды агента сессии по LAN: то же тело, что кадр CommandsResult через relay. */
+  private async commandsApi(res: ServerResponse, url: URL): Promise<void> {
+    return this.sendJson(res, 200, await commandsPage(this.commands, { session: url.searchParams.get('session') }));
   }
 
   /** Действие чата по LAN: `{session, action}`. Тело, которое не разобрать (не JSON, не
@@ -646,7 +669,11 @@ export class AgentServer {
    *  клиент вставит в терминал (paste-image.ts). */
   private async pasteImage(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     try {
-      const file = await this.pastes.saveStream(url.searchParams.get('type') ?? '', req);
+      const file = await this.pastes.saveStream(
+        url.searchParams.get('type') ?? '',
+        req,
+        url.searchParams.get('name') ?? undefined,
+      );
       this.sendJson(res, 200, { path: file });
     } catch (err) {
       this.sendJson(res, 400, { error: (err as Error).message });

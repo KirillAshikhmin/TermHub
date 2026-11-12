@@ -105,3 +105,85 @@ describe('readUsage', () => {
     expect(await readUsage(path.join(dir, 'none.jsonl'), 'claude')).toMatchObject({ ok: false, reason: 'no-transcript' });
   });
 });
+
+describe('readUsage — занятость контекста (G03)', () => {
+  it('Claude: занято по usage последнего ответа; служебные и боковые записи не в счёт; предела нет', async () => {
+    const file = path.join(dir, 'ctx-c.jsonl');
+    const line = (ms: number, id: string, model: string, usage: Record<string, number>, extra: object = {}): string =>
+      JSON.stringify({ type: 'assistant', timestamp: iso(ms), message: { id, model, usage }, ...extra });
+    fs.writeFileSync(
+      file,
+      [
+        line(0, 'a', 'claude-x', { input_tokens: 5, cache_read_input_tokens: 50, cache_creation_input_tokens: 5, output_tokens: 9 }),
+        line(1000, 'b', 'claude-x', { input_tokens: 2, cache_read_input_tokens: 100, cache_creation_input_tokens: 10, output_tokens: 7 }),
+        line(2000, 'c', '<synthetic>', { input_tokens: 0, output_tokens: 0 }),
+        line(3000, 'd', 'claude-x', { input_tokens: 900, output_tokens: 1 }, { isSidechain: true }),
+        '',
+      ].join('\n'),
+    );
+    const res = await readUsage(file, 'claude', T0);
+    if (!res.ok) throw new Error(res.detail);
+    expect(res.context).toEqual({ used: 112 });
+    // Прежние поля расхода на месте и считаются по-прежнему.
+    expect(res.total).toMatchObject({ input: 907, cached: 150, cacheWrite: 15, output: 17, turns: 4 });
+  });
+
+  it('Claude: беседа без ответов — поля context нет', async () => {
+    const file = path.join(dir, 'ctx-none.jsonl');
+    fs.writeFileSync(file, JSON.stringify({ type: 'user', timestamp: iso(0), message: { content: 'привет' } }) + '\n');
+    const res = await readUsage(file, 'claude', T0);
+    if (!res.ok) throw new Error(res.detail);
+    expect(res.context).toBeUndefined();
+  });
+
+  it('Codex: занято — last_token_usage, предел — model_context_window из той же записи', async () => {
+    const file = path.join(dir, 'ctx-x.jsonl');
+    const count = (ms: number, info: object): string =>
+      JSON.stringify({ timestamp: iso(ms), type: 'event_msg', payload: { type: 'token_count', info } });
+    fs.writeFileSync(
+      file,
+      [
+        count(0, {
+          total_token_usage: { input_tokens: 100, cached_input_tokens: 40, output_tokens: 10 },
+          last_token_usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 },
+          model_context_window: 258400,
+        }),
+        count(1000, null as never),
+        count(2000, {
+          total_token_usage: { input_tokens: 400, cached_input_tokens: 300, output_tokens: 30 },
+          last_token_usage: { input_tokens: 300, output_tokens: 20, total_tokens: 320 },
+          model_context_window: 258400,
+        }),
+        '',
+      ].join('\n'),
+    );
+    const res = await readUsage(file, 'codex', T0);
+    if (!res.ok) throw new Error(res.detail);
+    expect(res.context).toEqual({ used: 320, limit: 258400 });
+  });
+
+  it('Codex: окна в записи нет — предел берётся из профиля по модели из turn_context', async () => {
+    const file = path.join(dir, 'ctx-x2.jsonl');
+    fs.writeFileSync(
+      file,
+      [
+        JSON.stringify({ timestamp: iso(0), type: 'turn_context', payload: { model: 'gpt-6-astra' } }),
+        JSON.stringify({
+          timestamp: iso(1000),
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: { input_tokens: 50, output_tokens: 5 },
+              last_token_usage: { input_tokens: 50, output_tokens: 5, total_tokens: 55 },
+            },
+          },
+        }),
+        '',
+      ].join('\n'),
+    );
+    const res = await readUsage(file, 'codex', T0);
+    if (!res.ok) throw new Error(res.detail);
+    expect(res.context).toEqual({ used: 55, limit: 258400 });
+  });
+});

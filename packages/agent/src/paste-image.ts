@@ -1,4 +1,4 @@
-// Картинка из буфера обмена клиента. Агент в панели (Claude Code, Codex) читает буфер
+// Картинка из буфера обмена клиента (и любой файл с устройства, если клиент назвал имя). Агент в панели (Claude Code, Codex) читает буфер
 // хоста, а картинка лежит в буфере браузера на другом устройстве — поэтому клиент
 // загружает её сюда, получает путь файла и вставляет этот путь в терминал: оба агента
 // превращают вставленный путь картинки во вложение.
@@ -17,6 +17,8 @@ import { configDir } from './paths.js';
 
 /** Предел размера картинки. */
 export const PASTE_MAX_BYTES = 20 * 1024 * 1024;
+/** Предел размера файла произвольного типа (загрузка с именем). */
+export const FILE_MAX_BYTES = 50 * 1024 * 1024;
 /** Сколько живёт вставленный файл: агент читает его при вставке, дольше он не нужен. */
 export const PASTE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 /** Недогруженная кусками картинка бросается через это время тишины. */
@@ -32,10 +34,26 @@ export function pasteExt(type: string): string {
   return ext;
 }
 
+/** Расширение по исходному имени файла клиента: только последний хвост из латиницы и цифр,
+ *  в нижнем регистре; сам путь и остальное имя на хост не попадают. Нет хвоста — `bin`. */
+export function fileExt(name: string): string {
+  const found = /\.([A-Za-z0-9]{1,10})$/.exec(name.trim());
+  return found ? found[1]!.toLowerCase() : 'bin';
+}
+
+/** Что и с каким пределом принимается: без имени — картинка по названному типу, с именем —
+ *  любой файл, расширение берётся из имени. */
+function kindOf(type: string, name: string | undefined): { ext: string; max: number; noun: string } {
+  if (name === undefined || name === '') return { ext: pasteExt(type), max: PASTE_MAX_BYTES, noun: 'Image' };
+  return { ext: fileExt(name), max: FILE_MAX_BYTES, noun: 'File' };
+}
+
 interface Part {
   temp: string;
   handle: fsp.FileHandle;
   ext: string;
+  max: number;
+  noun: string;
   offset: number;
   timer?: ReturnType<typeof setTimeout>;
 }
@@ -50,21 +68,22 @@ export class PasteStore {
     this.now = opts.now ?? Date.now;
   }
 
-  /** LAN: тело запроса потоком. Возвращает путь файла. */
-  async saveStream(type: string, stream: NodeJS.ReadableStream): Promise<string> {
-    const ext = pasteExt(type);
+  /** LAN: тело запроса потоком. Возвращает путь файла. `name` — исходное имя файла клиента:
+   *  с ним принимается любой тип (до 50 МиБ), без него — только картинка. */
+  async saveStream(type: string, stream: NodeJS.ReadableStream, name?: string): Promise<string> {
+    const { ext, max, noun } = kindOf(type, name);
     const temp = await this.tempPath();
     const handle = await fsp.open(temp, 'wx', 0o600);
     let size = 0;
     const limit = new Transform({
       transform(chunk: Buffer, _enc, done) {
         size += chunk.length;
-        done(size > PASTE_MAX_BYTES ? new Error('Image is too large') : null, chunk);
+        done(size > max ? new Error(`${noun} is too large`) : null, chunk);
       },
     });
     try {
       await pipeline(stream, limit, handle.createWriteStream());
-      if (size === 0) throw new Error('Empty image');
+      if (size === 0) throw new Error(`Empty ${noun.toLowerCase()}`);
       return await this.publish(temp, ext);
     } finally {
       await handle.close().catch(() => undefined);
@@ -72,8 +91,16 @@ export class PasteStore {
     }
   }
 
-  /** Relay: картинка кусками, по порядку. Путь файла — в ответе на последний кусок. */
-  async chunk(id: string, type: string, data: Buffer, offset: number, last: boolean): Promise<{ path?: string }> {
+  /** Relay: файл кусками, по порядку. Путь файла — в ответе на последний кусок. `name` —
+   *  как у `saveStream`; решает первый кусок. */
+  async chunk(
+    id: string,
+    type: string,
+    data: Buffer,
+    offset: number,
+    last: boolean,
+    name?: string,
+  ): Promise<{ path?: string }> {
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw new Error('Invalid upload id');
     let part = this.parts.get(id);
     if (part?.timer) clearTimeout(part.timer);
@@ -81,14 +108,14 @@ export class PasteStore {
       if (offset === 0) {
         if (part) await this.discard(id, part);
         if (this.parts.size >= MAX_PARTS) throw new Error('Too many active uploads');
-        const ext = pasteExt(type);
+        const { ext, max, noun } = kindOf(type, name);
         const temp = await this.tempPath();
-        part = { temp, handle: await fsp.open(temp, 'wx', 0o600), ext, offset: 0 };
+        part = { temp, handle: await fsp.open(temp, 'wx', 0o600), ext, max, noun, offset: 0 };
         this.parts.set(id, part);
       }
       if (!part) throw new Error('No active upload');
       if (offset !== part.offset) throw new Error('Invalid offset');
-      if (part.offset + data.length > PASTE_MAX_BYTES) throw new Error('Image is too large');
+      if (part.offset + data.length > part.max) throw new Error(`${part.noun} is too large`);
       await part.handle.writeFile(data);
       part.offset += data.length;
       if (!last) {
@@ -97,7 +124,7 @@ export class PasteStore {
         part.timer.unref?.();
         return {};
       }
-      if (part.offset === 0) throw new Error('Empty image');
+      if (part.offset === 0) throw new Error(`Empty ${part.noun.toLowerCase()}`);
       await part.handle.close();
       this.parts.delete(id);
       try {

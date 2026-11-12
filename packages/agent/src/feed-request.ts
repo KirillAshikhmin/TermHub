@@ -5,11 +5,14 @@
 // который не разберётся и ответит cursor-stale вместо хвоста.
 
 import type { FeedResult } from './session-feed.js';
-import type { FeedOptions } from './transcript-feed.js';
+import type { DetailResult, FeedOptions } from './transcript-feed.js';
 import type { UsageReader, UsageResult } from './transcript-usage.js';
 
 /** Лента сессии: имя сессии → страница беседы её агента. */
 export type FeedReader = (session: string, opts: FeedOptions) => Promise<FeedResult>;
+
+/** Подробности действия: сессия и курсор записи → команда с выводом либо diff. */
+export type DetailReader = (session: string, cursor: string) => Promise<DetailResult>;
 
 /** Имя сессии из запроса. Не строка — пустое имя: отказ выдаст сама лента, её же
  *  словами. Гостю это имя и сверяют с расшаренной сессией — до всякого чтения. */
@@ -23,11 +26,16 @@ export async function feedPage(
   read: FeedReader,
   raw: Record<string, unknown>,
   usage?: UsageReader,
-): Promise<FeedResult | UsageResult> {
+  detail?: DetailReader,
+): Promise<FeedResult | UsageResult | DetailResult> {
   try {
     // Расход едет тем же запросом, что и лента (ADR 0033): флаг `usage` меняет тело
     // ответа, а адресация, права гостя и очередь на транспорте остаются лентовыми.
     if (usage && usageFlag(raw.usage)) return await usage(feedSession(raw));
+    // Подробности действия — тоже тем же запросом: поле `detail` с курсором записи меняет
+    // тело ответа, а адресация, права гостя и очередь остаются лентовыми.
+    const wanted = cursorValue(raw.detail);
+    if (detail && wanted !== undefined) return await detail(feedSession(raw), wanted);
     return await read(feedSession(raw), {
       limit: limitValue(raw.limit),
       before: cursorValue(raw.before),

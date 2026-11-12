@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { PASTE_KEEP_MS, PASTE_MAX_BYTES, PasteStore, pasteExt } from '../src/paste-image.js';
+import { FILE_MAX_BYTES, PASTE_KEEP_MS, PASTE_MAX_BYTES, PasteStore, fileExt, pasteExt } from '../src/paste-image.js';
 
 let dir: string;
 beforeEach(() => {
@@ -71,5 +71,50 @@ describe('картинка из буфера', () => {
     expect(fs.existsSync(old)).toBe(false);
     expect(fs.existsSync(fresh)).toBe(true);
     expect(fs.existsSync(path.join(dir, 'notes.txt'))).toBe(true);
+  });
+});
+
+describe('любой файл с устройства (G06)', () => {
+  it('расширение берётся из имени клиента и очищается; остального имени на хосте нет', () => {
+    expect(fileExt('report.PDF')).toBe('pdf');
+    expect(fileExt('../../etc/passwd')).toBe('bin');
+    expect(fileExt('archive.tar.gz')).toBe('gz');
+    expect(fileExt('weird.p/ng')).toBe('bin');
+    expect(fileExt('x.ext with space')).toBe('bin');
+    expect(fileExt('noext')).toBe('bin');
+    expect(fileExt('trailing.')).toBe('bin');
+  });
+
+  it('поток с именем: тип не картинка — не помеха, файл 0600, имя выбирает агент', async () => {
+    const store = new PasteStore({ dir, now: () => Date.UTC(2026, 10, 12, 9, 30, 5) });
+    const file = await store.saveStream('text/csv', Readable.from([Buffer.from('a,b\n1,2\n')]), 'таблица данных.CSV');
+    expect(path.basename(file)).toMatch(/^paste-20261112T093005-[0-9a-f]{6}\.csv$/);
+    expect(fs.readFileSync(file, 'utf8')).toBe('a,b\n1,2\n');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('поток с именем: предел 50 МиБ, картинка без имени остаётся при 20', async () => {
+    const store = new PasteStore({ dir });
+    const piece = Buffer.alloc(FILE_MAX_BYTES / 2 + 1);
+    await expect(store.saveStream('application/zip', Readable.from([piece, piece]), 'a.zip')).rejects.toThrow('too large');
+    const mid = Buffer.alloc(PASTE_MAX_BYTES + 1);
+    const ok = await store.saveStream('application/zip', Readable.from([mid]), 'a.zip');
+    expect(fs.statSync(ok).size).toBe(mid.length);
+    await expect(store.saveStream('image/png', Readable.from([mid]))).rejects.toThrow('too large');
+    await expect(store.saveStream('application/zip', Readable.from([]), 'a.zip')).rejects.toThrow('Empty file');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('куски с именем: первый кусок задаёт расширение и предел', async () => {
+    const store = new PasteStore({ dir });
+    await store.chunk('upload-9001', 'application/pdf', Buffer.from('ab'), 0, false, 'doc.pdf');
+    const done = await store.chunk('upload-9001', 'application/pdf', Buffer.from('cd'), 2, true, 'doc.pdf');
+    expect(done.path).toMatch(/\.pdf$/);
+    expect(fs.readFileSync(done.path!, 'utf8')).toBe('abcd');
+    await expect(store.chunk('upload-9002', 'application/pdf', Buffer.from('x'), 0, true)).rejects.toThrow(
+      'Unsupported image type',
+    );
+    expect(leftovers()).toEqual([]);
   });
 });

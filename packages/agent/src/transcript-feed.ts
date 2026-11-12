@@ -22,6 +22,9 @@
 // Ни tmux, ни сети, ни живого агента здесь нет: на вход путь и курсор, на выход страница.
 
 import { open, type FileHandle } from 'node:fs/promises';
+
+import type { ToolDetail } from '@termhub/protocol/chat';
+
 import type { AgentKind, FailureReason } from './agent-transcript.js';
 
 /** Агенты, чья беседа — файл строк JSON: его и читает `readFeed`. */
@@ -55,6 +58,9 @@ export interface FeedEntry {
   branch?: string;
   /** Текст обрезан по пределу записи. */
   truncated?: true;
+  /** У действия есть подробности (команда с выводом, diff правки): их отдаёт `readDetail`
+   *  по курсору записи. Только у `tool` из файлов Claude и Codex. */
+  detail?: true;
 }
 
 /** Страница ленты. Поля `complete` и `live` сюда не входят: их отдаёт определитель
@@ -556,7 +562,7 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     if (block.type === 'text' && text.trim()) out.push(make(base, out.length, 'agent', text));
     else if (block.type === 'thinking' && thinking) out.push(make(base, out.length, 'thinking', thinking));
     else if (block.type === 'tool_use' && str(block.name))
-      out.push(tool(base, out.length, str(block.name), argOf(block.input)));
+      out.push(withDetail(tool(base, out.length, str(block.name), argOf(block.input))));
   }
   return out;
 }
@@ -591,9 +597,15 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     const name = str(payload.name);
     if (!name) return [];
     const args = payload.type === 'function_call' ? payload.arguments : payload.input;
-    return [tool(base, 0, name, codexArg(args))];
+    return [withDetail(tool(base, 0, name, codexArg(args)))];
   }
   return [];
+}
+
+/** Подробности у действия есть всегда: вызов несёт ввод, а вывод ищется по требованию. */
+function withDetail(entry: FeedEntry): FeedEntry {
+  entry.detail = true;
+  return entry;
 }
 
 /** Запись базы opencode (`session_message`): тип лежит столбцом рядом с телом JSON.
@@ -891,4 +903,355 @@ function codexSummary(payload: Record<string, unknown>): string {
   }
   const text = parts.join('\n\n').trim();
   return text || codexText(payload.content);
+}
+
+// --- подробности действия ------------------------------------------------------------------
+
+/** Ответ на запрос подробностей: тело `ToolDetail` либо отказ ленты теми же причинами. */
+export type DetailResult = ({ ok: true } & ToolDetail) | FeedFailure;
+
+/** Как далеко от вызова ищется его результат. Результат идёт следом, но между ними бывают
+ *  записи параллельных вызовов и реплики; дальше этого предела вызов считается ещё идущим. */
+const DETAIL_SCAN_LIMIT = 32 * 1024 * 1024;
+/** Строка вызова длиннее этого не читается: это не вызов, а свалка. */
+const DETAIL_LINE_LIMIT = 16 * 1024 * 1024;
+const DETAIL_CHUNK = 256 * 1024;
+
+/** Вызов, найденный по курсору. `id` связывает его с результатом: `tool_use.id` у Claude,
+ *  `call_id` у Codex. */
+interface Call {
+  name: string;
+  id: string;
+  input: unknown;
+  end: number;
+}
+
+/** Результат вызова в виде, общем для обоих агентов. */
+interface Outcome {
+  output: string;
+  /** Claude: сводка правки (`toolUseResult`) — из неё берётся diff. */
+  meta?: Record<string, unknown>;
+}
+
+/** Подробности действия по курсору записи `tool` страницы ленты: команда с выводом либо
+ *  diff правки. Курсор не на действии, чужой, не на границе строки — `cursor-stale`. Файл
+ *  целиком не читается: строка вызова и затем окно вперёд до результата. */
+export async function readDetail(file: string, agent: FileAgent, cursor: string): Promise<DetailResult> {
+  let fh: FileHandle;
+  try {
+    fh = await open(file, 'r');
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR')
+      return { ok: false, reason: 'no-transcript', detail: `no transcript file ${file}` };
+    return { ok: false, reason: 'lookup-failed', detail: `cannot open ${file}: ${String(e)}` };
+  }
+  try {
+    const st = await fh.stat();
+    const at = cursorOf(cursor, Number(st.ino), st.size);
+    if (at === null || (at > 0 && !(await startsLine(fh, at))))
+      return { ok: false, reason: 'cursor-stale', detail: `cursor ${cursor} is not from ${file}` };
+    const line = await lineAt(fh, at, st.size);
+    if (line === 'long') return { ok: false, reason: 'lookup-failed', detail: `line at ${cursor} is too long` };
+    const found = line === null ? null : callOf(line.text, agent, line.end);
+    if (!found) return { ok: false, reason: 'cursor-stale', detail: `cursor ${cursor} is not on an action` };
+    const outcome = found.id ? await outcomeOf(fh, agent, found.id, found.end, st.size) : null;
+    return { ok: true, ...detailOf(agent, found, outcome) };
+  } catch (e) {
+    return { ok: false, reason: 'lookup-failed', detail: `cannot read ${file}: ${String(e)}` };
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Целая строка с `at`; `null` — строки там нет (конец файла или она ещё пишется). */
+async function lineAt(fh: FileHandle, at: number, size: number): Promise<{ text: string; end: number } | 'long' | null> {
+  const parts: Buffer[] = [];
+  let pos = at;
+  let total = 0;
+  while (pos < size) {
+    const buf = Buffer.alloc(Math.min(DETAIL_CHUNK, size - pos));
+    const r = await fh.read(buf, 0, buf.length, pos);
+    if (r.bytesRead === 0) break;
+    const nl = buf.subarray(0, r.bytesRead).indexOf(10);
+    if (nl >= 0) {
+      parts.push(buf.subarray(0, nl));
+      return { text: Buffer.concat(parts).toString('utf8'), end: pos + nl + 1 };
+    }
+    parts.push(buf.subarray(0, r.bytesRead));
+    total += r.bytesRead;
+    pos += r.bytesRead;
+    if (total > DETAIL_LINE_LIMIT) return 'long';
+  }
+  return null;
+}
+
+/** Первый вызов инструмента в строке. Одна строка Claude бывает с несколькими блоками, но
+ *  адрес у них общий — курсор строки; подробности берутся первого. */
+function callOf(line: string, agent: FileAgent, end: number): Call | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  if (agent === 'claude') {
+    if (rec.type !== 'assistant') return null;
+    const content = (rec.message as Record<string, unknown> | undefined)?.content;
+    if (!Array.isArray(content)) return null;
+    for (const item of content) {
+      if (item === null || typeof item !== 'object') continue;
+      const block = item as Record<string, unknown>;
+      if (block.type === 'tool_use' && str(block.name))
+        return { name: str(block.name), id: str(block.id), input: block.input, end };
+    }
+    return null;
+  }
+  const payload = rec.payload as Record<string, unknown> | undefined;
+  if (rec.type !== 'response_item' || !payload) return null;
+  if ((payload.type !== 'function_call' && payload.type !== 'custom_tool_call') || !str(payload.name)) return null;
+  const input = payload.type === 'function_call' ? payload.arguments : payload.input;
+  return { name: str(payload.name), id: str(payload.call_id), input, end };
+}
+
+/** Ищет вывод вызова вперёд от его строки. Строки без идентификатора вызова не
+ *  разбираются вовсе: на живых файлах они весят мегабайты. */
+async function outcomeOf(
+  fh: FileHandle,
+  agent: FileAgent,
+  id: string,
+  from: number,
+  size: number,
+): Promise<Outcome | null> {
+  const stop = Math.min(size, from + DETAIL_SCAN_LIMIT);
+  let pos = from;
+  let tail = Buffer.alloc(0);
+  while (pos < stop) {
+    const buf = Buffer.alloc(Math.min(DETAIL_CHUNK * 4, stop - pos));
+    const r = await fh.read(buf, 0, buf.length, pos);
+    if (r.bytesRead === 0) break;
+    pos += r.bytesRead;
+    let data = tail.length ? Buffer.concat([tail, buf.subarray(0, r.bytesRead)]) : buf.subarray(0, r.bytesRead);
+    let nl = data.indexOf(10);
+    while (nl >= 0) {
+      const text = data.toString('utf8', 0, nl);
+      if (text.includes(id)) {
+        const found = agent === 'claude' ? claudeOutcome(text, id) : codexOutcome(text, id);
+        if (found) return found;
+      }
+      data = data.subarray(nl + 1);
+      nl = data.indexOf(10);
+    }
+    tail = Buffer.from(data);
+  }
+  return null;
+}
+
+function recordOf(text: string): Record<string, unknown> | null {
+  try {
+    const raw: unknown = JSON.parse(text);
+    return raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function claudeOutcome(text: string, id: string): Outcome | null {
+  const rec = recordOf(text);
+  if (!rec || rec.type !== 'user') return null;
+  const content = (rec.message as Record<string, unknown> | undefined)?.content;
+  if (!Array.isArray(content)) return null;
+  for (const item of content) {
+    if (item === null || typeof item !== 'object') continue;
+    const block = item as Record<string, unknown>;
+    if (block.type !== 'tool_result' || block.tool_use_id !== id) continue;
+    const meta =
+      rec.toolUseResult !== null && typeof rec.toolUseResult === 'object' && !Array.isArray(rec.toolUseResult)
+        ? (rec.toolUseResult as Record<string, unknown>)
+        : undefined;
+    let output = resultText(block.content);
+    // Вывод, который агент не положил в блок, но записал в сводку (Bash).
+    if (!output && meta) output = [str(meta.stdout), str(meta.stderr)].filter(Boolean).join('\n');
+    return { output, ...(meta ? { meta } : {}) };
+  }
+  return null;
+}
+
+function codexOutcome(text: string, id: string): Outcome | null {
+  const rec = recordOf(text);
+  const payload = rec?.payload as Record<string, unknown> | undefined;
+  if (!payload || rec?.type !== 'response_item') return null;
+  if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') return null;
+  if (payload.call_id !== id) return null;
+  let output = resultText(payload.output);
+  // Старая обёртка: `{"output": "...", "metadata": {...}}` строкой.
+  if (output.startsWith('{')) {
+    const wrapped = recordOf(output);
+    if (wrapped && typeof wrapped.output === 'string') output = wrapped.output;
+  }
+  return { output };
+}
+
+/** Текст результата: строка либо список блоков, из которых берутся текстовые. */
+function resultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === 'string') parts.push(item);
+    else if (item !== null && typeof item === 'object') {
+      const block = item as Record<string, unknown>;
+      if (str(block.text)) parts.push(str(block.text));
+      else if (block.type === 'image') parts.push('[image]');
+    }
+  }
+  return parts.join('\n');
+}
+
+/** Подробности из вызова и его результата. Правка с diff отдаёт только diff: ввод и вывод
+ *  при ней — то же самое другими словами. */
+function detailOf(agent: FileAgent, call: Call, outcome: Outcome | null): ToolDetail {
+  const clipped = { truncated: false };
+  const cap = (text: string): string => {
+    const cut = clip(text);
+    if (cut.truncated) clipped.truncated = true;
+    return cut.text;
+  };
+  const out: ToolDetail = {};
+  const diff = agent === 'claude' ? claudeDiff(outcome?.meta) : patchDiff(call.input);
+  if (diff.length > 0) {
+    out.diff = capDiff(diff, clipped);
+    // Правка Codex, не прошедшая, объясняет себя выводом; удавшаяся — нет.
+    if (agent === 'codex' && outcome?.output && !/^success\b/i.test(outcome.output)) out.output = cap(outcome.output);
+  } else {
+    const input = inputText(agent, call.input);
+    if (input) out.input = cap(input);
+    if (outcome?.output) out.output = cap(outcome.output);
+  }
+  if (!outcome) out.pending = true;
+  if (clipped.truncated) out.truncated = true;
+  return out;
+}
+
+type DiffFile = NonNullable<ToolDetail['diff']>[number];
+
+/** Diff Claude: `structuredPatch` сводки результата; у нового файла он пуст — тогда весь
+ *  файл добавленный; у правки без него — старая и новая строки. */
+function claudeDiff(meta: Record<string, unknown> | undefined): DiffFile[] {
+  if (!meta) return [];
+  const file = str(meta.filePath);
+  const lines: DiffFile['lines'] = [];
+  if (Array.isArray(meta.structuredPatch)) {
+    for (const hunk of meta.structuredPatch) {
+      const rows = hunk !== null && typeof hunk === 'object' ? (hunk as Record<string, unknown>).lines : undefined;
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows) {
+        if (typeof row !== 'string' || row.startsWith('\\')) continue;
+        const sign = row[0];
+        lines.push(
+          sign === '+' || sign === '-' ? { t: sign, s: row.slice(1) } : { t: ' ', s: sign === ' ' ? row.slice(1) : row },
+        );
+      }
+    }
+  }
+  if (lines.length === 0 && meta.type === 'create' && typeof meta.content === 'string') {
+    for (const row of splitLines(meta.content)) lines.push({ t: '+', s: row });
+  }
+  if (lines.length === 0 && typeof meta.oldString === 'string' && typeof meta.newString === 'string') {
+    for (const row of splitLines(meta.oldString)) lines.push({ t: '-', s: row });
+    for (const row of splitLines(meta.newString)) lines.push({ t: '+', s: row });
+  }
+  return lines.length > 0 ? [{ path: file, lines }] : [];
+}
+
+function splitLines(text: string): string[] {
+  const rows = text.split('\n');
+  if (rows.length > 0 && rows[rows.length - 1] === '') rows.pop();
+  return rows;
+}
+
+/** Diff Codex: текст патча `*** Begin Patch` в вводе вызова (отдельным инструментом либо
+ *  внутри скрипта песочницы). Заголовки разделов `@@` в строки не идут. */
+function patchDiff(input: unknown): DiffFile[] {
+  const text = typeof input === 'string' ? input : '';
+  const start = text.indexOf('*** Begin Patch');
+  if (start < 0) return [];
+  const end = text.indexOf('*** End Patch', start);
+  const files: DiffFile[] = [];
+  let current: DiffFile | undefined;
+  for (const row of text.slice(start, end < 0 ? undefined : end).split('\n')) {
+    const head = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(row);
+    if (head) {
+      current = { path: head[2]!.trim(), lines: [] };
+      files.push(current);
+      continue;
+    }
+    if (!current || row.startsWith('***') || row.startsWith('@@')) continue;
+    const sign = row[0];
+    if (sign === '+' || sign === '-') current.lines.push({ t: sign, s: row.slice(1) });
+    else if (sign === ' ') current.lines.push({ t: ' ', s: row.slice(1) });
+  }
+  return files.filter((f) => f.lines.length > 0);
+}
+
+/** Тот же предел, что у текста записи: diff, не влезший в 64 КиБ, обрезается по строкам. */
+function capDiff(files: DiffFile[], clipped: { truncated: boolean }): DiffFile[] {
+  let budget = TEXT_LIMIT;
+  const out: DiffFile[] = [];
+  for (const file of files) {
+    const lines: DiffFile['lines'] = [];
+    for (const line of file.lines) {
+      const weight = Buffer.byteLength(line.s) + 2;
+      if (weight > budget) {
+        clipped.truncated = true;
+        break;
+      }
+      budget -= weight;
+      lines.push(line);
+    }
+    if (lines.length > 0) out.push({ path: file.path, lines });
+    if (clipped.truncated) break;
+  }
+  return out;
+}
+
+/** Ввод вызова для человека: команда — как она набрана, прочее — читаемый JSON. */
+function inputText(agent: FileAgent, input: unknown): string {
+  let value = input;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        value = JSON.parse(trimmed);
+      } catch {
+        /* не JSON — сам текст ввода */
+      }
+    }
+  }
+  if (typeof value === 'string') return agent === 'codex' ? scriptCommands(value) : value;
+  if (value === null || typeof value !== 'object') return '';
+  const obj = value as Record<string, unknown>;
+  for (const key of ['command', 'cmd']) {
+    const found = obj[key];
+    if (typeof found === 'string' && found) return found;
+    if (Array.isArray(found) && found.every((x) => typeof x === 'string') && found.length > 0) {
+      const words = found as string[];
+      // `["bash", "-lc", "<команда>"]` — оболочка вокруг команды, а не она сама.
+      return words.length === 3 && /^(?:ba|z|da)?sh$/.test(words[0]!) && /^-\w*c$/.test(words[1]!)
+        ? words[2]!
+        : words.join(' ');
+    }
+  }
+  return JSON.stringify(obj, null, 2);
+}
+
+/** Команды из скрипта песочницы Codex (`tools.exec_command({cmd:"…"})`); нет их — сам скрипт. */
+function scriptCommands(script: string): string {
+  const commands: string[] = [];
+  let found: RegExpExecArray | null;
+  SCRIPT_CMD_RE.lastIndex = 0;
+  while ((found = SCRIPT_CMD_RE.exec(script)) !== null) commands.push(unquote(found[1]));
+  return commands.length > 0 ? commands.join('\n') : script;
 }

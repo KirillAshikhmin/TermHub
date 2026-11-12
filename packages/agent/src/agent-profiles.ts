@@ -21,6 +21,8 @@ export interface ModelEntry {
   label: string;
   /** Чем узнать её в идентификаторе модели из транскрипта. */
   match: RegExp;
+  /** Окно контекста в токенах — только то, что измерено; нет значения — предел неизвестен. */
+  context?: number;
 }
 
 /** Диалог с вариантами: вопрос агента или запрос разрешения. */
@@ -266,7 +268,7 @@ const CODEX: AgentProfile = {
   ],
   models: [
     { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', match: /^gpt-6\.1-sol$/i },
-    { id: 'gpt-6-astra', label: 'GPT-6-Astra', match: /^gpt-6-astra$/i },
+    { id: 'gpt-6-astra', label: 'GPT-6-Astra', match: /^gpt-6-astra$/i, context: 258400 },
     { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', match: /^gpt-6\.1[- ]terra$/i },
     { id: 'gpt-6-sol', label: 'GPT-6-Sol', match: /^gpt-6-sol$/i },
     { id: 'gpt-6-luna', label: 'GPT-6-Luna', match: /^gpt-6-luna$/i },

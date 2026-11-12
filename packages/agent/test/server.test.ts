@@ -13,10 +13,21 @@ import { hashPassword } from '../src/config.js';
 import type { TermhubConfig, DeviceScope } from '../src/config.js';
 import type { SessionService } from '../src/sessions.js';
 import type { FeedResult } from '../src/session-feed.js';
-import type { FeedOptions } from '../src/transcript-feed.js';
+import type { DetailResult, FeedOptions } from '../src/transcript-feed.js';
 import type { UsageResult } from '../src/transcript-usage.js';
-import { FEED_CRASH_JSON, FEED_PAGE, FEED_PAGE_JSON, USAGE_PAGE, USAGE_PAGE_JSON } from './feed-fixture.js';
-import type { ActResult, ChatAction, LiveResult } from '@termhub/protocol/chat';
+import {
+  DETAIL_BODY,
+  DETAIL_BODY_JSON,
+  DETAIL_CURSOR,
+  DETAIL_STALE,
+  DETAIL_STALE_JSON,
+  FEED_CRASH_JSON,
+  FEED_PAGE,
+  FEED_PAGE_JSON,
+  USAGE_PAGE,
+  USAGE_PAGE_JSON,
+} from './feed-fixture.js';
+import type { ActResult, ChatAction, CommandsResult, LiveResult } from '@termhub/protocol/chat';
 import {
   ACT_ACTION,
   ACT_BAD_JSON,
@@ -24,6 +35,9 @@ import {
   ACT_DONE_JSON,
   ACT_STALE,
   ACT_STALE_JSON,
+  COMMANDS_CRASH_JSON,
+  COMMANDS_LIST,
+  COMMANDS_LIST_JSON,
   LIVE_CRASH_JSON,
   LIVE_STATE,
   LIVE_STATE_JSON,
@@ -86,6 +100,8 @@ async function start(opts: {
   pastes?: PasteStore;
   live?: (session: string) => Promise<LiveResult>;
   act?: (session: string, action: ChatAction) => Promise<ActResult>;
+  detail?: (session: string, cursor: string) => Promise<DetailResult>;
+  commands?: (session: string) => Promise<CommandsResult>;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -102,6 +118,8 @@ async function start(opts: {
     pastes: opts.pastes,
     live: opts.live,
     act: opts.act,
+    detail: opts.detail,
+    commands: opts.commands,
   });
   const port = await server.listen();
   return { server, base: `http://127.0.0.1:${port}` };
@@ -701,6 +719,18 @@ describe('AgentServer — POST /api/paste-image', () => {
         body: 'x',
       });
       expect(bad.status).toBe(400);
+      // С именем принимается любой тип; расширение берётся из имени, остальное имя хозяин не видит.
+      const file = await fetch(`${s.base}/api/paste-image?type=text%2Fcsv&name=${encodeURIComponent('данные.CSV')}`, {
+        method: 'POST',
+        headers: { cookie: authCookie() },
+        body: 'a,b',
+      });
+      expect(file.status).toBe(200);
+      const saved = ((await file.json()) as { path: string }).path;
+      expect(path.dirname(saved)).toBe(dir);
+      expect(saved).toMatch(/\.csv$/);
+      expect(fs.readFileSync(saved, 'utf8')).toBe('a,b');
+      expect(fs.statSync(saved).mode & 0o777).toBe(0o600);
     } finally {
       await s.server.close();
       fs.rmSync(path.dirname(dir), { recursive: true, force: true });
@@ -1228,6 +1258,43 @@ describe('GET /api/feed — лента сессии по LAN', () => {
     expect(await plain.text()).toBe(FEED_PAGE_JSON);
   });
 
+  it('detail=<курсор> отдаёт подробности действия, ленту при этом не читает; пустой detail — обычная лента', async () => {
+    const detailAsked: Array<[string, string]> = [];
+    s = await start({
+      feed: async (session, opts) => {
+        asked.push({ session, opts });
+        return FEED_PAGE;
+      },
+      detail: async (session, cursor) => {
+        detailAsked.push([session, cursor]);
+        return cursor === DETAIL_CURSOR ? DETAIL_BODY : DETAIL_STALE;
+      },
+    });
+    const res = await fetch(`${s.base}/api/feed?session=work&detail=${encodeURIComponent(DETAIL_CURSOR)}`, {
+      headers: { cookie: authCookie() },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(DETAIL_BODY_JSON);
+    const stale = await fetch(`${s.base}/api/feed?session=work&detail=5:5`, { headers: { cookie: authCookie() } });
+    expect(await stale.text()).toBe(DETAIL_STALE_JSON);
+    expect(detailAsked).toEqual([
+      ['work', DETAIL_CURSOR],
+      ['work', '5:5'],
+    ]);
+    expect(asked).toEqual([]);
+    const plain = await fetch(`${s.base}/api/feed?session=work&detail=`, { headers: { cookie: authCookie() } });
+    expect(await plain.text()).toBe(FEED_PAGE_JSON);
+    // Сорванное чтение подробностей — тот же отказ, что у ленты.
+    await s.server.close();
+    s = await start({
+      detail: async () => {
+        throw new Error('transcript vanished');
+      },
+    });
+    const crashed = await fetch(`${s.base}/api/feed?session=work&detail=5:5`, { headers: { cookie: authCookie() } });
+    expect(await crashed.text()).toBe(FEED_CRASH_JSON);
+  });
+
   it('курсоры и лимит доезжают из query-строки, а отсутствующие не подставляются', async () => {
     await startFeed();
     await fetch(`${s!.base}/api/feed?session=work&limit=50&before=42:120`, { headers: { cookie: authCookie() } });
@@ -1269,6 +1336,47 @@ describe('GET /api/feed — лента сессии по LAN', () => {
     await startFeed();
     const res = await fetch(`${s!.base}/api/feed?session=work`);
     expect(res.status).toBe(401);
+    expect(asked).toEqual([]);
+  });
+});
+
+describe('GET /api/commands — команды для подсказок по LAN', () => {
+  let s: Started | undefined;
+  afterEach(async () => {
+    await s?.server.close();
+    s = undefined;
+  });
+
+  it('отдаёт список как есть — тем же JSON, что и кадр CommandsResult; имя сессии доезжает', async () => {
+    const asked: string[] = [];
+    s = await start({
+      commands: async (session) => {
+        asked.push(session);
+        return COMMANDS_LIST;
+      },
+    });
+    const res = await fetch(`${s.base}/api/commands?session=work`, { headers: { cookie: authCookie() } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(COMMANDS_LIST_JSON);
+    expect(asked).toEqual(['work']);
+  });
+
+  it('отказ едет причиной, сорванный вызов — тем же телом, что через relay; без cookie — 401', async () => {
+    s = await start({ commands: async () => ({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' }) });
+    const res = await fetch(`${s.base}/api/commands?session=work`, { headers: { cookie: authCookie() } });
+    expect(await res.text()).toBe('{"ok":false,"reason":"no-agent","detail":"pane runs zsh"}');
+    await s.server.close();
+    const asked: string[] = [];
+    s = await start({
+      commands: async (session) => {
+        asked.push(session);
+        throw new Error('pane vanished');
+      },
+    });
+    const crashed = await fetch(`${s.base}/api/commands?session=work`, { headers: { cookie: authCookie() } });
+    expect(await crashed.text()).toBe(COMMANDS_CRASH_JSON);
+    asked.length = 0;
+    expect((await fetch(`${s.base}/api/commands?session=work`)).status).toBe(401);
     expect(asked).toEqual([]);
   });
 });

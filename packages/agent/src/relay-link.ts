@@ -89,11 +89,20 @@ import { sanitizeDeviceName } from './safe-text.js';
 import { runFileOp } from './files.js';
 import { runGradleAction } from './gradle-action.js';
 import { buildSessionName } from './gradle.js';
-import { sessionFeed, sessionUsage, type FeedResult } from './session-feed.js';
+import { sessionDetail, sessionFeed, sessionUsage, type FeedResult } from './session-feed.js';
+import { sessionCommands } from './agent-commands.js';
 import type { UsageReader } from './transcript-usage.js';
-import { feedPage, feedSession, type FeedReader } from './feed-request.js';
+import { feedPage, feedSession, type DetailReader, type FeedReader } from './feed-request.js';
 import { sessionAct, sessionLive } from './agent-live.js';
-import { actPage, chatSession, livePage, type ActRunner, type LiveReader } from './chat-request.js';
+import {
+  actPage,
+  chatSession,
+  commandsPage,
+  livePage,
+  type ActRunner,
+  type CommandsReader,
+  type LiveReader,
+} from './chat-request.js';
 import { PasteStore } from './paste-image.js';
 import { VcsService } from './vcs.js';
 
@@ -223,6 +232,8 @@ export class RelayLink {
   /** Чат: экран агента в сессии и действия в ней — те же вызовы, что у LAN. */
   private readonly live: LiveReader;
   private readonly act: ActRunner;
+  private readonly detail: DetailReader;
+  private readonly commands: CommandsReader;
   private readonly ptyPool: PtyPool;
   private readonly helloTimeoutMs: number;
 
@@ -280,6 +291,8 @@ export class RelayLink {
     /** Чат; по умолчанию — настоящая панель на сокете рабочих сессий. */
     live?: LiveReader;
     act?: ActRunner;
+    detail?: DetailReader;
+    commands?: CommandsReader;
     /** Приём картинок из буфера клиента; по умолчанию — каталог `~/.termhub/paste`. */
     pastes?: PasteStore;
   }) {
@@ -306,6 +319,9 @@ export class RelayLink {
     this.usage = opts.usage ?? ((session) => sessionUsage(session, { socketName: this.socketName }));
     this.live = opts.live ?? ((session) => sessionLive(session, { socketName: this.socketName }));
     this.act = opts.act ?? ((session, action) => sessionAct(session, action, { socketName: this.socketName }));
+    this.detail =
+      opts.detail ?? ((session, cursor) => sessionDetail(session, cursor, { socketName: this.socketName }));
+    this.commands = opts.commands ?? ((session) => sessionCommands(session, { socketName: this.socketName }));
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -852,9 +868,11 @@ export class RelayLink {
           break;
         case FrameType.Live:
         case FrameType.Act:
-          // Чат: экран своей сессии гостю виден, действие требует write. Оба условия
-          // проверяют doLive/doAct — имя сессии лежит в payload, а отказ обязан уехать
-          // ответом с `id` запроса, иначе клиент ждал бы его до срока.
+        case FrameType.Commands:
+          // Чат: экран своей сессии гостю виден; действие и список команд (его сверка шлёт
+          // клавиши в панель) требуют write. Условия проверяют doLive/doAct/doCommands: имя
+          // сессии лежит в payload, а отказ обязан уехать ответом с `id` запроса, иначе
+          // клиент ждал бы его до срока.
           break;
         default:
           break;
@@ -967,6 +985,9 @@ export class RelayLink {
         return;
       case FrameType.Act:
         void this.doAct(s, frame);
+        return;
+      case FrameType.Commands:
+        void this.doCommands(s, frame);
         return;
       case FrameType.Share:
         void this.doShare(s, frame);
@@ -1108,7 +1129,7 @@ export class RelayLink {
     const id = typeof req.id === 'number' ? req.id : 0;
     try {
       if (String(req.action) === 'paste-chunk') {
-        // Картинка из буфера клиента: каталог назначения свой и от запроса не зависит,
+        // Картинка из буфера клиента или файл с устройства (поле name): каталог назначения свой и от запроса не зависит,
         // поэтому нужно ровно то право, что и на ввод в терминал.
         if (s.scope && !s.scope.write) throw new Error('no write permission');
         const offset = Number(req.offset ?? 0);
@@ -1119,6 +1140,7 @@ export class RelayLink {
           Buffer.from(String(req.data ?? ''), 'base64'),
           offset,
           req.last === true,
+          typeof req.name === 'string' ? req.name : undefined,
         );
         this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
         return;
@@ -1185,7 +1207,7 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, refused));
       return;
     }
-    this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req, this.usage)));
+    this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, await feedPage(this.feed, req, this.usage, this.detail)));
   }
 
   /** Экран агента в сессии через relay: то же тело, что отдаёт `GET /api/live`, с `id`
@@ -1209,6 +1231,18 @@ export class RelayLink {
     else if (s.scope && !s.scope.write) result = { ok: false, reason: 'forbidden', detail: 'no write permission' };
     else result = await actPage(this.act, req);
     this.sendFrameBytes(s, jsonFrame(FrameType.ActResult, frame.channel, { id: chatId(req), ...result }));
+  }
+
+  /** Команды агента сессии через relay: то же тело, что у `GET /api/commands`, с `id`
+   *  запроса. Сверка списка шлёт клавиши в панель, поэтому гостю нужно право write — как на
+   *  действие; чужая сессия и отказ до панели не доходят. */
+  private async doCommands(s: ClientSession, frame: Frame): Promise<void> {
+    const req = chatRequest(frame);
+    let result: Awaited<ReturnType<typeof commandsPage>>;
+    if (!this.ownsSession(s, chatSession(req), false)) result = CHAT_NOT_SHARED;
+    else if (s.scope && !s.scope.write) result = { ok: false, reason: 'forbidden', detail: 'no write permission' };
+    else result = await commandsPage(this.commands, req);
+    this.sendFrameBytes(s, jsonFrame(FrameType.CommandsResult, frame.channel, { id: chatId(req), ...result }));
   }
 
   /** Листинг директории файлового браузера через relay. Ошибка (вне корня) —
