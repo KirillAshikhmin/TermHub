@@ -174,6 +174,10 @@ describe('оболочка чата', () => {
     const chat = mountChat(host, 'work', transport);
     await flush();
     const rows = host.querySelectorAll<HTMLElement>('.th-feed__entry--tool');
+    // Подсветка — ленивый чанк highlight.js: ждём её результат (и повторную расстановку ссылок), а не время.
+    await vi.waitFor(() => {
+      expect(rows[0]!.querySelector('.th-feed__tooltext.th-sh a.th-path')).not.toBeNull();
+    }, { timeout: 10_000 });
     const mark = rows[0]!.querySelector<HTMLElement>('.th-tool__mark')!;
     expect(mark.classList.contains('is-failed')).toBe(true);
     expect(mark.textContent).toBe('код 1');
