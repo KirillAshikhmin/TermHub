@@ -6006,8 +6006,21 @@ main.th-feed--chat {
     -webkit-app-region: drag;
     app-region: drag;
   }
-  .th-tabs-current button,
-  .th-tabs-current a {
+  /* Кнопки шапки из области перетаскивания вырезаны явно и подняты в свой слой: соседняя
+     область (подпись сессии) иначе накрывала их верх, а вырез без своего слоя Chrome не
+     учитывал (так же вели себя вкладки бокового списка, кроме активной с z-index). */
+  .th-header .th-iconbtn,
+  .th-header .th-logo,
+  .th-header .th-menu__item,
+  .th-termbar .th-iconbtn,
+  .th-termbar .th-menu__row .th-menu__item,
+  .th-termbar .th-tabs-queue,
+  .th-termbar .th-termbar__view,
+  .th-termbar .th-sort__select,
+  .th-termbar .th-tab,
+  .th-spanel__head .th-iconbtn {
+    position: relative;
+    z-index: 1;
     -webkit-app-region: no-drag;
     app-region: no-drag;
   }
