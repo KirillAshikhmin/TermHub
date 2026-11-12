@@ -27,6 +27,10 @@ let screen: LiveResult | Error = liveOf({ kind: 'idle' });
 let scope: unknown = null;
 const feedCalls: FeedOptions[] = [];
 const acts: unknown[] = [];
+let detail: unknown = { ok: true, output: 'PASS' };
+const detailCalls: string[] = [];
+/** Хвост, который отдаёт приращение: сдвиг означает «в транскрипте появились строки». */
+let tailNext = 'tl2';
 const transport = (): Transport =>
   ({
     mode: 'lan',
@@ -50,11 +54,14 @@ const transport = (): Transport =>
       if (opts.after !== undefined) {
         const out = fresh;
         fresh = [];
-        return page(out, { head: 'tl', tail: 'tl2' });
+        return page(out, { head: 'tl', tail: tailNext });
       }
       return page(entries);
     },
-    feedDetail: async () => ({ ok: true, output: 'PASS' }),
+    feedDetail: async (_s: string, cursor: string) => {
+      detailCalls.push(cursor);
+      return detail;
+    },
   }) as unknown as Transport;
 
 let host: HTMLElement;
@@ -70,6 +77,9 @@ beforeEach(() => {
   scope = null;
   feedCalls.length = 0;
   acts.length = 0;
+  detail = { ok: true, output: 'PASS' };
+  detailCalls.length = 0;
+  tailNext = 'tl2';
   document.body.replaceChildren();
   host = document.createElement('div');
   document.body.append(host);
@@ -124,6 +134,60 @@ describe('описание действия', () => {
     expect(q('.th-feed__tooldesc')).toBeNull();
     expect(q('.th-feed__tooltext')!.textContent).toBe('git add -A');
     feed.teardown();
+  });
+});
+
+describe('метка «выполняется» догоняет результат без раскрытия', () => {
+  const RUNNING: FeedEntry = { id: 'r', at: 3, kind: 'tool', tool: 'Bash', text: 'Bash npm test', cursor: '1:20', detail: true, result: { state: 'running' } };
+  const mark = (): HTMLElement => q('.th-feed__entry--tool .th-tool__mark')!;
+
+  it('результат пришёл с приращением — метка становится исходом (ошибка с кодом), строка не раскрыта', async () => {
+    entries = [HUMAN, RUNNING];
+    detail = { ok: true, input: 'npm test', pending: true };
+    await open();
+    expect(mark().classList.contains('is-running')).toBe(true);
+    const before = detailCalls.length;
+    // Хвост стоит на месте: новых строк нет, результата быть не может — не спрашиваем.
+    chat!.refresh();
+    await flush();
+    expect(detailCalls.length).toBe(before);
+    // Приращение сдвинуло хвост: строка результата записей не даёт, но действие закончилось.
+    detail = { ok: true, output: 'boom', result: { state: 'failed', exit: 1 } };
+    tailNext = 'tl3';
+    chat!.refresh();
+    await flush();
+    expect(detailCalls.length).toBe(before + 1);
+    expect(detailCalls.at(-1)).toBe('1:20');
+    expect(mark().classList.contains('is-failed')).toBe(true);
+    expect(mark().classList.contains('is-running')).toBe(false);
+    expect(q('.th-feed__entry--tool')!.classList.contains('is-open')).toBe(false);
+    expect(q<HTMLElement>('.th-tool__panel')!.hidden).toBe(true);
+    // Законченное действие больше не перепроверяется.
+    tailNext = 'tl4';
+    fresh = [AGENT];
+    chat!.refresh();
+    await flush();
+    expect(detailCalls.length).toBe(before + 1);
+  });
+
+  it('действие ещё идёт — метка остаётся и перепроверяется со следующим сдвигом хвоста', async () => {
+    entries = [HUMAN, RUNNING];
+    detail = { ok: true, input: 'npm test', pending: true };
+    await open();
+    const before = detailCalls.length;
+    tailNext = 'tl3';
+    chat!.refresh();
+    await flush();
+    expect(detailCalls.length).toBe(before + 1);
+    expect(mark().classList.contains('is-running')).toBe(true);
+  });
+
+  it('обычное законченное действие подробностей само не спрашивает', async () => {
+    entries = [HUMAN, { ...RUNNING, result: { state: 'done' } }];
+    await open();
+    chat!.refresh();
+    await flush();
+    expect(detailCalls).toEqual([]);
   });
 });
 

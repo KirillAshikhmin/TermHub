@@ -396,6 +396,34 @@ describe('mountSessionTabs', () => {
     tabs.teardown();
   });
 
+  // История 11а: нажатие на вкладку уже открытой сессии вид не меняет — экран под полосой
+  // (чат, проводник, терминал) остаётся каким был; onSwitch зовётся только для другой сессии.
+  it('клик по вкладке текущей сессии onSwitch не зовёт, по другой — зовёт', async () => {
+    const onSwitch = vi.fn();
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'a', onSwitch });
+    await vi.advanceTimersByTimeAsync(0);
+    const btn = (name: string): HTMLButtonElement =>
+      [...tabs.el.querySelectorAll<HTMLButtonElement>('.th-tabs .th-tab__btn')].find((b) => b.textContent?.includes(name))!;
+    btn('a').click();
+    expect(onSwitch).not.toHaveBeenCalled();
+    btn('b').click();
+    expect(onSwitch.mock.calls.map((c) => c[0])).toEqual(['b']);
+    tabs.teardown();
+  });
+
+  it('клик по карточке текущей сессии в панели только закрывает панель', async () => {
+    const onSwitch = vi.fn();
+    const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);
+    const tabs = mountSessionTabs({ ...baseOpts, transport, current: 'a', onSwitch });
+    await vi.advanceTimersByTimeAsync(0);
+    tabs.el.querySelector<HTMLButtonElement>('.th-tabs-expand')!.click();
+    tabs.el.querySelector<HTMLElement>('.th-spanel__list .th-card.is-current')!.click();
+    expect(onSwitch).not.toHaveBeenCalled();
+    expect(tabs.el.querySelector('.th-spanel')!.classList.contains('is-open')).toBe(false);
+    tabs.teardown();
+  });
+
   it('клик по строке панели вызывает onSwitch и закрывает панель', async () => {
     const onSwitch = vi.fn();
     const { transport } = stubTransport([[sessionFixture('a'), sessionFixture('b')]]);

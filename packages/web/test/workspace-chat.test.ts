@@ -15,6 +15,7 @@ const spies = vi.hoisted(() => ({
   termTeardown: vi.fn(),
   chat: vi.fn(),
   feed: vi.fn(),
+  focusInput: vi.fn(),
 }));
 vi.mock('../src/term', () => ({
   mountTerminal: vi.fn((el: HTMLElement) => {
@@ -27,7 +28,7 @@ vi.mock('../src/files', () => ({ mountFiles: vi.fn(() => () => {}) }));
 vi.mock('../src/chat', () => ({
   mountChat: vi.fn(() => {
     spies.chat();
-    return { teardown: vi.fn(), jumpTo: vi.fn() };
+    return { teardown: vi.fn(), jumpTo: vi.fn(), focusInput: spies.focusInput };
   }),
 }));
 vi.mock('../src/feed', () => ({
@@ -248,5 +249,35 @@ describe('вид меняет только человек', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// История 21в: вкладки показываются, а не пере-монтируются — фокус в поле чата ставится
+// на каждый показ вкладки чата, а не только на монтаж.
+describe('фокус в поле чата на показ вкладки', () => {
+  it('первый показ чата, возврат из проводника — фокус; повтор маршрута активной вкладки — нет', async () => {
+    const ws = open('claude');
+    ws.show('feed');
+    await settle();
+    expect(spies.chat).toHaveBeenCalledTimes(1);
+    expect(spies.focusInput).toHaveBeenCalledTimes(1);
+    ws.show('feed'); // роутер повторил событие маршрута
+    await settle();
+    expect(spies.focusInput).toHaveBeenCalledTimes(1);
+    ws.show('files');
+    ws.show('feed');
+    await settle();
+    expect(spies.chat).toHaveBeenCalledTimes(1);
+    expect(spies.focusInput).toHaveBeenCalledTimes(2);
+    ws.teardown();
+  });
+
+  it('прежняя лента (сессия без агента) фокус не получает', async () => {
+    const ws = open('zsh');
+    ws.show('feed');
+    await settle();
+    expect(spies.feed).toHaveBeenCalledTimes(1);
+    expect(spies.focusInput).not.toHaveBeenCalled();
+    ws.teardown();
   });
 });

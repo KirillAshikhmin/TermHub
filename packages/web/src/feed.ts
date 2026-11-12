@@ -16,7 +16,7 @@
 
 import { renderChatMarkdown, linkifyPaths, type PathLinker } from './chat-render';
 import { createMark, highlightShell, isShellTool } from './chat-color';
-import { mountToolDetail } from './chat-tool';
+import { mountToolDetail, type ToolDetailHandle } from './chat-tool';
 import { openCreateModal } from './dashboard';
 import { formatDate } from './format';
 import { t } from './i18n';
@@ -423,6 +423,27 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     skippedEl.hidden = skipped === 0;
   };
 
+  // Действия, показанные «выполняется»: результат приходит строкой транскрипта, которая
+  // записей не даёт, поэтому после приращения, сдвинувшего хвост, их подробности
+  // перечитываются — метка догоняет результат без раскрытия. Только свежие: давнее
+  // прерванное действие результата не получит никогда.
+  const RUNNING_CHECK = 6;
+  const running = new Map<HTMLElement, ToolDetailHandle>();
+  let settling = false;
+  const settleRunning = async (): Promise<void> => {
+    if (settling || running.size === 0) return;
+    settling = true;
+    try {
+      for (const [row, handle] of [...running].slice(-RUNNING_CHECK)) {
+        if (disposed) return;
+        if (!row.isConnected) running.delete(row);
+        else if (await handle.recheck()) running.delete(row);
+      }
+    } finally {
+      settling = false;
+    }
+  };
+
   /** Одна запись. Вид определяется только `kind`: ветки не рисуем — их не бывает. */
   const renderEntry = (entry: FeedEntry, prev: FeedEntry | undefined): HTMLElement => {
     const box = document.createElement('div');
@@ -476,7 +497,8 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
         // Раскрытие — только у действий, у которых агент назвал подробности.
         if (entry.detail && entry.cursor) {
           const cursor = entry.cursor;
-          mountToolDetail(box, entry, () => transport.feedDetail(session, cursor));
+          const handle = mountToolDetail(box, entry, () => transport.feedDetail(session, cursor));
+          if (entry.result?.state === 'running') running.set(box, handle);
         }
       }
       return box;
@@ -717,6 +739,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     items = [];
     seen = new Set<string>();
     itemsEl.replaceChildren();
+    running.clear();
     bof = false;
     eof = false;
     complete = true;
@@ -967,7 +990,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       await tailJob();
       return;
     }
-    if (pageData) applyPage(pageData, 'append');
+    if (!pageData) return;
+    const moved = pageData.tail !== tailCursor;
+    applyPage(pageData, 'append');
+    if (moved) void settleRunning();
   };
 
   const highlight = (cursor: string): void => {

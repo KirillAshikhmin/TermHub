@@ -13,6 +13,9 @@ type Detail = Extract<DetailResult, { ok: true }>;
 export interface ToolDetailHandle {
   expanded(): boolean;
   toggle(): void;
+  /** Тихо перечитать подробности идущего действия: метка строки догоняет результат без
+   *  раскрытия, раскрытая панель перерисовывается. `true` — действие закончилось. */
+  recheck(): Promise<boolean>;
 }
 
 const div = (cls: string, text?: string): HTMLDivElement => {
@@ -120,12 +123,28 @@ export function mountToolDetail(row: HTMLElement, entry: FeedEntry, load: () => 
       showError(res);
       return;
     }
+    apply(res);
+  };
+  const apply = (res: Detail): void => {
     // Идущее действие не запоминаем: к следующему раскрытию оно могло закончиться.
     loaded = res.pending ? null : res;
     // Метка строки догоняет факт: на странице действие могло быть ещё «выполняется».
     const mark = head.querySelector<HTMLElement>('.th-tool__mark');
     if (mark) paintMark(mark, res.pending ? { state: 'running' } : (res.result ?? { state: 'done' }));
     panel.replaceChildren(...renderDetail(res, shell));
+  };
+  const recheck = async (): Promise<boolean> => {
+    const my = gen;
+    let res: DetailResult | null = null;
+    try {
+      res = await load();
+    } catch {
+      res = null;
+    }
+    // Сбой и раскрытие, начатое за это время, тихую проверку отменяют: экран не трогаем.
+    if (!res || !res.ok || my !== gen) return false;
+    apply(res);
+    return !res.pending;
   };
 
   const set = (next: boolean): void => {
@@ -148,5 +167,5 @@ export function mountToolDetail(row: HTMLElement, entry: FeedEntry, load: () => 
       toggle();
     }
   });
-  return { expanded: () => open, toggle };
+  return { expanded: () => open, toggle, recheck };
 }

@@ -186,6 +186,41 @@ describe('createChatImages — миниатюры под сообщением', 
     images.teardown();
   });
 
+  it('сетевой сбой отказом не запоминается: при возврате связи миниатюра запрашивается снова', async () => {
+    let down = true;
+    const net = Object.assign(new Error('network error'), { status: 0 });
+    const { transport, calls } = imageTransport((p) => (down ? net : p.endsWith('bad.png') ? new Error('image unavailable') : png()));
+    const images = createChatImages(host, 'work', transport);
+    const box = message('см. /tmp/a.png и /tmp/bad.png');
+    images.attach(box, 'см. /tmp/a.png и /tmp/bad.png');
+    ManualObserver.show(box);
+    await flush();
+    expect(box.querySelector('.th-chatimg')).toBeNull();
+    expect(calls).toEqual(['/tmp/a.png', '/tmp/bad.png']);
+
+    // Связь вернулась: оба пути спрашиваются заново; отказ агента теперь запоминается.
+    down = false;
+    images.retry();
+    await flush();
+    expect(calls).toEqual(['/tmp/a.png', '/tmp/bad.png', '/tmp/a.png', '/tmp/bad.png']);
+    expect([...box.querySelectorAll<HTMLImageElement>('.th-chatimg img')].map((i) => i.alt)).toEqual(['a.png']);
+    images.retry();
+    await flush();
+    expect(calls).toHaveLength(4);
+    // То же через relay: обрыв потока и срок ответа — тоже сбой связи, а не отказ.
+    const relay = imageTransport(() => new Error('relay not streaming'));
+    const images2 = createChatImages(host, 'work', relay.transport);
+    const box2 = message('/tmp/b.png');
+    images2.attach(box2, '/tmp/b.png');
+    ManualObserver.show(box2);
+    await flush();
+    images2.retry();
+    await flush();
+    expect(relay.calls).toEqual(['/tmp/b.png', '/tmp/b.png']);
+    images.teardown();
+    images2.teardown();
+  });
+
   it('ответ не того типа (SVG, документ) картинкой не становится', async () => {
     const { transport } = imageTransport((p) => new Blob(['<svg/>'], { type: p.endsWith('1.png') ? 'image/svg+xml' : 'text/html' }));
     const images = createChatImages(host, 'work', transport);

@@ -5,7 +5,7 @@
 // живой workspace, пока не сменилась сессия/транспорт.
 
 import { whenCap } from './capabilities';
-import { mountChat } from './chat';
+import { mountChat, type ChatHandle } from './chat';
 import { mountFeed, type FeedHandle } from './feed';
 import { takeFeedJump } from './feed-search-all';
 import { mountFiles } from './files';
@@ -59,6 +59,8 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
   let gradleView: GradleTab | null = null;
   // Лента — ради прыжка к находке общего поиска (feed-search-all).
   let feedView: FeedHandle | null = null;
+  // Чат (если вкладку ленты занял он) — ради фокуса в поле ввода на каждый показ.
+  let chatView: ChatHandle | null = null;
   const jumpIfAsked = (): void => {
     const cursor = takeFeedJump(session);
     if (cursor) void feedView?.jumpTo(cursor);
@@ -76,7 +78,8 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
     } else if (tab === 'files') v = { el, clean: mountFiles(el, transport, session) };
     else if (tab === 'repo') v = { el, clean: mountRepo(el, transport, session) };
     else if (tab === 'feed') {
-      feedView = chat ? mountChat(el, session, transport) : mountFeed(el, session, transport);
+      if (chat) feedView = chatView = mountChat(el, session, transport);
+      else feedView = mountFeed(el, session, transport);
       v = { el, clean: feedView.teardown };
     }
     else {
@@ -146,7 +149,13 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
           toTerm();
           return;
         }
-        reveal(ensure('feed', wantsChat(session, info, chatCap ? ['chat'] : [])));
+        const v = ensure('feed', wantsChat(session, info, chatCap ? ['chat'] : []));
+        // Как у терминала: фокус — после показа и только при переходе на вкладку (повтор
+        // события маршрута для активной вкладки фокус не трогает). Что и у кого не
+        // отбирать, решает сам чат.
+        const wasActive = v.el.classList.contains('is-active');
+        reveal(v);
+        if (!wasActive) chatView?.focusInput();
         jumpIfAsked();
       });
       return;
@@ -204,6 +213,7 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
       for (const v of views.values()) v.clean();
       views.clear();
       gradleView = null;
+      chatView = null;
       root.replaceChildren();
       resetDocumentTitle();
     },

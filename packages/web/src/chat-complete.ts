@@ -18,6 +18,8 @@ const SPACE = /\s/;
  *  (почта, путь a/b) и пробел между знаком и кареткой подсказку не открывают. */
 export function completionAt(text: string, caret: number): Completion | null {
   if (caret < 1 || caret > text.length) return null;
+  const quoted = quotedMention(text, caret);
+  if (quoted) return quoted;
   let start = caret;
   while (start > 0 && !SPACE.test(text[start - 1]!)) start -= 1;
   const sign = text[start];
@@ -27,6 +29,25 @@ export function completionAt(text: string, caret: number): Completion | null {
   let end = caret;
   while (end < text.length && !SPACE.test(text[end]!)) end += 1;
   return { kind, query: text.slice(start + 1, caret), from: start, to: end };
+}
+
+/** Упоминание в кавычках — «@"путь с пробелами»: каретка внутри незакрытой (до неё)
+ *  кавычки на той же строке. Заменяется всё упоминание — до закрывающей кавычки, если
+ *  она уже стоит, иначе до конца слова под кареткой. */
+function quotedMention(text: string, caret: number): Completion | null {
+  const line = text.lastIndexOf('\n', caret - 1) + 1;
+  const start = text.lastIndexOf('@"', caret - 2);
+  if (start < line || (start > 0 && !SPACE.test(text[start - 1]!))) return null;
+  const query = text.slice(start + 2, caret);
+  if (query.includes('"')) return null;
+  let end = caret;
+  while (end < text.length && text[end] !== '"' && text[end] !== '\n') end += 1;
+  if (text[end] === '"') end += 1;
+  else {
+    end = caret;
+    while (end < text.length && !SPACE.test(text[end]!)) end += 1;
+  }
+  return { kind: 'file', query, from: start, to: end };
 }
 
 /** Команды по запросу: имя на запрос — первыми, затем имя с запросом внутри; порядок

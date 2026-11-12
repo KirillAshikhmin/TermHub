@@ -618,6 +618,37 @@ describe('контекст и расход', () => {
     expect(ctx.title).toContain('2.5k'); // вся беседа: 10 + 2000 + 500
   });
 
+  it('вид показан после монтажа (переход на сессию): контекст и расход приходят с первым опросом, а не через 30 с', async () => {
+    const fx = fixture(live(IDLE));
+    fx.usage.value = USAGE({ used: 84_000, limit: 200_000 });
+    const view = document.createElement('div');
+    view.className = 'th-ws-view'; // ещё не показан: рабочее пространство покажет его следом
+    view.append(wrap);
+    document.body.append(view);
+    handle = mountLive(host, 'work', fx.transport);
+    await run(0);
+    expect(fx.liveCalls).toBe(0);
+    view.classList.add('is-active');
+    await run(1100);
+    expect(q('.th-live__ctx')!.textContent).toContain('42%');
+  });
+
+  it('расход не ответил из-за обрыва — следующий опрос спрашивает снова', async () => {
+    const fx = fixture(live(IDLE));
+    let fail = true;
+    const feed = fx.transport.feed;
+    fx.transport.feed = (async (...a: Parameters<typeof feed>) => {
+      if (fail) throw new Error('network');
+      return feed(...a);
+    }) as typeof feed;
+    fx.usage.value = USAGE({ used: 84_000, limit: 200_000 });
+    await mount(fx);
+    expect(q('.th-live__ctx')!.textContent).toContain('—');
+    fail = false;
+    await run(1100);
+    expect(q('.th-live__ctx')!.textContent).toContain('42%');
+  });
+
   it('предел неизвестен — число занятых токенов; нет данных — прочерк', async () => {
     const fx = fixture(live(IDLE));
     fx.usage.value = USAGE({ used: 84_000 });

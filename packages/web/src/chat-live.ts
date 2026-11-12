@@ -622,6 +622,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
 
   const poll = async (): Promise<void> => {
     if (disposed || inflight) return;
+    if (!usageAnswered) void loadUsage();
     inflight = true;
     try {
       const res = await transport.live(session);
@@ -638,14 +639,24 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     }
   };
 
+  // Расход спрашивается с первым же опросом показанного вида: чат монтируется раньше,
+  // чем рабочее пространство его покажет, и ждать 30-секундного таймера нельзя. Обрыв
+  // ответом не считается — следующий опрос спросит снова.
+  let usageAnswered = false;
+  let usageInflight = false;
   const loadUsage = async (): Promise<void> => {
+    if (usageInflight) return;
+    usageInflight = true;
     try {
       const res = await sessionUsage(transport, session);
+      usageAnswered = true;
       if (disposed) return;
       usage = res.ok && 'total' in res ? res : null;
       render();
     } catch {
       // Расход — украшение: сбой оставляет прежние числа.
+    } finally {
+      usageInflight = false;
     }
   };
 
@@ -716,10 +727,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     if (shown()) void poll();
   };
   document.addEventListener('visibilitychange', onVisible);
-  if (shown()) {
-    void poll();
-    void loadUsage();
-  }
+  if (shown()) void poll();
 
   return {
     state: () => state,

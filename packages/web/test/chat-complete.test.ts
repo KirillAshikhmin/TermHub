@@ -5,6 +5,17 @@ import { describe, expect, it } from 'vitest';
 import { applyCompletion, completionAt, rankCommands } from '../src/chat-complete';
 
 describe('completionAt', () => {
+  it('«@"» — упоминание в кавычках: запрос с пробелами, замена до закрывающей кавычки', () => {
+    expect(completionAt('глянь @"my no', 13)).toEqual({ kind: 'file', query: 'my no', from: 6, to: 13 });
+    expect(completionAt('@"old docs/pl" и ещё', 13)).toEqual({ kind: 'file', query: 'old docs/pl', from: 0, to: 14 });
+    // Кавычка закрыта до каретки — упоминание кончилось.
+    expect(completionAt('@"my notes.md" дальше', 21)).toBeNull();
+    // Кавычка на прошлой строке упоминанием этой строки не считается.
+    expect(completionAt('@"a\nтекст', 9)).toBeNull();
+    // Знак внутри слова подсказку не открывает.
+    expect(completionAt('почта@"x y', 10)).toBeNull();
+  });
+
   it('«/» в начале поля открывает список команд, набор — запрос', () => {
     expect(completionAt('/', 1)).toEqual({ kind: 'slash', query: '', from: 0, to: 1 });
     expect(completionAt('/co', 3)).toEqual({ kind: 'slash', query: 'co', from: 0, to: 3 });

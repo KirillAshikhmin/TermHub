@@ -164,15 +164,15 @@ export function mountTerminal(
     bar.append(badge);
   }
   // Переход между сессиями: смена hash → штатный remount экрана. Клик по
-  // активному табу просто возвращает фокус в терминал.
+  // активному табу просто возвращает фокус в терминал (onCurrent).
   const goTo = (name: string): void => {
-    if (name === session) term.focus();
-    else location.hash = termHash(name);
+    location.hash = termHash(name);
   };
   const tabs = embedded ? null : mountSessionTabs({
     transport,
     current: session,
     onSwitch: goTo,
+    onCurrent: () => term.focus(),
     onKill: (name) => void killSession(name),
     onCreate: () => openCreateModal(transport),
     onCurrentTitle: (title) => setSessionDocumentTitle(title, session),

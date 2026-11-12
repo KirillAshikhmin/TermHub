@@ -36,7 +36,9 @@ interface Fx {
   composer: ComposerHandle;
   field: HTMLTextAreaElement;
   send: HTMLButtonElement;
+  /** Действия без ключа попытки — ключи идут рядом, в том же порядке. */
   acts: ChatAction[];
+  keys: Array<string | undefined>;
   locals: LocalRec[];
   refreshes: { n: number };
   nextAct: { value: ActResult | Error | Promise<ActResult> };
@@ -53,8 +55,9 @@ function page(entries: FeedEntry[]): FeedResult {
   return { ok: true, agent: 'claude', entries, head: '1:0', tail: '1:9', bof: true, eof: true, skipped: 0 } as FeedResult;
 }
 
-function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; session?: string } = {}): Fx {
+function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; session?: string; spaced?: boolean } = {}): Fx {
   const acts: ChatAction[] = [];
+  const keys: Array<string | undefined> = [];
   const locals: LocalRec[] = [];
   const refreshes = { n: 0 };
   const nextAct: Fx['nextAct'] = { value: { ok: true, screen: IDLE } };
@@ -64,7 +67,9 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
   const live = {
     state: () => ({ ok: true, agent: 'claude', tested: true, screen: screen.value, modes: [], models: [] }) as LiveState,
     act: vi.fn(async (a: ChatAction) => {
-      acts.push(a);
+      const { key: attempt, ...bare } = a as ChatAction & { key?: string };
+      acts.push(bare as ChatAction);
+      keys.push(attempt);
       const v = nextAct.value;
       if (v instanceof Error) throw v;
       return v;
@@ -116,10 +121,18 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
             { name: 'src', kind: 'dir', size: 0, mtime: 0, hidden: false },
             { name: 'README.md', kind: 'file', size: 1, mtime: 0, hidden: false },
             { name: '.env', kind: 'file', size: 1, mtime: 0, hidden: true },
+            ...(opts.spaced
+              ? [
+                  { name: 'my notes.md', kind: 'file', size: 1, mtime: 0, hidden: false },
+                  { name: 'old docs', kind: 'dir', size: 0, mtime: 0, hidden: false },
+                ]
+              : []),
           ]
         : sub === 'proj/src'
           ? [{ name: 'main.ts', kind: 'file', size: 1, mtime: 0, hidden: false }]
-          : [],
+          : sub === 'proj/old docs'
+            ? [{ name: 'plan v2.md', kind: 'file', size: 1, mtime: 0, hidden: false }]
+            : [],
     ),
   };
   const host = document.createElement('div');
@@ -135,6 +148,7 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
     field: host.querySelector<HTMLTextAreaElement>('textarea')!,
     send: host.querySelector<HTMLButtonElement>('.th-composer__send')!,
     acts,
+    keys,
     locals,
     refreshes,
     nextAct,
@@ -371,6 +385,29 @@ describe('отказы', () => {
     expect(fx.transport.feed).toHaveBeenCalledTimes(1);
     expect(fx.acts).toHaveLength(2);
     expect(fx.locals[0]!.delivered).toBe(true);
+  });
+
+  it('ключ попытки: первая отправка несёт key, «Повторить» после потерянного ответа шлёт тот же', async () => {
+    fx = mount();
+    fx.nextAct.value = new Error('act timeout');
+    type(fx, 'раз');
+    key(fx, 'Enter');
+    await flush();
+    const first = fx.keys[0];
+    expect(typeof first).toBe('string');
+    expect(first!.length).toBeGreaterThanOrEqual(8);
+    // В беседе запроса нет — повтор уходит, и с тем же ключом: агент узнает ту же попытку.
+    fx.nextAct.value = { ok: true, screen: IDLE };
+    fx.locals[0]!.actions[0]!.run();
+    await flush();
+    expect(fx.acts).toHaveLength(2);
+    expect(fx.keys[1]).toBe(first);
+    // Следующее сообщение — другая попытка, ключ другой.
+    type(fx, 'два');
+    key(fx, 'Enter');
+    await flush();
+    expect(typeof fx.keys[2]).toBe('string');
+    expect(fx.keys[2]).not.toBe(first);
   });
 
   it('ответа не дождались, и ленту перечитать не удалось: «Повторить» не шлёт вслепую', async () => {
@@ -730,6 +767,35 @@ describe('подсказки «@»', () => {
     expect(options(fx).map((o) => o.trim())).toEqual(['main.ts']);
   });
 
+  it('файл с пробелом в имени находится и вставляется в кавычках', async () => {
+    fx = mount({ spaced: true });
+    await flush();
+    type(fx, 'глянь @my');
+    await flush();
+    expect(options(fx).map((o) => o.trim())).toEqual(['my notes.md']);
+    fx.host.querySelector<HTMLElement>('.th-composer__opt')!.click();
+    expect(fx.field.value).toBe('глянь @"my notes.md" ');
+    await flush();
+    expect(options(fx)).toEqual([]);
+  });
+
+  it('каталог с пробелом: кавычка остаётся открытой, набор внутри неё сужает, выбор закрывает', async () => {
+    fx = mount({ spaced: true });
+    await flush();
+    type(fx, '@old');
+    await flush();
+    fx.host.querySelector<HTMLElement>('.th-composer__opt')!.click();
+    expect(fx.field.value).toBe('@"old docs/');
+    await flush();
+    expect(fx.transport.filesList).toHaveBeenLastCalledWith('/root/a', 'proj/old docs');
+    expect(options(fx).map((o) => o.trim())).toEqual(['plan v2.md']);
+    type(fx, '@"old docs/plan v');
+    await flush();
+    expect(options(fx).map((o) => o.trim())).toEqual(['plan v2.md']);
+    fx.host.querySelector<HTMLElement>('.th-composer__opt')!.click();
+    expect(fx.field.value).toBe('@"old docs/plan v2.md" ');
+  });
+
   it('гость без права files: «@» ничего не предлагает и каталог не читается', async () => {
     fx = mount({ scope: { session: 'work', write: true, files: false } });
     await flush();
@@ -745,6 +811,35 @@ describe('подсказки «@»', () => {
     type(fx, '@../');
     await flush();
     expect(fx.transport.filesList).not.toHaveBeenCalled();
+  });
+});
+
+describe('кнопка камеры (история 28а)', () => {
+  const original = window.matchMedia;
+  const coarse = (on: boolean): void => {
+    window.matchMedia = ((query: string) => ({ matches: on && query.includes('coarse'), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+  };
+  afterEach(() => {
+    window.matchMedia = original;
+  });
+
+  it('на десктопе (точный указатель) кнопки камеры нет, «прикрепить» есть', () => {
+    coarse(false);
+    fx = mount();
+    expect(fx.host.querySelector('.th-composer__camera')).toBeNull();
+    expect(fx.host.querySelector('.th-composer__attach')).not.toBeNull();
+  });
+
+  it('на телефоне (грубый указатель) кнопка есть и открывает камеру', () => {
+    coarse(true);
+    fx = mount();
+    const btn = fx.host.querySelector<HTMLButtonElement>('.th-composer__camera')!;
+    expect(btn).not.toBeNull();
+    const input = fx.host.querySelector<HTMLInputElement>('input[capture]')!;
+    expect(input.accept).toBe('image/*');
+    const click = vi.spyOn(input, 'click').mockImplementation(() => {});
+    btn.click();
+    expect(click).toHaveBeenCalledTimes(1);
   });
 });
 

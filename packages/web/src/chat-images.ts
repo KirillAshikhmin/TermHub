@@ -4,7 +4,8 @@
 // Что можно отдать, решает агент (каталоги после realpath, растр по содержимому, 20 МиБ) —
 // здесь только выбор путей-кандидатов и показ. Путь из сообщения — данные: в DOM он идёт
 // текстом (`textContent`, `alt`), картинка — адресом объекта Blob; `innerHTML` нет.
-// Неудача молчит: сообщение остаётся текстом, и тот же путь второй раз не запрашивается.
+// Неудача молчит: сообщение остаётся текстом. Отказ агента запоминается (тот же путь второй
+// раз не запрашивается), сбой связи — нет: при возврате связи путь спрашивается снова.
 
 import { t } from './i18n';
 import { detectPaths } from './termlinks';
@@ -41,8 +42,22 @@ export function imagePathsIn(text: string): string[] {
 export interface ChatImages {
   /** Найти картинки в тексте сообщения и показать их под ним, когда оно попадёт на экран. */
   attach(box: HTMLElement, text: string): void;
+  /** Связь вернулась: заново спросить миниатюры, не загруженные из-за сбоя связи. */
+  retry(): void;
   teardown(): void;
 }
+
+/** Сбой связи, а не отказ агента: запрос не дошёл или ответа не дождались (LAN — статус 0
+ *  и 5xx перезапускающегося агента, relay — нет потока или вышел срок). */
+function isConnectionFailure(e: unknown): boolean {
+  const status = (e as { status?: unknown } | null)?.status;
+  if (typeof status === 'number') return status === 0 || status >= 500;
+  const message = e instanceof Error ? e.message : '';
+  return /not streaming|timeout|network|failed to fetch|load failed/i.test(message);
+}
+
+/** Исход загрузки, который в кэш не ложится. */
+const LOST = Symbol('lost');
 
 function baseName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
@@ -62,10 +77,12 @@ export function createChatImages(host: HTMLElement, session: string, transport: 
    *  загрузок занял бы канал, по которому идёт сам чат. */
   let chain: Promise<unknown> = Promise.resolve();
 
-  const load = (path: string): Promise<string | null> => {
+  /** Сообщения, чьи миниатюры не пришли из-за сбоя связи: ждут её возврата. */
+  const lost = new Map<HTMLElement, string[]>();
+  const load = (path: string): Promise<string | null | typeof LOST> => {
     const known = cache.get(path);
     if (known) return known;
-    const job = chain.then(async () => {
+    const job: Promise<string | null | typeof LOST> = chain.then(async () => {
       if (disposed) return null;
       try {
         const blob = await transport.image(session, path);
@@ -73,12 +90,17 @@ export function createChatImages(host: HTMLElement, session: string, transport: 
         const url = URL.createObjectURL(blob);
         urls.push(url);
         return url;
-      } catch {
-        return null;
+      } catch (e) {
+        return isConnectionFailure(e) ? LOST : null;
       }
     });
     chain = job;
-    cache.set(path, job);
+    const kept = job.then((res) => {
+      // Сбой связи отказом не становится: следующий запрос того же пути пойдёт в сеть.
+      if (res === LOST && cache.get(path) === kept) cache.delete(path);
+      return res === LOST ? null : res;
+    });
+    cache.set(path, kept);
     return job;
   };
 
@@ -162,11 +184,16 @@ export function createChatImages(host: HTMLElement, session: string, transport: 
   };
 
   const fill = async (box: HTMLElement, paths: string[]): Promise<void> => {
-    let row: HTMLElement | null = null;
+    let row = box.querySelector<HTMLElement>(':scope > .th-chatimgs');
+    const missed: string[] = [];
     // По порядку текста: следующая миниатюра ждёт предыдущую.
     for (const path of paths) {
       const url = await load(path);
       if (disposed) return;
+      if (url === LOST) {
+        missed.push(path);
+        continue;
+      }
       if (!url) continue;
       if (!row) {
         row = document.createElement('div');
@@ -175,6 +202,7 @@ export function createChatImages(host: HTMLElement, session: string, transport: 
       }
       row.append(thumb(path, url));
     }
+    if (missed.length) lost.set(box, missed);
   };
 
   const observer =
@@ -204,8 +232,15 @@ export function createChatImages(host: HTMLElement, session: string, transport: 
       waiting.set(box, { box, paths });
       observer.observe(box);
     },
+    retry() {
+      if (disposed) return;
+      const again = [...lost];
+      lost.clear();
+      for (const [box, paths] of again) if (box.isConnected) void fill(box, paths);
+    },
     teardown() {
       disposed = true;
+      lost.clear();
       observer?.disconnect();
       waiting.clear();
       closeView();

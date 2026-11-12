@@ -197,6 +197,32 @@ describe('чат: закрытие окна терминала ставит фо
     chat.teardown();
   });
 
+  it('окно свернулось само: у поиска, палитры и окна настроек фокус не отбирается; из окна терминала — переходит в поле', async () => {
+    coarse(false);
+    current = state('idle');
+    const chat = mountChat(host, 'work', transport);
+    // Фокус в чужом поле (поиск по переписке, палитра, окно настроек — любое вне окна терминала).
+    const other = document.createElement('input');
+    document.body.append(other);
+    await open(chat);
+    other.focus();
+    current = state('idle');
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(chat.el.querySelector<HTMLElement>('.th-chat-term')!.hidden).toBe(true);
+    expect(document.activeElement).toBe(other);
+
+    // Фокус внутри окна терминала: окно ушло — фокус переходит в поле ввода.
+    await open(chat);
+    const inside = document.createElement('textarea');
+    chat.el.querySelector<HTMLElement>('.th-chat-term')!.append(inside);
+    inside.focus();
+    current = state('idle');
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(document.activeElement).toBe(field(chat));
+    other.remove();
+    chat.teardown();
+  });
+
   it('фокус в поле своего ответа карточки вопроса не перехватывается', async () => {
     coarse(false);
     current = state('idle');
@@ -225,6 +251,85 @@ describe('чат: закрытие окна терминала ставит фо
     expect(() => chat.el.querySelector<HTMLButtonElement>('.th-chat-term__close')!.click()).not.toThrow();
     expect(chat.composer).toBeNull();
     expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+    chat.teardown();
+  });
+});
+
+// История 21в: показ чата (переключение вида, вкладка другой сессии, возврат из проводника)
+// ставит фокус в поле ввода — одним правилом с закрытием окна терминала.
+describe('чат: фокус в поле ввода при показе', () => {
+  const original = window.matchMedia;
+  const coarse = (on: boolean): void => {
+    window.matchMedia = ((query: string) => ({ matches: on && query.includes('coarse'), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+  };
+  afterEach(() => {
+    window.matchMedia = original;
+  });
+  const field = (chat: ReturnType<typeof mountChat>): HTMLTextAreaElement => chat.el.querySelector<HTMLTextAreaElement>('.th-composer__field')!;
+  const boot = async (t: Transport = transport): Promise<ReturnType<typeof mountChat>> => {
+    current = state('idle');
+    const chat = mountChat(host, 'work', t);
+    await vi.advanceTimersByTimeAsync(10);
+    return chat;
+  };
+
+  it('показ ставит фокус в поле; нажатие на вкладку текущей сессии — тоже', async () => {
+    coarse(false);
+    const chat = await boot();
+    expect(document.activeElement).not.toBe(field(chat));
+    chat.focusInput();
+    expect(document.activeElement).toBe(field(chat));
+    field(chat).blur();
+    await vi.advanceTimersByTimeAsync(3100); // полоса вкладок получила список
+    host.querySelector<HTMLButtonElement>('.th-tab.is-active .th-tab__btn')!.click();
+    expect(document.activeElement).toBe(field(chat));
+    chat.teardown();
+  });
+
+  it('открытое окно (настройки, сведения), палитра, поле поиска и поле своего ответа фокус не теряют', async () => {
+    coarse(false);
+    const chat = await boot();
+    for (const cls of ['th-overlay', 'th-palette']) {
+      const layer = document.createElement('div');
+      layer.className = cls;
+      const input = document.createElement('input');
+      layer.append(input);
+      document.body.append(layer);
+      input.focus();
+      chat.focusInput();
+      expect(document.activeElement).toBe(input);
+      layer.remove();
+    }
+    const query = chat.el.querySelector<HTMLInputElement>('.th-feed__query')!;
+    chat.searchSlot.hidden = false;
+    query.focus();
+    chat.focusInput();
+    expect(document.activeElement).toBe(query);
+    chat.teardown();
+  });
+
+  it('гость без поля: показ ничего не трогает', async () => {
+    coarse(false);
+    const chat = await boot({ ...transport, clientScope: { write: false, files: false } } as unknown as Transport);
+    expect(() => chat.focusInput()).not.toThrow();
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
+    chat.teardown();
+  });
+
+  it('грубый указатель: фокус ставится с inputmode=none (клавиатура не выскакивает), касание поля возвращает обычный ввод', async () => {
+    coarse(true);
+    const chat = await boot();
+    chat.focusInput();
+    const f = field(chat);
+    expect(document.activeElement).toBe(f);
+    expect(f.getAttribute('inputmode')).toBe('none');
+    f.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(f.getAttribute('inputmode')).toBeNull();
+    // Точный указатель режим поля не трогает.
+    coarse(false);
+    f.blur();
+    chat.focusInput();
+    expect(f.getAttribute('inputmode')).toBeNull();
     chat.teardown();
   });
 });

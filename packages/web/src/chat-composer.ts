@@ -6,7 +6,7 @@
 // Что берёт на себя это место, а что нет: поле не знает, как запрос доходит до агента
 // (вставка, клавиша отправки — дело агента TermHub) и как называются экраны агента; оно
 // знает три исхода — принято, отказано «в строке агента уже есть текст», отказано иначе.
-import type { ActResult, ChatCommand } from '@termhub/protocol/chat';
+import type { ActResult, ChatAction, ChatCommand } from '@termhub/protocol/chat';
 
 import { applyCompletion, completionAt, rankCommands, type Completion } from './chat-complete';
 import type { LiveHandle } from './chat-live';
@@ -27,7 +27,9 @@ export interface ComposerDeps {
 
 export interface ComposerHandle {
   el: HTMLElement;
-  focus(): void;
+  /** `quiet` — фокус без самопоявления экранной клавиатуры на устройстве с грубым
+   *  указателем (ADR 0010): поле на время стоит в `inputmode=none`, касание возвращает ввод. */
+  focus(opts?: { quiet?: boolean }): void;
   setText(text: string): void;
   /** Текст поля сейчас. */
   text(): string;
@@ -47,6 +49,35 @@ const MAX_SUGGEST = 50;
 const RECHECK_MS = 2000;
 /** Сколько записей хвоста беседы просматривается, когда выясняем, дошёл ли запрос. */
 const DELIVERY_TAIL = 50;
+
+/** Запрос с ключом попытки: повтор после потерянного ответа несёт тот же ключ, и агент,
+ *  уже получивший первую попытку, вторую не набирает. Агент старше ключа поле не читает. */
+type PromptAction = Extract<ChatAction, { kind: 'prompt' }> & { key?: string };
+
+function attemptKey(): string {
+  try {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  } catch {
+    /* вне защищённого контекста randomUUID нет — ниже запасной путь */
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Грубый указатель — телефон и планшет: только там «камера» открывает камеру, а не то
+ *  же окно выбора файла, что и «прикрепить». */
+function coarsePointer(): boolean {
+  try {
+    return window.matchMedia('(pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
+}
+
+/** Путь упоминания в том виде, в каком его вставляет в строку сам агент: с пробелами —
+ *  в кавычках сразу за «@». */
+function mention(path: string, closed: boolean): string {
+  return /\s/.test(path) ? `@"${path}${closed ? '"' : ''}` : `@${path}`;
+}
 
 interface Attachment {
   id: number;
@@ -130,11 +161,14 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   attachBtn.title = t('chat.composer.attach');
   attachBtn.setAttribute('aria-label', t('chat.composer.attach'));
   attachBtn.append(svgIcon('paperclip'));
-  const cameraBtn = el('button', 'th-composer__btn th-composer__camera');
-  cameraBtn.type = 'button';
-  cameraBtn.title = t('chat.composer.camera');
-  cameraBtn.setAttribute('aria-label', t('chat.composer.camera'));
-  cameraBtn.append(svgIcon('camera'));
+  // Камера — только там, где она камера (история 28а): на десктопе её кнопки нет вовсе.
+  const cameraBtn = coarsePointer() ? el('button', 'th-composer__btn th-composer__camera') : null;
+  if (cameraBtn) {
+    cameraBtn.type = 'button';
+    cameraBtn.title = t('chat.composer.camera');
+    cameraBtn.setAttribute('aria-label', t('chat.composer.camera'));
+    cameraBtn.append(svgIcon('camera'));
+  }
   const field = el('textarea', 'th-composer__field');
   field.rows = 1;
   field.placeholder = t('chat.composer.placeholder');
@@ -156,7 +190,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   camera.hidden = true;
   const dropHint = el('div', 'th-composer__drop', t('chat.composer.drop'));
   dropHint.hidden = true;
-  row.append(attachBtn, cameraBtn, field, sendBtn);
+  row.append(attachBtn, ...(cameraBtn ? [cameraBtn] : []), field, sendBtn);
   root.append(suggestEl, attsEl, row, picker, camera, dropHint);
   host.append(root);
 
@@ -333,7 +367,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   picker.addEventListener('change', () => fromInput(picker));
   camera.addEventListener('change', () => fromInput(camera));
   attachBtn.addEventListener('click', () => picker.click());
-  cameraBtn.addEventListener('click', () => camera.click());
+  cameraBtn?.addEventListener('click', () => camera.click());
 
   field.addEventListener('paste', (e) => {
     const data = (e as ClipboardEvent).clipboardData;
@@ -396,6 +430,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     state: LocalState,
     over: boolean,
     unsure?: Set<string>,
+    key: string = attemptKey(),
   ): Promise<void> => {
     if (sending || disposed) return;
     sending = true;
@@ -407,7 +442,9 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
         note,
         actions: [
           ...extra,
-          { label: t('chat.composer.retry'), run: () => void deliver(msg, text, state, over, lost ? known : undefined) },
+          // Ответ потерян — та же попытка, тот же ключ; агент отказал — запрос не уходил,
+          // и повтор считается новой попыткой.
+          { label: t('chat.composer.retry'), run: () => void deliver(msg, text, state, over, lost ? known : undefined, lost ? key : undefined) },
           { label: t('chat.composer.toField'), run: () => { msg.remove(); restoreToField(text); } },
         ],
       });
@@ -432,7 +469,8 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
       }
       let res: ActResult;
       try {
-        res = await live.act(over ? { kind: 'prompt', text, over: true } : { kind: 'prompt', text });
+        const action: PromptAction = over ? { kind: 'prompt', text, over: true, key } : { kind: 'prompt', text, key };
+        res = await live.act(action);
       } catch {
         lost = true;
         back(t('chat.composer.noConnection'));
@@ -557,14 +595,15 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     } catch {
       return [];
     }
-    const visible = entries.filter((e) => !/\s/.test(e.name) && (!e.hidden || prefix.startsWith('.')));
+    const visible = entries.filter((e) => !e.hidden || prefix.startsWith('.'));
     const starts = visible.filter((e) => e.name.toLowerCase().startsWith(prefix));
     const inside = visible.filter((e) => !e.name.toLowerCase().startsWith(prefix) && e.name.toLowerCase().includes(prefix));
     const byKind = (a: { kind: string; name: string }, b: { kind: string; name: string }): number =>
       a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1;
     return [...starts.sort(byKind), ...inside.sort(byKind)].slice(0, MAX_SUGGEST).map((e) => ({
       label: e.kind === 'dir' ? `${e.name}/` : e.name,
-      value: `@${dir ? `${dir}/` : ''}${e.name}${e.kind === 'dir' ? '/' : ''}`,
+      // Каталог оставляет кавычку открытой: путь ещё набирается.
+      value: mention(`${dir ? `${dir}/` : ''}${e.name}${e.kind === 'dir' ? '/' : ''}`, e.kind !== 'dir'),
       dir: e.kind === 'dir',
     }));
   };
@@ -655,7 +694,17 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   field.addEventListener('keyup', (e) => {
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') void refreshSuggest();
   });
+  // Тихий фокус (inputmode=none) держится до касания поля: касание возвращает обычный ввод.
+  // Поле уже в фокусе — снимаем его, чтобы само касание сфокусировало заново и браузер
+  // поднял клавиатуру (смену режима у сфокусированного поля замечают не все).
+  const wake = (): void => {
+    if (!field.hasAttribute('inputmode')) return;
+    field.removeAttribute('inputmode');
+    if (document.activeElement === field) field.blur();
+  };
+  field.addEventListener('pointerdown', wake);
   field.addEventListener('blur', () => {
+    field.removeAttribute('inputmode');
     // Тап по строке снимает фокус до клика, но mousedown выше его удерживает; уход
     // фокуса куда-то ещё список закрывает.
     window.setTimeout(() => {
@@ -709,7 +758,10 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
 
   return {
     el: root,
-    focus: () => field.focus(),
+    focus: (opts) => {
+      if (opts?.quiet && coarsePointer()) field.setAttribute('inputmode', 'none');
+      field.focus();
+    },
     setText: (text) => setField(text),
     text: () => field.value,
     onText: (fn) => {

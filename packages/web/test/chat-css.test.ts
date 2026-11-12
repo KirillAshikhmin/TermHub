@@ -265,3 +265,14 @@ describe('переключатель вида: иконки там, где у в
     expect(css).not.toMatch(/\.th-holotab--term:has\(\.th-viewsw\) \.th-holotab__icon \{/);
   });
 });
+
+describe('ряд управления чата', () => {
+  it('подпись контекста не сжимается уже своего текста: не влезла в ряд — переносится, а не обрезается', () => {
+    const controls = el('div', 'th-live__controls');
+    document.body.append(controls);
+    const ctx = el('span', 'th-live__ctx', controls);
+    expect(getComputedStyle(controls).flexWrap).toBe('wrap');
+    expect(getComputedStyle(ctx).flexShrink).toBe('0');
+    expect(getComputedStyle(ctx).whiteSpace).toBe('nowrap');
+  });
+});

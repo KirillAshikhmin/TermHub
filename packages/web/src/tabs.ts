@@ -110,6 +110,8 @@ export function mountSessionBar(opts: {
   transport: Transport;
   current: string;
   onSwitch: (name: string) => void;
+  /** Нажали на вкладку текущей сессии (вид остаётся прежним). */
+  onCurrent?: () => void;
   onCreate: () => void;
   /** Шестерёнка настроек и статус подключения — как в шапке терминала (вид «Чат»). */
   tools?: boolean;
@@ -121,6 +123,7 @@ export function mountSessionBar(opts: {
     transport: opts.transport,
     current: opts.current,
     onSwitch: opts.onSwitch,
+    onCurrent: opts.onCurrent,
     onKill: async (name) => {
       if (!confirm(t('card.confirmKill', { name }))) return;
       try {
@@ -210,6 +213,9 @@ export interface SessionTabsOpts {
    *  даже когда сессия пропала из списка (конец показывает оверлей терминала). */
   current: string;
   onSwitch(name: string): void;
+  /** Нажали на текущую сессию (вкладка, боковая панель, панель по стрелке): открытый вид
+   *  остаётся каким был, onSwitch не зовётся. Терминал возвращает себе фокус. */
+  onCurrent?(): void;
   /** Завершение сессии по крестику (подтверждение — на вызывающей стороне). */
   onKill(name: string): void;
   onCreate(): void;
@@ -238,6 +244,13 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
   // все поля SessionInfo, а не только те, что требует таб.
   let latest: SessionInfo[] = [];
   let panelOpen = false;
+  // Единственный вход перехода из полосы, боковой панели и панели по стрелке. Нажатие на
+  // уже открытую сессию — не переход: адрес вкладки ведёт на вход в сессию, и из чата он
+  // увёл бы на терминал (вход решает вид только для вновь открытой сессии).
+  const switchTo = (name: string): void => {
+    if (name === opts.current) opts.onCurrent?.();
+    else opts.onSwitch(name);
+  };
   // Порядок общий с дашбордом (session-sort): «третья сверху» означает одно и то же
   // на главной, в панели и в полосе вкладок.
   let sortMode = readSortMode();
@@ -429,7 +442,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
         preview: previewOf(opts.transport, s.name),
         onOpen: () => {
           closePanel();
-          opts.onSwitch(s.name);
+          switchTo(s.name);
         },
         // Управление — только владельцу, как и на дашборде.
         onKill: guest ? undefined : () => opts.onKill(s.name),
@@ -516,7 +529,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     { name: opts.current, bell: false, title: '' },
     true,
     t,
-    opts.onSwitch,
+    switchTo,
     opts.onKill,
   );
   tabs.set(opts.current, currentTab);
@@ -573,7 +586,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       const info = { ...s, bell: bellUnseen(s.name) };
       if (existing) updateSessionTab(existing, info, isCurrent, t, show);
       else {
-        const el = renderSessionTab(info, isCurrent, t, opts.onSwitch, opts.onKill, show);
+        const el = renderSessionTab(info, isCurrent, t, switchTo, opts.onKill, show);
         if (guest) {
           const c = el.querySelector<HTMLElement>('.th-tab__close');
           if (c) c.style.display = 'none';

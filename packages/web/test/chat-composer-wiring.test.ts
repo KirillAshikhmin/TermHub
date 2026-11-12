@@ -60,7 +60,7 @@ describe('поле ввода в чате', () => {
     field.dispatchEvent(new Event('input', { bubbles: true }));
     field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     await flush();
-    expect(acts).toEqual([{ kind: 'prompt', text: 'привет, агент' }]);
+    expect(acts).toEqual([{ kind: 'prompt', text: 'привет, агент', key: expect.any(String) }]);
     expect(host.querySelector('.th-feed__entry--local')!.textContent).toContain('привет, агент');
 
     feedAnswer = page([{ id: 'x', at: 1, kind: 'human', text: 'привет, агент', cursor: '1:0' }]);

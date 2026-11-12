@@ -4655,8 +4655,9 @@ main.th-feed {
   cursor: pointer;
 }
 .th-live__ctx {
-  flex: 1;
-  min-width: 0;
+  /* Не уже своего текста: на ширине телефона подпись переносится на свою строку ряда,
+     а не обрезается соседними кнопками. */
+  flex: 1 0 auto;
   color: var(--text-dim);
   white-space: nowrap;
 }

@@ -50,6 +50,9 @@ export interface ChatHandle extends FeedHandle {
   composer: ComposerHandle | null;
   /** Связь с агентом сейчас потеряна (переписка на экране остаётся). */
   offline(): boolean;
+  /** Чат показан (переключение вида, вкладка сессии, возврат из другого раздела): фокус в
+   *  поле ввода — если его не у кого отбирать (см. `claimFocus`). */
+  focusInput(): void;
 }
 
 function slot(name: keyof ChatSlots): HTMLElement {
@@ -69,6 +72,8 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     current: session,
     // Новая сессия открывается так, как её открывают с главной: вид решает вход в сессию.
     onSwitch: (name) => (location.hash = termHash(name)),
+    // Нажатие на вкладку уже открытой сессии вид не меняет — возвращает фокус в поле.
+    onCurrent: () => claimFocus('shown'),
     onCreate: () => openCreateModal(transport),
     // Шапка сессии — та же, что в виде «Терминал»: настройки и статус подключения.
     tools: true,
@@ -104,6 +109,9 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     linker: createPathLinker(transport, session),
     images,
     onConnection: (ok) => {
+      // Связь есть — миниатюры, не дошедшие из-за сбоя, спрашиваются заново (сбой мог
+      // прийтись между опросами, и переписка его не заметила).
+      if (ok) images.retry();
       isOffline = !ok;
       offlineEl.hidden = ok;
       sbar.setConn(ok ? 'connected' : 'reconnecting');
@@ -143,13 +151,32 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   // поля своего ответа карточки вопроса; на телефоне (грубый указатель) — только при
   // закрытии кнопкой: иначе клавиатура выскакивала бы сама.
   let composer: ComposerHandle | null = null;
-  const onTerminalClosed = (byButton: boolean): void => {
+  // Все правила фокуса поля ввода — здесь, чтобы показ чата, нажатие на текущую вкладку и
+  // закрытие окна терминала не спорили. Не перехватывается никогда: у поля своего ответа
+  // карточки вопроса. Не перехватывается без нажатия кнопки: у открытого окна (настройки,
+  // сведения, окно сессий), палитры и поля поиска по беседе.
+  const claimFocus = (why: 'shown' | 'term-auto' | 'term-button'): void => {
     if (!composer) return;
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.closest('.th-live-q__free')) return;
-    if (!byButton && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
-    composer.focus();
+    if (why === 'term-button') {
+      composer.focus();
+      return;
+    }
+    if (document.querySelector('.th-overlay, .th-palette, .th-spanel.is-open')) return;
+    if (active instanceof Element && active.closest('.th-feed__search')) return;
+    if (why === 'shown') {
+      // На телефоне — без самопоявления клавиатуры (ADR 0010): она выходит по касанию поля.
+      composer.focus({ quiet: true });
+      return;
+    }
+    // Окно свернулось само. На телефоне фокус не трогаем вовсе; иначе берём, только если
+    // он был нигде или в самом окне терминала.
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
+    const free = !active || active === document.body || active === document.documentElement;
+    if (free || (active instanceof Element && active.closest('.th-chat-term'))) composer.focus();
   };
+  const onTerminalClosed = (byButton: boolean): void => claimFocus(byButton ? 'term-button' : 'term-auto');
   const live = mountLive({ ...slots, head: feed.stateSlot, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.
@@ -173,6 +200,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     live,
     composer,
     offline: () => isOffline,
+    focusInput: () => claimFocus('shown'),
     teardown: () => {
       unbindView();
       typed.teardown();
