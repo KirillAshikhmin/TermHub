@@ -159,7 +159,27 @@ describe.each(AGENTS)('снимки %s: один набор проверок н�
   it('отпечаток считает общая функция протокола', () => {
     for (const name of ['question', 'permission']) {
       const q = read(agent, name).question!;
-      expect(q.stamp).toBe(questionStamp(q.title, q.options));
+      expect(q.stamp).toBe(questionStamp(q.title, q.options, q.body));
+    }
+  });
+
+  it('тот же запрос разрешения с другим телом даёт другой отпечаток', () => {
+    // Меняется одна строка тела — содержимое файла у Claude, команда у Codex;
+    // заголовок и варианты остаются прежними.
+    const marker = agent === 'claude' ? /^\s+1 hello$/ : /^\s+\$ printf /;
+    for (const name of ['permission', 'permission-narrow']) {
+      const lines = shot(agent, name);
+      const flat = plain(lines);
+      const at = flat.findIndex((l) => marker.test(l));
+      expect(at).toBeGreaterThan(0);
+      const other = [...lines];
+      other[at] = lines[at]!.replace(/hello(?!.*hello)/, 'world');
+      const was = read(agent, name).question!;
+      const now = readScreen(other, profileOf(agent)).question!;
+      expect(now.title).toBe(was.title);
+      expect(now.options).toEqual(was.options);
+      expect(now.body).not.toBe(was.body);
+      expect(now.stamp).not.toBe(was.stamp);
     }
   });
 

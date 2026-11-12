@@ -263,7 +263,7 @@ function readDialog(
   const multi = options.some((option) => option.checked !== undefined);
   const freeText = options.some((option) => option.free);
   return {
-    stamp: questionStamp(head.title, options),
+    stamp: questionStamp(head.title, options, head.body),
     title: head.title,
     ...(head.body ? { body: head.body } : {}),
     options,

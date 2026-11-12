@@ -65,6 +65,27 @@ describe('questionStamp', () => {
     );
   });
 
+  it('тело входит в отпечаток: тот же вопрос о другой команде — другой отпечаток', () => {
+    const title = 'Do you want to proceed?';
+    const a = questionStamp(title, options, 'Bash command\nrm -rf build');
+    expect(questionStamp(title, options, 'Bash command\nrm -rf src')).not.toBe(a);
+    expect(questionStamp(title, options)).not.toBe(a);
+    expect(questionStamp(title, options, '')).toBe(questionStamp(title, options));
+  });
+
+  it('перенос строк тела отпечаток не меняет', () => {
+    const title = 'Would you like to run the following command?';
+    const wide = questionStamp(title, options, 'Reason: May I create hello.txt in the current directory?');
+    const narrow = questionStamp(title, options, 'Reason: May I create hello.txt in the current\ndirectory?');
+    expect(narrow).toBe(wide);
+  });
+
+  it('граница вариантов и тела различима', () => {
+    expect(questionStamp('t', [{ key: '1', label: 'ab' }], 'c')).not.toBe(
+      questionStamp('t', [{ key: '1', label: 'a' }], 'bc'),
+    );
+  });
+
   it('отметки, положение указателя и текст свободного варианта в отпечаток не входят', () => {
     const plain = questionStamp('Which fruits?', [
       { key: '1', label: 'Apple' },
