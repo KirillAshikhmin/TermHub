@@ -443,6 +443,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/files/read') return this.fileRead(res, url);
     if (method === 'GET' && pathname === '/api/files/stat') return this.fileStatHttp(res, url);
     if (method === 'GET' && pathname === '/api/files/download') return this.fileDownload(req, res, url);
+    if (method === 'GET' && pathname === '/api/files/image') return this.fileImage(res, url);
     if (method === 'POST' && pathname === '/api/repo') return this.repoApi(req, res);
     if (method === 'POST' && pathname === '/api/files/op') return this.filesOp(req, res);
     if (method === 'POST' && pathname === '/api/gradle') return this.gradleApi(req, res);
@@ -708,6 +709,29 @@ export class AgentServer {
     } catch (err) {
       return this.sendJson(res, 400, { error: (err as Error).message });
     }
+  }
+
+  /** Картинка по абсолютному пути из сообщения чата (миниатюры). Все проверки — в
+   *  `FileService.readImage`: realpath, разрешённые каталоги, растр по сигнатуре, 20 МиБ.
+   *  Отдаётся типом, узнанным по содержимому; `nosniff` и песочница не дают браузеру
+   *  истолковать ответ как документ на нашем origin. Параметр `session` на LAN не нужен:
+   *  гостей здесь нет (он есть в запросе ради одного вида на оба провода). */
+  private async fileImage(res: ServerResponse, url: URL): Promise<void> {
+    if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
+    let image: { mime: string; size: number; data: Buffer };
+    try {
+      image = await this.files.readImage(url.searchParams.get('path') ?? '');
+    } catch (err) {
+      return this.sendJson(res, 400, { error: (err as Error).message });
+    }
+    res.writeHead(200, {
+      'Content-Type': image.mime,
+      'Content-Length': String(image.data.length),
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Cache-Control': 'private, no-store',
+    });
+    res.end(image.data);
   }
 
   /** Стрим файла с поддержкой Range (нативное видео/скачивание, LAN). */

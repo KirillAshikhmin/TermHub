@@ -267,6 +267,23 @@ async function pasteBlob(blob: Blob, name?: string): Promise<string> {
   return body.path;
 }
 
+/** Картинка по абсолютному пути из сообщения чата. Что отдавать, решает агент (каталоги,
+ *  растр по содержимому, 20 МиБ); любой отказ — исключение. */
+async function imageBlob(session: string, path: string): Promise<Blob> {
+  let res: Response;
+  const q = `session=${encodeURIComponent(session)}&path=${encodeURIComponent(path)}`;
+  try {
+    res = await fetch(`/api/files/image?${q}`, { credentials: 'same-origin' });
+  } catch (err) {
+    throw new ApiError(0, err instanceof Error ? err.message : 'network error');
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new ApiError(res.status, typeof body.error === 'string' ? body.error : res.statusText);
+  }
+  return res.blob();
+}
+
 export const api = {
   login: (password: string) => request<void>('POST', '/api/login', { body: { password }, redirectOnAuth: false }),
   sessions: () => request<SessionInfo[]>('GET', '/api/sessions'),
@@ -358,6 +375,7 @@ export const api = {
   pasteImage: (blob: Blob): Promise<string> => pasteBlob(blob),
   /** Любой файл на хост (вложение чата): тот же маршрут, имя — подсказка для расширения. */
   pasteFile: (blob: Blob, name: string): Promise<string> => pasteBlob(blob, name),
+  image: (session: string, path: string): Promise<Blob> => imageBlob(session, path),
   share: (scope?: DeviceScope) => request<ShareInfo>('POST', '/api/share', { body: { scope } }),
   devices: () => request<DeviceInfo[]>('GET', '/api/devices'),
   revoke: (fingerprint: string) => request<void>('DELETE', `/api/devices/${encodeURIComponent(fingerprint)}`),

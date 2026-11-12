@@ -144,6 +144,11 @@ export interface Transport {
   /** Любой файл (вложение чата, до 50 МиБ) на хост; ответ — путь. `name` агент
    *  использует только для расширения. Агент старше этой функции отвечает ошибкой. */
   pasteFile(blob: Blob, name: string): Promise<string>;
+  /** Картинка по абсолютному пути на хосте (миниатюры чата). Агент отдаёт только растр
+   *  (png, jpeg, gif, webp) до 20 МиБ из корней сессий, каталога вложений и временного
+   *  каталога агента; гостю — только из каталога его сессии и только с правом `files`.
+   *  Любой отказ (и агент старше этой функции) — исключение. */
+  image(session: string, path: string): Promise<Blob>;
   /** Операции VCS (git/svn/hg) над папкой в пределах корня (оба режима). action —
    *  log|show|status|diff|commit; params — {root, path, rev?, file?, files?, message?}. */
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T>;
@@ -436,6 +441,10 @@ export class LanTransport implements Transport {
 
   pasteFile(blob: Blob, name: string): Promise<string> {
     return api.pasteFile(blob, name);
+  }
+
+  image(session: string, path: string): Promise<Blob> {
+    return api.image(session, path);
   }
 
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {

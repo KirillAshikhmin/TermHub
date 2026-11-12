@@ -1268,6 +1268,35 @@ export class RelayTransport implements Transport {
     return this.pasteBlob(blob, name);
   }
 
+  /** Картинка по пути — кусками действием `image` кадра FileOp (своего кадра нет). Тип и
+   *  размер называет агент с каждым куском; больше 20 МиБ не собираем, что бы он ни назвал. */
+  async image(session: string, path: string): Promise<Blob> {
+    const CHUNK = 256 * 1024;
+    const MAX = 20 * 1024 * 1024;
+    const parts: BlobPart[] = [];
+    let offset = 0;
+    let mime = '';
+    for (;;) {
+      const res = await this.fileOp<{ mime?: unknown; size?: unknown; data?: unknown; eof?: unknown } | undefined>('image', {
+        session,
+        path,
+        offset,
+        len: CHUNK,
+      });
+      if (!res || typeof res.mime !== 'string' || typeof res.data !== 'string' || typeof res.size !== 'number') {
+        throw new Error('agent returned no image');
+      }
+      if (res.size > MAX) throw new Error('image is too large');
+      const bytes = unb64(res.data);
+      mime ||= res.mime;
+      offset += bytes.length;
+      if (offset > MAX) throw new Error('image is too large');
+      parts.push(bytes as BlobPart);
+      if (res.eof === true || bytes.length === 0) break;
+    }
+    return new Blob(parts, { type: mime });
+  }
+
   private async pasteBlob(blob: Blob, name?: string): Promise<string> {
     const CHUNK = 256 * 1024;
     const upload = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.padEnd(12, '0');

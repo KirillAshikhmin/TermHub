@@ -4769,6 +4769,92 @@ main.th-feed {
   }
 }
 
+/* Миниатюры картинок под сообщением: ряд с переносом. */
+.th-chatimgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.th-chatimg {
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  overflow: hidden;
+  cursor: zoom-in;
+  line-height: 0;
+}
+.th-chatimg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.th-chatimg img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(220px, 60vw);
+  max-height: 160px;
+  object-fit: contain;
+}
+/* Окно просмотра: поверх области чата и в её границах (якорь — .th-chat), не окна браузера. */
+.th-imgview {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+}
+.th-imgview__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+}
+.th-imgview__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-imgview__close {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.th-imgview__body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: hidden;
+}
+/* Картинка вписана в окно целиком — и на телефоне тоже. */
+.th-imgview__img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 main.th-feed--chat {
   background: transparent;
 }

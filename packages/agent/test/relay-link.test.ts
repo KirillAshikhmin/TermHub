@@ -1033,6 +1033,8 @@ describe('RelayLink — вкладка Gradle через relay', () => {
       sessions: { list: async () => listed } as unknown as SessionService,
       files: new FileService({
         roots: [root],
+        // Настоящие каталог вложений и временный каталог агента в тестах не читаются.
+        imageDirs: [],
         opener: async (file) => {
           openedHostPaths.push(file);
         },
@@ -1129,6 +1131,43 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     const viewer = await guestClient({ session: GUEST_SESSION, write: false, files: true });
     expect((await send(viewer, 'upload-guest-2')).error).toBe('no write permission');
     viewer.ws.close();
+  });
+
+  it('картинка по пути (миниатюры чата): хозяину — из разрешённых каталогов, гостю — только с правом files и только из своей сессии', async () => {
+    const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 1, 2, 3, 4]);
+    const mine = path.join(projectDir, 'shot.png');
+    const foreign = path.join(otherDir, 'other.png');
+    fs.writeFileSync(mine, PNG);
+    fs.writeFileSync(foreign, PNG);
+    fs.writeFileSync(path.join(projectDir, 'notes.png'), 'not an image at all');
+    const image = (c: Client, session: string, file: string, extra: Record<string, unknown> = {}) =>
+      fileOp(c, { action: 'image', session, path: file, offset: 0, len: 65536, ...extra });
+
+    const owner = await guestClient();
+    const whole = await image(owner, OTHER_SESSION, foreign);
+    expect(whole.result).toEqual({ mime: 'image/png', size: PNG.length, data: PNG.toString('base64'), eof: true });
+    // Кусками: размер и тип едут с каждым куском, конец помечен.
+    const head = (await image(owner, GUEST_SESSION, mine, { len: 10 })).result as { data: string; eof: boolean };
+    expect(head.eof).toBe(false);
+    const tail = (await image(owner, GUEST_SESSION, mine, { offset: 10, len: 10 })).result as { data: string; eof: boolean };
+    expect(tail.eof).toBe(true);
+    expect(Buffer.concat([Buffer.from(head.data, 'base64'), Buffer.from(tail.data, 'base64')])).toEqual(PNG);
+    expect((await image(owner, GUEST_SESSION, path.join(projectDir, 'notes.png'))).error).toBe('Not an image');
+    expect((await image(owner, GUEST_SESSION, path.join(os.tmpdir(), 'nowhere.png'))).result).toBeUndefined();
+    owner.ws.close();
+
+    // Гость с правом files: своя сессия — да; чужая сессия и чужой каталог — отказ.
+    const viewer = await guestClient({ session: GUEST_SESSION, write: false, files: true });
+    expect(((await image(viewer, GUEST_SESSION, mine)).result as { mime: string }).mime).toBe('image/png');
+    expect(await image(viewer, OTHER_SESSION, foreign)).toEqual({ id: 8, error: 'forbidden' });
+    expect(await image(viewer, GUEST_SESSION, foreign)).toEqual({ id: 8, error: 'Path outside allowed directories' });
+    expect(await image(viewer, '', mine)).toEqual({ id: 8, error: 'forbidden' });
+    viewer.ws.close();
+
+    // Гость без права files не получает ничего — даже с правом ввода.
+    const writer = await guestClient({ session: GUEST_SESSION, write: true, files: false });
+    expect(await image(writer, GUEST_SESSION, mine)).toEqual({ id: 8, error: 'no files permission' });
+    writer.ws.close();
   });
 
   it('файл любого типа: поле name разрешает тип, расширение берётся из имени; без name — только картинка', async () => {

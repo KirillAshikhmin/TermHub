@@ -80,6 +80,12 @@ interface FilesCtl {
   writeFile(root: string, subpath: string, content: string): Promise<void>;
   mkdir(root: string, subpath: string): Promise<void>;
   uploadChunk(root: string, subpath: string, data: Buffer, offset: number, last: boolean): Promise<void>;
+  imageChunk(
+    file: string,
+    offset: number,
+    len: number,
+    within?: string,
+  ): Promise<{ mime: string; size: number; data: Buffer; eof: boolean }>;
 }
 import { attachTerminal, type TerminalHandle } from './bridge.js';
 import { parseSize } from './pty-common.js';
@@ -1147,6 +1153,24 @@ export class RelayLink {
       }
       if (s.scope && !s.scope.files) throw new Error('no files permission');
       if (!this.files) throw new Error('file browser unavailable');
+      if (String(req.action) === 'image') {
+        // Картинка по абсолютному пути из сообщения чата (миниатюры), куском. Только чтение:
+        // право write не нужно. Хозяину — корни сессий, каталог вложений и временный каталог
+        // агента; гостю — только каталог его сессии (вложения и временные файлы общие на
+        // все сессии хоста, гостю одной сессии они не принадлежат). Сами проверки пути и
+        // содержимого — в FileService.imageChunk.
+        if (s.scope && !this.ownsSession(s, String(req.session ?? ''), false)) throw new Error('forbidden');
+        const within = (await this.scopedDir(s)) ?? undefined;
+        const chunk = await this.files.imageChunk(
+          typeof req.path === 'string' ? req.path : '',
+          Number(req.offset ?? 0),
+          Math.min(Number(req.len ?? 0), MAX_FILE_CHUNK),
+          within,
+        );
+        const result = { mime: chunk.mime, size: chunk.size, data: chunk.data.toString('base64'), eof: chunk.eof };
+        this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
+        return;
+      }
       if (String(req.action) !== 'stat-full' && s.scope && !s.scope.write) {
         throw new Error('no write permission');
       }

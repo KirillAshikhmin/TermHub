@@ -10,6 +10,7 @@
 // содержимого, поле ввода всегда у нижнего края.
 
 import { mountComposer, type ComposerHandle } from './chat-composer';
+import { createChatImages } from './chat-images';
 import { mountLive, type LiveHandle } from './chat-live';
 import { mountTyped } from './chat-typed';
 import { bindChatView } from './chat-view';
@@ -96,8 +97,11 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   hideBar = wireToolbar({ toolbars: [toolbar], floatMount: root, toggleMount: sbar.toggleSlot }).hide;
 
   let isOffline = false;
+  // Пути картинок в сообщениях — миниатюрами; окно просмотра встаёт в границах области чата.
+  const images = createChatImages(root, session, transport);
   const feed = mountFeed(thread, session, transport, {
     linker: createPathLinker(transport, session),
+    images,
     onConnection: (ok) => {
       isOffline = !ok;
       offlineEl.hidden = ok;
@@ -162,6 +166,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
       typed.teardown();
       composer?.teardown();
       live.teardown();
+      images.teardown();
       feed.teardown();
       sbar.teardown();
       host.replaceChildren();

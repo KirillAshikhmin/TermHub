@@ -172,6 +172,8 @@ export interface FeedChatOptions {
   /** Пустой экран без беседы: узел вместо строки ошибки (приглашение написать запрос,
    *  «агент не запущен»). null — оставить обычный отказ. */
   emptyState?: (reason: 'no-transcript' | 'no-agent') => HTMLElement | null;
+  /** Миниатюры картинок под сообщениями человека и агента (`chat-images.ts`). */
+  images?: { attach(box: HTMLElement, text: string): void };
 }
 
 /** Монтирует ленту сессии в host. */
@@ -508,6 +510,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     }
     if (chat && entry.kind !== 'thinking') box.append(text);
     else box.append(meta, text);
+    if (entry.kind !== 'thinking') chat?.images?.attach(box, entry.text);
     if (entry.truncated) {
       const cut = document.createElement('div');
       cut.className = 'th-feed__cut';
@@ -657,6 +660,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       }
     };
     paint();
+    chat?.images?.attach(box, text);
     locals.push(rec);
     const stick = nearBottom();
     localEl.append(box);

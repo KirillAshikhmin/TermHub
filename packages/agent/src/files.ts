@@ -2,12 +2,14 @@
 // Только чтение. Безопасность — realpath-проверка: реальный путь (после резолва
 // symlink) обязан лежать внутри одного из корней (защита от ../ и symlink-побега).
 
+import { constants as fsConstants } from 'node:fs';
 import fsp, { type FileHandle } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { FileContent, FileEntry, FileInfo } from '@termhub/protocol';
 import { openPathOnHost } from './host-open.js';
+import { configDir } from './paths.js';
 
 /** Лимиты инлайн-просмотра: больше — только скачивание (truncated). */
 const TEXT_LIMIT = 5 * 1024 * 1024;
@@ -41,6 +43,42 @@ const MEDIA_MIME: Record<string, string> = {
   '.flac': 'audio/flac',
   '.aac': 'audio/aac',
 };
+
+/** Предел картинки, отдаваемой по абсолютному пути (миниатюры чата). */
+export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+/** Потолок одного куска картинки (relay). */
+const IMAGE_CHUNK_MAX = 4 * 1024 * 1024;
+/** Расширения, с которыми путь вообще рассматривается как картинка. SVG здесь нет намеренно:
+ *  это документ со скриптами, а не растр. */
+const THUMB_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+/** Сколько первых байт нужно, чтобы узнать формат. */
+const SNIFF_BYTES = 12;
+
+/** Тип растровой картинки по сигнатуре содержимого; null — не png/jpeg/gif/webp.
+ *  Расширению не верим: под именем `.png` может лежать что угодно. */
+export function sniffImage(head: Uint8Array): string | null {
+  const b = Buffer.from(head.buffer, head.byteOffset, head.byteLength);
+  if (b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return 'image/png';
+  }
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length >= 6) {
+    const sig = b.toString('latin1', 0, 6);
+    if (sig === 'GIF87a' || sig === 'GIF89a') return 'image/gif';
+  }
+  if (b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
+
+/** Временные каталоги сессий агентов этого пользователя. Сегодня известен один: Claude Code
+ *  держит временные файлы сессии в `/tmp/claude-<uid>/<каталог проекта>/<id сессии>/`
+ *  (замер 12.11.2026: имена подкаталогов совпадают с именами файлов бесед). У Codex и
+ *  opencode своего каталога сессии не найдено — их здесь нет. */
+export function agentTempDirs(uid: number | undefined = process.getuid?.(), base = '/tmp'): string[] {
+  return uid === undefined ? [] : [path.join(base, `claude-${uid}`)];
+}
 
 /** Тип файла для просмотра (text уточняется по содержимому в readFile). */
 export type FileKind = 'text' | 'image' | 'video' | 'audio' | 'binary';
@@ -76,10 +114,110 @@ export class FileService {
   private readonly uploads = new Map<string, ChunkUpload>();
   private readonly uploading = new Set<string>();
   private readonly opener: (filePath: string) => Promise<void>;
+  /** Каталоги сверх корней, из которых отдаются ТОЛЬКО картинки (`readImage`): вложения
+   *  TermHub и временный каталог агента. В проводник они не попадают. */
+  private readonly imageDirs: string[];
 
-  constructor(opts: { roots: string[]; opener?: (filePath: string) => Promise<void> }) {
+  constructor(opts: { roots: string[]; opener?: (filePath: string) => Promise<void>; imageDirs?: string[] }) {
     this.roots = opts.roots;
     this.opener = opts.opener ?? openPathOnHost;
+    this.imageDirs = opts.imageDirs ?? [path.join(configDir(), 'paste'), ...agentTempDirs()];
+  }
+
+  /** Реальные каталоги, из которых можно отдать картинку. Дополнительный каталог берётся,
+   *  только если это настоящий каталог (не ссылка) самого пользователя: `/tmp` общий, и
+   *  каталог с ожидаемым именем там мог завести кто угодно. */
+  private async imageScopes(): Promise<string[]> {
+    const out: string[] = [];
+    for (const root of this.roots) {
+      try {
+        out.push(await fsp.realpath(root));
+      } catch {
+        // корня нет на диске — из него и отдавать нечего
+      }
+    }
+    const uid = process.getuid?.();
+    for (const dir of this.imageDirs) {
+      try {
+        const st = await fsp.lstat(dir);
+        if (!st.isDirectory() || (uid !== undefined && st.uid !== uid)) continue;
+        out.push(await fsp.realpath(dir));
+      } catch {
+        // каталога ещё нет
+      }
+    }
+    return out;
+  }
+
+  /** Открывает картинку по абсолютному пути после всех проверок; дескриптор закрывает
+   *  вызывающий. Порядок: вид пути → realpath → вложенность в разрешённый каталог →
+   *  обычный файл → размер → сигнатура. Читается тот же дескриптор, что проверен. */
+  private async openImage(file: string, within?: string): Promise<{ handle: FileHandle; size: number; mime: string }> {
+    if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file)) throw new Error('Not an absolute path');
+    if (!THUMB_EXT.has(path.extname(file).toLowerCase())) throw new Error('Not an image');
+    const real = await fsp.realpath(file);
+    const scopes = within === undefined ? await this.imageScopes() : [await fsp.realpath(within)];
+    if (!scopes.some((dir) => real.startsWith(dir + path.sep))) throw new Error('Path outside allowed directories');
+    // O_NOFOLLOW: последний компонент после realpath ссылкой быть не должен; O_NONBLOCK —
+    // чтобы именованный канал под именем картинки не подвесил открытие.
+    const handle = await fsp.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    try {
+      const st = await handle.stat();
+      if (!st.isFile()) throw new Error('Not a file');
+      if (st.size > IMAGE_MAX_BYTES) throw new Error('Image is too large');
+      const head = Buffer.alloc(SNIFF_BYTES);
+      const { bytesRead } = await handle.read(head, 0, SNIFF_BYTES, 0);
+      const mime = sniffImage(head.subarray(0, bytesRead));
+      if (!mime) throw new Error('Not an image');
+      return { handle, size: st.size, mime };
+    } catch (err) {
+      await handle.close().catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** Читает `len` байт с `offset` из открытого файла (короткое чтение дочитывается). */
+  private async readRange(handle: FileHandle, offset: number, len: number): Promise<Buffer> {
+    const buf = Buffer.alloc(len);
+    let got = 0;
+    while (got < len) {
+      const { bytesRead } = await handle.read(buf, got, len - got, offset + got);
+      if (bytesRead === 0) break;
+      got += bytesRead;
+    }
+    return buf.subarray(0, got);
+  }
+
+  /** Картинка целиком по абсолютному пути (миниатюры чата, LAN). Отдаётся только растр
+   *  png/jpeg/gif/webp до 20 МиБ из корней сессий и `imageDirs`; `within` (гость relay)
+   *  сужает разрешённое до одного каталога. Тип — по содержимому. */
+  async readImage(file: string, within?: string): Promise<{ mime: string; size: number; data: Buffer }> {
+    const { handle, size, mime } = await this.openImage(file, within);
+    try {
+      const data = await this.readRange(handle, 0, size);
+      return { mime, size: data.length, data };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** Кусок той же картинки (relay). Каждый кусок проходит все проверки заново: между
+   *  запросами состояния нет, и файл за это время мог стать другим. */
+  async imageChunk(
+    file: string,
+    offset: number,
+    len: number,
+    within?: string,
+  ): Promise<{ mime: string; size: number; data: Buffer; eof: boolean }> {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid offset');
+    const want = Math.min(Math.max(Math.trunc(Number.isFinite(len) ? len : 0), 0), IMAGE_CHUNK_MAX);
+    const { handle, size, mime } = await this.openImage(file, within);
+    try {
+      const data = await this.readRange(handle, offset, Math.max(0, Math.min(want, size - offset)));
+      return { mime, size, data, eof: offset + data.length >= size };
+    } finally {
+      await handle.close();
+    }
   }
 
   /** Резолвит (root, subpath) в реальный путь, проверяя, что он внутри корня.

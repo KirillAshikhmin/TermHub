@@ -69,6 +69,10 @@ class ScriptedTransport implements Transport {
     return Promise.resolve('');
   }
 
+  image(_session: string, _path: string): Promise<Blob> {
+    return Promise.reject(new Error('not used'));
+  }
+
   create(req: CreateSessionInput): Promise<string> {
     return Promise.resolve(req.name);
   }

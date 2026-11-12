@@ -738,6 +738,70 @@ describe('AgentServer — POST /api/paste-image', () => {
   });
 });
 
+describe('AgentServer — GET /api/files/image', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 1, 2, 3, 4]);
+
+  it('отдаёт картинку из разрешённых каталогов своим типом и с nosniff; остальное — отказ без содержимого', async () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-image-lan-')));
+    const root = path.join(base, 'root');
+    const paste = path.join(base, 'paste');
+    const outside = path.join(base, 'outside');
+    for (const dir of [root, paste, outside]) fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(root, 'shot.jpg'), PNG);
+    fs.writeFileSync(path.join(paste, 'paste-1.png'), PNG);
+    fs.writeFileSync(path.join(outside, 'secret.png'), PNG);
+    fs.writeFileSync(path.join(root, 'page.png'), '<html><script>alert(1)</script></html>');
+    fs.symlinkSync(path.join(outside, 'secret.png'), path.join(root, 'link.png'));
+    const s = await start({ files: new FileService({ roots: [root], imageDirs: [paste] }) });
+    const get = (file: string, cookie = true): Promise<Response> =>
+      fetch(`${s.base}/api/files/image?session=demo&path=${encodeURIComponent(file)}`, {
+        headers: cookie ? { cookie: authCookie() } : {},
+      });
+    try {
+      expect((await get(path.join(root, 'shot.jpg'), false)).status).toBe(401);
+
+      const ok = await get(path.join(root, 'shot.jpg'));
+      expect(ok.status).toBe(200);
+      // Тип — по содержимому (под именем .jpg лежит PNG), браузеру запрещено гадать самому.
+      expect(ok.headers.get('content-type')).toBe('image/png');
+      expect(ok.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(ok.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
+      expect(ok.headers.get('content-length')).toBe(String(PNG.length));
+      expect(Buffer.compare(Buffer.from(await ok.arrayBuffer()), PNG)).toBe(0);
+
+      expect((await get(path.join(paste, 'paste-1.png'))).status).toBe(200);
+
+      for (const bad of [
+        path.join(outside, 'secret.png'),
+        path.join(root, 'link.png'),
+        `${root}/../outside/secret.png`,
+        path.join(root, 'page.png'),
+        path.join(root, 'missing.png'),
+        'shot.jpg',
+        '',
+      ]) {
+        const res = await get(bad);
+        expect(res.status, bad).toBe(400);
+        expect(res.headers.get('content-type'), bad).toMatch(/^application\/json/);
+        expect(Object.keys((await res.json()) as object), bad).toEqual(['error']);
+      }
+    } finally {
+      await s.server.close();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('без файлового сервиса — 503', async () => {
+    const s = await start({});
+    try {
+      const res = await fetch(`${s.base}/api/files/image?path=%2Ftmp%2Fa.png`, { headers: { cookie: authCookie() } });
+      expect(res.status).toBe(503);
+    } finally {
+      await s.server.close();
+    }
+  });
+});
+
 describe('AgentServer — POST /api/files/op open-host', () => {
   let s: Started | undefined;
   let root = '';

@@ -577,6 +577,11 @@ const ru: Dict = {
     typed: {
       label: 'В терминале набрано:',
     },
+    image: {
+      open: 'Открыть картинку',
+      title: 'Просмотр картинки',
+      close: 'Закрыть просмотр',
+    },
     term: {
       title: 'Терминал',
       close: 'Закрыть окно терминала',
@@ -1247,6 +1252,11 @@ const en: Dict = {
     },
     typed: {
       label: 'Typed in the terminal:',
+    },
+    image: {
+      open: 'Open the image',
+      title: 'Image viewer',
+      close: 'Close the viewer',
     },
     term: {
       title: 'Terminal',
