@@ -144,3 +144,70 @@ describe('вопрос в ленте без чата', () => {
     feed.teardown();
   });
 });
+
+describe('ответ из записи вопроса в переписке', () => {
+  const IDLE = { kind: 'working', input: '', pending: true };
+  const OPENED = {
+    kind: 'question',
+    question: {
+      stamp: 'st-1',
+      title: 'Оставить копию demo или удалить?',
+      options: [
+        { key: '1', label: 'Оставить', selected: true },
+        { key: '2', label: 'Удалить рабочую копию' },
+        { key: '3', label: 'Other', free: true },
+      ],
+    },
+  };
+  const liveOf = (screen: unknown): unknown => ({ ok: true, agent: 'codex', tested: true, screen, modes: [], models: [] });
+  const withLive = (screen: unknown, acts: unknown[], reply: (a: { kind: string }) => unknown): Transport =>
+    ({
+      ...transport,
+      live: async () => liveOf(screen),
+      act: async (_s: string, a: { kind: string }) => {
+        acts.push(a);
+        return reply(a);
+      },
+    }) as unknown as Transport;
+  const option = (i: number): HTMLElement => blocks()[0]!.querySelectorAll<HTMLElement>('.th-q__option')[i]!;
+
+  it('вопрос ждёт в очереди Codex: нажатие варианта открывает вопрос и отвечает его клавишей', async () => {
+    answer = () => page([ASKED]);
+    const acts: unknown[] = [];
+    const chat = mountChat(host, 'work', withLive(IDLE, acts, (a) => ({ ok: true, screen: a.kind === 'show-question' ? OPENED : IDLE })));
+    await flush();
+    expect(option(1).classList.contains('is-pickable')).toBe(true);
+    option(1).click();
+    await flush();
+    expect(acts).toEqual([{ kind: 'show-question' }, { kind: 'answer', stamp: 'st-1', option: '2' }]);
+    chat.teardown();
+  });
+
+  it('вопрос уже показан на экране — отвечает сразу; на экране другой вопрос — клавиш нет', async () => {
+    answer = () => page([ASKED]);
+    const acts: unknown[] = [];
+    const chat = mountChat(host, 'work', withLive(OPENED, acts, () => ({ ok: true, screen: IDLE })));
+    await flush();
+    option(0).click();
+    await flush();
+    expect(acts).toEqual([{ kind: 'answer', stamp: 'st-1', option: '1' }]);
+    chat.teardown();
+    document.body.replaceChildren(host);
+    host.replaceChildren();
+    const none: unknown[] = [];
+    const other = mountChat(host, 'work', withLive({ kind: 'idle', input: '' }, none, () => ({ ok: true, screen: IDLE })));
+    await flush();
+    option(0).click();
+    await flush();
+    expect(none).toEqual([]);
+    other.teardown();
+  });
+
+  it('вопрос с ответом — варианты не кнопки', async () => {
+    answer = () => page([answered(['Оставить'])]);
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    expect(blocks()[0]!.querySelectorAll('.is-pickable')).toHaveLength(0);
+    chat.teardown();
+  });
+});

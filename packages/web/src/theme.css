@@ -5856,6 +5856,20 @@ main.th-feed--chat {
   content: '•';
   color: var(--text-dim);
 }
+.th-q__option.is-pickable {
+  cursor: pointer;
+  border-color: var(--border);
+}
+.th-q__option.is-pickable:hover,
+.th-q__option.is-pickable:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  outline: none;
+}
+.th-q__options.is-busy .th-q__option.is-pickable {
+  opacity: 0.6;
+  cursor: progress;
+}
 .th-q__option.is-chosen {
   border-color: var(--accent);
   background: var(--accent-tint);

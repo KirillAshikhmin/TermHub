@@ -618,6 +618,10 @@ const ru: Dict = {
       composer: 'Поле ввода',
       terminal: 'Окошко терминала',
     },
+    question: {
+      gone: 'Этот вопрос уже не ждёт ответа',
+      failed: 'Ответ не отправлен',
+    },
     live: {
       idle: 'Ждёт ввода',
       working: 'Работает',
@@ -1326,6 +1330,10 @@ const en: Dict = {
       question: 'Agent question',
       composer: 'Input',
       terminal: 'Terminal window',
+    },
+    question: {
+      gone: 'This question is no longer waiting for an answer',
+      failed: 'The answer was not sent',
     },
     live: {
       idle: 'Waiting for input',

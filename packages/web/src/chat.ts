@@ -22,7 +22,8 @@ import { t } from './i18n';
 import { termHash } from './routes';
 import { mountSessionBar } from './tabs';
 import type { Transport } from './transport';
-import { renderHoloBar, wireToolbar } from './ui';
+import type { ScreenState } from '@termhub/protocol/chat';
+import { renderHoloBar, toast, wireToolbar } from './ui';
 import { setSessionViewPref } from './view-pref';
 
 /** Места оболочки. Имя места — и ключ здесь, и `data-slot` в разметке. */
@@ -136,6 +137,32 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   const feed = mountFeed(thread, session, transport, {
     linker: createPathLinker(transport, session),
     images,
+    // Ответ из записи вопроса: вопрос обязан ждать на экране агента — показанным либо в
+    // очереди (тогда он сначала открывается), и нести вариант с той же подписью.
+    onAnswer: async (_question, label) => {
+      const handle = liveHandle;
+      if (!handle || (!!transport.clientScope && !transport.clientScope.write)) return;
+      const same = (a: string, b: string): boolean => a.replace(/\s+/gu, ' ').trim() === b.replace(/\s+/gu, ' ').trim();
+      const shown = (screen: ScreenState | undefined): { stamp: string; key: string } | undefined => {
+        const q = screen?.kind === 'question' ? screen.question : undefined;
+        const option = q && !q.multi ? q.options.find((o) => !o.free && same(o.label, label)) : undefined;
+        return q && option ? { stamp: q.stamp, key: option.key } : undefined;
+      };
+      try {
+        let screen = handle.state()?.screen;
+        let found = shown(screen);
+        if (!found && screen?.pending === true) {
+          const opened = await handle.act({ kind: 'show-question' });
+          if (opened.ok) found = shown((screen = opened.screen));
+        }
+        if (!found) return toast(t('chat.question.gone'), 'error');
+        const res = await handle.act({ kind: 'answer', stamp: found.stamp, option: found.key });
+        if (!res.ok) toast(t('chat.question.failed'), 'error');
+        else feed.refresh();
+      } catch {
+        toast(t('chat.live.actFailed'), 'error');
+      }
+    },
     onConnection: (ok) => {
       // Связь есть — миниатюры, не дошедшие из-за сбоя, спрашиваются заново (сбой мог
       // прийтись между опросами, и переписка его не заметила).

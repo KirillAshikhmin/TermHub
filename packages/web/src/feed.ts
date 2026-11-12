@@ -23,6 +23,7 @@ import { t } from './i18n';
 import { renderMarkdown } from './markdown';
 import { sfeedHash } from './routes';
 import { mountSessionBar } from './tabs';
+import type { FeedQuestion } from './api';
 import type { FeedEntry, FeedOptions, FeedPage, FeedResult, Transport } from './transport';
 import { errorScreen, iconButton, renderHoloBar, svgIcon, wireToolbar } from './ui';
 import { allTokens, formatDuration, formatElapsed, formatTokens, sessionUsage } from './usage';
@@ -184,6 +185,10 @@ export interface FeedChatOptions {
   emptyState?: (reason: 'no-transcript' | 'no-agent') => HTMLElement | null;
   /** Миниатюры картинок под сообщениями человека и агента (`chat-images.ts`). */
   images?: { attach(box: HTMLElement, text: string): void };
+  /** Ответить на вопрос из его записи в переписке: вариант неотвеченного вопроса становится
+   *  кнопкой. Ждёт ли вопрос ответа на экране агента, решает получатель. Нет — запись
+   *  вопроса только читается. */
+  onAnswer?: (question: FeedQuestion, label: string) => Promise<void>;
 }
 
 /** Монтирует ленту сессии в host. */
@@ -606,8 +611,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   };
 
   /** Вопрос, который агент задал: значок, текст с оформлением, варианты с пояснениями и
-   *  данный ответ — выбранный вариант выделен, свой текст стоит строкой «ответ: …». Это
-   *  запись переписки, а не карточка над полем ввода: ответить из неё нельзя. */
+   *  данный ответ — выбранный вариант выделен, свой текст стоит строкой «ответ: …». У
+   *  одиночного вопроса без ответа варианты — кнопки (`chat.onAnswer`): ответ уходит в
+   *  агент, если вопрос на его экране ещё ждёт. */
   const renderQuestion = (box: HTMLElement, entry: FeedEntry, linker: PathLinker): HTMLElement => {
     box.className = 'th-feed__entry th-feed__entry--question';
     box.dataset.kind = 'question';
@@ -633,6 +639,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       body.append(text);
       const given = q.answer ?? [];
       const labels = new Set((q.options ?? []).map((o) => o.label));
+      const pick = q.answer === undefined && !q.multi && entry.questions!.length === 1 ? chat?.onAnswer : undefined;
       if (q.options?.length) {
         const list = document.createElement('ul');
         list.className = 'th-q__options';
@@ -652,6 +659,22 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
             hint.className = 'th-q__hint';
             hint.textContent = o.hint;
             li.append(hint);
+          }
+          if (pick) {
+            li.classList.add('is-pickable');
+            li.setAttribute('role', 'button');
+            li.tabIndex = 0;
+            const run = (): void => {
+              if (list.classList.contains('is-busy')) return;
+              list.classList.add('is-busy');
+              void pick(q, o.label).finally(() => list.classList.remove('is-busy'));
+            };
+            li.addEventListener('click', run);
+            li.addEventListener('keydown', (ev) => {
+              if (ev.key !== 'Enter' && ev.key !== ' ') return;
+              ev.preventDefault();
+              run();
+            });
           }
           list.append(li);
         }
