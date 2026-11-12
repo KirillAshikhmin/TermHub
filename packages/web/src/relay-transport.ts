@@ -58,6 +58,11 @@ const CONTROL_CHANNEL = 0;
 const FIRST_TERM_CHANNEL = 1;
 /** Тайм-аут ответа на LIST (покрывает и начальный хендшейк). */
 const LIST_TIMEOUT_MS = 10_000;
+/** Срок ответа на действие чата. Агент нажимает клавиши и после каждого шага ждёт экран:
+ *  отправка поверх текста в строке — около 8 с, перед ней в очереди сессии может стоять
+ *  сверка списка команд (до ~10 с) и ещё одно действие. Общий 10-секундный срок сдавался
+ *  раньше агента, и повтор доставлял запрос второй раз. */
+const ACT_TIMEOUT_MS = 45_000;
 // Молчание агента на объявление возможностей: старый агент незнакомый кадр просто
 // игнорирует, поэтому ждать ответа как обычного запроса нельзя — 2 с и «не умеет».
 const CAPS_TIMEOUT_MS = 2000;
@@ -1142,16 +1147,21 @@ export class RelayTransport implements Transport {
     });
   }
 
-  /** Запрос чата: кадр с id, ответ тем же id, срок — LIST_TIMEOUT_MS. Тело ответа
-   *  приходит без id — это уже готовый результат (значение, в том числе отказ). */
-  private chatCall<T>(type: FrameType, label: string, payload: Record<string, unknown>): Promise<T> {
+  /** Запрос чата: кадр с id, ответ тем же id, срок — LIST_TIMEOUT_MS (у действия свой).
+   *  Тело ответа приходит без id — это уже готовый результат (значение, в том числе отказ). */
+  private chatCall<T>(
+    type: FrameType,
+    label: string,
+    payload: Record<string, unknown>,
+    timeoutMs = LIST_TIMEOUT_MS,
+  ): Promise<T> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
     const id = ++this.chatReqId;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingChat.delete(id);
         reject(new Error(`${label} timeout`));
-      }, LIST_TIMEOUT_MS);
+      }, timeoutMs);
       this.pendingChat.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
       this.sendFrame(jsonFrame(type, CONTROL_CHANNEL, { id, ...payload }));
     });
@@ -1162,7 +1172,7 @@ export class RelayTransport implements Transport {
   }
 
   act(session: string, action: ChatAction): Promise<ActResult> {
-    return this.chatCall<ActResult>(FrameType.Act, 'act', { session, action });
+    return this.chatCall<ActResult>(FrameType.Act, 'act', { session, action }, ACT_TIMEOUT_MS);
   }
 
   commands(session: string): Promise<CommandsResult> {

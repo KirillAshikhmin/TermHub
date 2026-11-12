@@ -99,7 +99,7 @@ export async function sessionLive(session: string, sources?: Partial<LiveSources
  *  одной сессии идут строго по очереди — два сразу перемешали бы клавиши. */
 export function sessionAct(session: string, action: ChatAction, sources?: Partial<LiveSources>): Promise<ActResult> {
   const src = withDefaults(sources);
-  return serial(`${src.socketName ?? ''}\u0000${session}`, async () => {
+  return sessionQueue(session, src.socketName, async () => {
     try {
       const ctx = await look(session, src);
       if (!ctx.ok) return ctx;
@@ -108,6 +108,12 @@ export function sessionAct(session: string, action: ChatAction, sources?: Partia
       return fail('lookup-failed', `cannot act in ${session}: ${describe(err)}`);
     }
   });
+}
+
+/** Очередь клавиш сессии (ключ — сокет tmux и имя сессии): всё, что нажимает клавиши в
+ *  панели агента, идёт через неё — действия чата и сверка списка команд. */
+export function sessionQueue<T>(session: string, socketName: string | undefined, job: () => Promise<T>): Promise<T> {
+  return serial(`${socketName ?? ''}\u0000${session}`, job);
 }
 
 interface Ctx {

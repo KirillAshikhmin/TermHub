@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { sessionCommands, type CommandsSources } from '../src/agent-commands.js';
+import { sessionAct } from '../src/agent-live.js';
 import { profileOf } from '../src/agent-profiles.js';
 import type { TranscriptResult } from '../src/agent-transcript.js';
 
@@ -328,5 +329,49 @@ describe('sessionCommands — сверка с экраном агента', () =
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(true);
     expect(sim.sent.length).toBeGreaterThan(0);
+  });
+  it('действие, пришедшее во время сверки, шлёт первую клавишу только после возврата пустой строки', async () => {
+    const sim = new Sim(full());
+    // Запрос чата приходит, когда сверка уже сняла свой экран («строка пуста») и вот-вот
+    // наберёт «/»: без общей очереди его текст вставился бы следом за «/».
+    let act: ReturnType<typeof sessionAct> | undefined;
+    let lineAtPaste: string | undefined;
+    let keysBeforePaste: string[] = [];
+    let captures = 0;
+    const base = sim.sources();
+    const sources: Partial<CommandsSources> = {
+      ...base,
+      capture: async (session) => {
+        captures++;
+        // Третий снимок — первый снимок самой сверки (до него — экран и адрес панели).
+        if (captures === 3) act = sessionAct('work', { kind: 'prompt', text: 'hello' }, sources);
+        return base.capture!(session);
+      },
+      send: async (session, bytes, pane) => {
+        const keys = new TextDecoder().decode(bytes);
+        if (keys === '\r' && lineAtPaste !== undefined) {
+          sim.sent.push(keys);
+          sim.input = '';
+          return;
+        }
+        return base.send!(session, bytes, pane);
+      },
+      paste: async (_s, text) => {
+        lineAtPaste ??= sim.input;
+        keysBeforePaste = sim.sent.slice();
+        sim.input += text;
+      },
+    };
+    const res = await sessionCommands('work', sources);
+    if (!res.ok) throw new Error(res.detail);
+    expect(act).toBeDefined();
+    const acted = await act!;
+    // Текст запроса лёг в пустую строку: «/» сверки к этому моменту уже стёрт.
+    expect(lineAtPaste).toBe('');
+    expect(keysBeforePaste[0]).toBe('/');
+    expect(keysBeforePaste.at(-1)).toBe('\x7f');
+    expect(acted).toMatchObject({ ok: true });
+    expect(res.verified).toBe(true);
+    expect(sim.input).toBe('');
   });
 });

@@ -22,7 +22,7 @@ import { svgIcon, toast } from './ui';
 export interface ComposerDeps {
   transport: Transport;
   live: LiveHandle;
-  thread: Pick<FeedHandle, 'addLocal' | 'refresh'>;
+  thread: Pick<FeedHandle, 'addLocal' | 'refresh' | 'entries'>;
 }
 
 export interface ComposerHandle {
@@ -41,6 +41,8 @@ const DRAFT_PREFIX = 'termhub.chatDraft.';
 const MAX_SUGGEST = 50;
 /** Через сколько после отправки ещё раз просим приращение, если записи всё нет. */
 const RECHECK_MS = 2000;
+/** Сколько записей хвоста беседы просматривается, когда выясняем, дошёл ли запрос. */
+const DELIVERY_TAIL = 50;
 
 interface Attachment {
   id: number;
@@ -353,36 +355,78 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   const restoreToField = (text: string): void => setField(field.value ? `${text}\n${field.value}` : text);
   const failText = (res: Extract<ActResult, { ok: false }>): string => res.detail || res.reason;
 
-  const deliver = async (msg: LocalMessage, text: string, state: LocalState, over: boolean): Promise<void> => {
+  /** Текст запроса, как его сравнивать с записью беседы: без разницы в пробелах и переносах. */
+  const plain = (s: string): string => s.replace(/\s+/gu, ' ').trim();
+  const humanIds = (): Set<string> => new Set(thread.entries().filter((e) => e.kind === 'human').map((e) => e.id));
+
+  /** Дошёл ли запрос, на который не пришло ответа: свежий экран агента и хвост беседы.
+   *  `known` — реплики человека, показанные до отправки: такой же давний запрос доставкой
+   *  не считается. `null` — выяснить не удалось, и слать повторно вслепую нельзя. */
+  const wasDelivered = async (text: string, known: Set<string>): Promise<boolean | null> => {
+    try {
+      await live.refresh();
+      const tail = await transport.feed(session, { limit: DELIVERY_TAIL });
+      if (!tail.ok) return null;
+      const want = plain(text);
+      return tail.entries.some((e) => {
+        if (e.kind !== 'human' || known.has(e.id)) return false;
+        const got = plain(e.text);
+        return got === want || (e.truncated === true && got !== '' && want.startsWith(got));
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  /** `unsure` — прошлая попытка осталась без ответа (таймаут, обрыв): агент мог её получить
+   *  и донажать, поэтому перед повтором сверяемся с экраном и беседой. */
+  const deliver = async (
+    msg: LocalMessage,
+    text: string,
+    state: LocalState,
+    over: boolean,
+    unsure?: Set<string>,
+  ): Promise<void> => {
     if (sending || disposed) return;
     sending = true;
     syncSend();
     msg.set(state);
+    const known = unsure ?? humanIds();
     const back = (note: string, extra: Array<{ label: string; run(): void }> = []): void =>
       msg.set('failed', {
         note,
         actions: [
           ...extra,
-          { label: t('chat.composer.retry'), run: () => void deliver(msg, text, state, over) },
+          { label: t('chat.composer.retry'), run: () => void deliver(msg, text, state, over, lost ? known : undefined) },
           { label: t('chat.composer.toField'), run: () => { msg.remove(); restoreToField(text); } },
         ],
       });
+    const delivered = (): void => {
+      msg.set(state, { delivered: true });
+      thread.refresh();
+      window.setTimeout(() => {
+        if (!disposed) thread.refresh();
+      }, RECHECK_MS);
+    };
+    // Ответа нет — судьба запроса неизвестна; отказ агента, наоборот, значит «не отправлен».
+    let lost = unsure !== undefined;
     try {
+      if (unsure) {
+        const arrived = await wasDelivered(text, unsure);
+        if (disposed) return;
+        if (arrived) return delivered();
+        if (arrived === null) return back(t('chat.composer.noConnection'));
+      }
       let res: ActResult;
       try {
         res = await live.act(over ? { kind: 'prompt', text, over: true } : { kind: 'prompt', text });
       } catch {
+        lost = true;
         back(t('chat.composer.noConnection'));
         return;
       }
-      if (res.ok) {
-        msg.set(state, { delivered: true });
-        thread.refresh();
-        window.setTimeout(() => {
-          if (!disposed) thread.refresh();
-        }, RECHECK_MS);
-        return;
-      }
+      lost = false;
+      if (res.ok) return delivered();
       if (res.reason === 'stale' && !over) {
         if (!(live.state()?.screen.input ?? '')) await live.refresh().catch(() => {});
         if (live.state()?.screen.input) {

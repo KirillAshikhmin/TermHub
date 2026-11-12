@@ -9,7 +9,7 @@ import type { LiveHandle } from '../src/chat-live';
 import { setLang, t } from '../src/i18n';
 import { setTermPrefs } from '../src/term-prefs';
 import type { LocalAction, LocalMessage, LocalState } from '../src/feed';
-import type { Transport } from '../src/transport';
+import type { FeedEntry, FeedResult, Transport } from '../src/transport';
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 6; i += 1) await new Promise((r) => setTimeout(r, 0));
@@ -41,7 +41,16 @@ interface Fx {
   refreshes: { n: number };
   nextAct: { value: ActResult | Error | Promise<ActResult> };
   screen: { value: ScreenState };
+  /** Что уже показано в переписке и что отдаст хвост ленты. */
+  shown: { value: FeedEntry[] };
+  feedTail: { value: FeedResult | Error };
+  live: { refresh: ReturnType<typeof vi.fn> };
   transport: Record<string, ReturnType<typeof vi.fn>>;
+}
+
+const human = (id: string, text: string): FeedEntry => ({ id, at: 0, kind: 'human', text });
+function page(entries: FeedEntry[]): FeedResult {
+  return { ok: true, agent: 'claude', entries, head: '1:0', tail: '1:9', bof: true, eof: true, skipped: 0 } as FeedResult;
 }
 
 function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; session?: string } = {}): Fx {
@@ -50,6 +59,8 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
   const refreshes = { n: 0 };
   const nextAct: Fx['nextAct'] = { value: { ok: true, screen: IDLE } };
   const screen = { value: IDLE };
+  const shown: Fx['shown'] = { value: [] };
+  const feedTail: Fx['feedTail'] = { value: page([]) };
   const live = {
     state: () => ({ ok: true, agent: 'claude', tested: true, screen: screen.value, modes: [], models: [] }) as LiveState,
     act: vi.fn(async (a: ChatAction) => {
@@ -63,6 +74,7 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
     teardown() {},
   } as unknown as LiveHandle;
   const thread = {
+    entries: () => shown.value,
     refresh: () => {
       refreshes.n += 1;
     },
@@ -84,6 +96,11 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
   };
   const transport = {
     clientScope: opts.scope ?? null,
+    feed: vi.fn(async () => {
+      const v = feedTail.value;
+      if (v instanceof Error) throw v;
+      return v;
+    }),
     commands: vi.fn(async () => {
       const c = opts.commands ?? ({ ok: true, commands: COMMANDS, verified: true } as CommandsResult);
       if (c instanceof Error) throw c;
@@ -122,6 +139,9 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
     refreshes,
     nextAct,
     screen,
+    shown,
+    feedTail,
+    live: live as unknown as Fx['live'],
     transport: transport as unknown as Fx['transport'],
   };
 }
@@ -271,6 +291,71 @@ describe('отказы', () => {
     expect(fx.locals[0]!.state).toBe('failed');
     expect(fx.locals[0]!.note).toBe(t('chat.composer.noConnection'));
     expect(fx.send.disabled).toBe(true); // поле пусто, текст жив в записи
+  });
+
+  it('ответа не дождались, а запрос дошёл: «Повторить» сначала перечитывает экран и ленту и второй раз не шлёт', async () => {
+    fx = mount();
+    fx.shown.value = [human('old', 'раньше')];
+    fx.nextAct.value = new Error('act timeout');
+    type(fx, 'сделай  это\nи то');
+    key(fx, 'Enter');
+    await flush();
+    const rec = fx.locals[0]!;
+    expect(rec.state).toBe('failed');
+    expect(fx.acts).toHaveLength(1);
+
+    // Агент тем временем донажимал: запрос уже в беседе.
+    fx.feedTail.value = page([human('old', 'раньше'), human('new', 'сделай это\nи то')]);
+    fx.nextAct.value = { ok: true, screen: IDLE };
+    rec.actions[0]!.run();
+    await flush();
+    expect(fx.live.refresh).toHaveBeenCalledTimes(1);
+    expect(fx.transport.feed).toHaveBeenCalledTimes(1);
+    expect(fx.acts).toHaveLength(1);
+    expect(rec.state).toBe('sending');
+    expect(rec.delivered).toBe(true);
+    expect(rec.actions).toHaveLength(0);
+    expect(fx.refreshes.n).toBeGreaterThan(0);
+  });
+
+  it('ответа не дождались, в беседе запроса нет: «Повторить» шлёт заново; такой же давний запрос доставкой не считается', async () => {
+    fx = mount();
+    fx.shown.value = [human('old', 'повтори')];
+    fx.nextAct.value = new Error('act timeout');
+    type(fx, 'повтори');
+    key(fx, 'Enter');
+    await flush();
+    fx.feedTail.value = page([human('old', 'повтори')]);
+    fx.nextAct.value = { ok: true, screen: IDLE };
+    fx.locals[0]!.actions[0]!.run();
+    await flush();
+    expect(fx.transport.feed).toHaveBeenCalledTimes(1);
+    expect(fx.acts).toHaveLength(2);
+    expect(fx.locals[0]!.delivered).toBe(true);
+  });
+
+  it('ответа не дождались, и ленту перечитать не удалось: «Повторить» не шлёт вслепую', async () => {
+    fx = mount();
+    fx.nextAct.value = new Error('act timeout');
+    type(fx, 'текст');
+    key(fx, 'Enter');
+    await flush();
+    fx.feedTail.value = new Error('network');
+    fx.nextAct.value = { ok: true, screen: IDLE };
+    const rec = fx.locals[0]!;
+    rec.actions[0]!.run();
+    await flush();
+    expect(fx.acts).toHaveLength(1);
+    expect(rec.state).toBe('failed');
+    expect(rec.note).toBe(t('chat.composer.noConnection'));
+    expect(rec.actions.map((a) => a.label)).toEqual([t('chat.composer.retry'), t('chat.composer.toField')]);
+
+    // Лента ответила отказом — тоже не доказательство, что запроса нет.
+    fx.feedTail.value = { ok: false, reason: 'lookup-failed', detail: '' } as FeedResult;
+    rec.actions[0]!.run();
+    await flush();
+    expect(fx.acts).toHaveLength(1);
+    expect(rec.state).toBe('failed');
   });
 
   it('текст в строке агента: выбор «забрать» или «поверх»', async () => {

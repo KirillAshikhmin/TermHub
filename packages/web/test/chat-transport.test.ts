@@ -2,7 +2,7 @@
 // Методы чата транспорта: live / act / commands / feedDetail / pasteFile на двух проводах.
 // LAN — подменённый fetch (что ушло и что вернулось), relay — FakeWebSocket с настоящей
 // крипто (relay-harness.ts). Формы тел — по interfaces.md, написаны руками.
-import { decodeFrame, frameJson, FrameType, jsonFrame } from '@termhub/protocol';
+import { decodeFrame, encodeFrame, frameJson, FrameType, jsonFrame } from '@termhub/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installRelayHarness, streaming } from './relay-harness';
@@ -161,6 +161,36 @@ describe('чат через relay', () => {
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(10_000);
     await secondFailed;
+  });
+
+  it('act ждёт дольше остальных: агент нажимает клавиши до 45 с, и ответ после 10 с ещё принимается', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, ws, agentEnc, agentDec, firstEncrypted } = streaming();
+      // Связь жива: агент отвечает на проверки, просто действие ещё не закончил.
+      const alive = async (seconds: number): Promise<void> => {
+        for (let i = 0; i < seconds; i += 5) {
+          await vi.advanceTimersByTimeAsync(5000);
+          ws.deliverBinary(agentEnc.push(encodeFrame({ type: FrameType.Pong, channel: 0, payload: new Uint8Array(0) })));
+        }
+      };
+      const p = transport.act('work', { kind: 'prompt', text: 'hi' });
+      let failed: unknown;
+      p.catch((e) => (failed = e));
+      const req = frameJson<{ id: number }>(decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array)));
+      await alive(40);
+      expect(failed).toBeUndefined();
+      const body = { ok: true, screen: { kind: 'working' } };
+      ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.ActResult, 0, { id: req.id, ...body })));
+      await expect(p).resolves.toEqual(body);
+
+      const late = transport.act('work', { kind: 'interrupt' });
+      const lateFailed = expect(late).rejects.toThrow('act timeout');
+      await alive(45);
+      await lateFailed;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('feedDetail: кадр Feed с detail; ответ — FeedResult', async () => {

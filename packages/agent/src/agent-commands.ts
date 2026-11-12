@@ -18,7 +18,7 @@ import path from 'node:path';
 
 import type { AgentId, ChatCommand, CommandsResult } from '@termhub/protocol/chat';
 
-import { agentInfo, sessionLive, type LiveSources } from './agent-live.js';
+import { agentInfo, sessionLive, sessionQueue, type LiveSources } from './agent-live.js';
 import { profileOf, type AgentProfile } from './agent-profiles.js';
 import { readPopup, readScreen } from './agent-screen.js';
 import { resolve as resolvePane } from './agent-transcript.js';
@@ -283,7 +283,9 @@ function reconcileOnce(
   if (active) return active;
   const failed = failedAt.get(key);
   if (failed !== undefined && Date.now() - failed < RETRY_AFTER_MS) return Promise.resolve(null);
-  const job = reconcile(src, session, profile).then((outcome) => {
+  // Сверка нажимает клавиши в той же панели, что и действия чата, поэтому идёт в их очереди:
+  // запрос, пришедший посреди сверки, ждёт, пока строка агента снова опустеет.
+  const job = sessionQueue(session, src.socketName, () => reconcile(src, session, profile)).then((outcome) => {
     if (outcome && !(outcome.complete && outcome.clean)) failedAt.set(key, Date.now());
     return outcome;
   });
