@@ -129,6 +129,8 @@ export interface TranscriptSources {
   /** Пути файлов, открытых этими процессами. */
   openFiles(pids: number[]): Promise<string[]>;
   processCwd(pid: number): Promise<string | undefined>;
+  /** Путь исполняемого файла процесса; процесса уже нет или он чужой — undefined. */
+  executable(pid: number): Promise<string | undefined>;
   /** Корневые неархивные беседы opencode с этим рабочим каталогом. Базы нет — пустой
    *  список, схема незнакома — null. */
   opencodeSessions(db: string, directory: string): Promise<OpencodeSession[] | null>;
@@ -271,6 +273,7 @@ function withDefaults(over?: Partial<TranscriptSources>): TranscriptSources {
     panePids: over?.panePids ?? panePidsFor(socketName),
     openFiles: over?.openFiles ?? (ON_LINUX ? procOpenFiles : defaultOpenFiles),
     processCwd: over?.processCwd ?? (ON_LINUX ? procCwd : defaultProcessCwd),
+    executable: over?.executable ?? (ON_LINUX ? procExecutable : defaultExecutable),
     opencodeSessions: over?.opencodeSessions ?? defaultOpencodeSessions,
     paneTitle: over?.paneTitle ?? ((pane) => defaultPaneTitle(pane, socketName)),
     codexThreads: over?.codexThreads ?? ((cwd) => readCodexThreads(home, cwd)),
@@ -417,6 +420,34 @@ export async function procCwd(pid: number, root = '/proc'): Promise<string | und
     if (goneOrForeign(err)) return undefined;
     throw err;
   }
+}
+
+/** Linux: исполняемый файл — ссылка `/proc/<pid>/exe`. */
+export async function procExecutable(pid: number, root = '/proc'): Promise<string | undefined> {
+  try {
+    return await fsp.readlink(path.join(root, String(pid), 'exe'));
+  } catch (err) {
+    if (goneOrForeign(err)) return undefined;
+    throw err;
+  }
+}
+
+/** macOS: исполняемый файл — первая запись `txt` в открытых файлах процесса (за ней идут
+ *  загрузчик и библиотеки). */
+async function defaultExecutable(pid: number): Promise<string | undefined> {
+  let stdout: string;
+  try {
+    ({ stdout } = await exec('lsof', ['-w', '-a', '-p', String(pid), '-d', 'txt', '-Fn'], {
+      encoding: 'utf8',
+      timeout: LSOF_TIMEOUT_MS,
+      maxBuffer: EXEC_MAX_BUFFER,
+    }));
+  } catch (err) {
+    // Код 1 — процесса уже нет: смотреть нечего, и это не сбой обхода.
+    if ((err as { code?: unknown }).code === 1) return undefined;
+    throw err;
+  }
+  return stdout.split('\n').find((line) => line.startsWith('n/'))?.slice(1);
 }
 
 async function defaultOpenFiles(pids: number[]): Promise<string[]> {
@@ -1103,6 +1134,29 @@ export async function resolve(pane: string, sources?: Partial<TranscriptSources>
     return fail('lookup-failed', `Определить агента панели ${pane} не удалось: ${describe(err)}`);
   }
   return fail('no-agent', `В панели ${pane} нет агента, пишущего транскрипт`);
+}
+
+/** Клиенты Codex, запущенные в панели (сам процесс панели или его потомки; демон
+ *  `app-server` клиентом не считается). Таблица процессов и панели — из того же снимка,
+ *  что у `resolve`: при одних источниках второй раз они не опрашиваются. Сбой — исключением. */
+export async function codexClients(pane: string, sources?: Partial<TranscriptSources>): Promise<ProcessRow[]> {
+  const src = withDefaults(sources);
+  const snap = fresh(src);
+  const pid = (await panesOf(snap, src)).get(pane);
+  if (pid === undefined) return [];
+  const processes = await processesOf(snap, src);
+  const rows: ProcessRow[] = [];
+  for (const id of descendants(pid, processes)) {
+    const row = processes.get(id);
+    if (row && isCodexTui(row.args ?? '')) rows.push(row);
+  }
+  return rows;
+}
+
+/** Исполняемый файл процесса тем же способом, каким определитель смотрит открытые файлы:
+ *  `lsof` на macOS, `/proc` на Linux. */
+export function processExecutable(pid: number, sources?: Partial<TranscriptSources>): Promise<string | undefined> {
+  return withDefaults(sources).executable(pid);
 }
 
 /** Сбрасывает и кэш обхода Codex, и снимок общих источников. */

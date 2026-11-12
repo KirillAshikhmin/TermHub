@@ -2,7 +2,7 @@
 // агентов. Экран «панели» — снимки живых агентов из fixtures/screens; подставной агент
 // меняет снимок в ответ на клавиши, а тест сверяет, какие клавиши ушли и в каком порядке.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -119,6 +119,30 @@ describe('sessionLive — что на экране агента', () => {
     expect(live).toMatchObject({ ok: true, agent: 'codex', version: '0.999.0', tested: false, model: 'GPT-6-Astra' });
   });
 
+  it('версию ищут в панели сессии; запасная версия из беседы названа в логе один раз', async () => {
+    const asked: unknown[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const f = fake('codex', 'idle', undefined, {
+        version: async (_agent, _file, _command, where) => {
+          asked.push(where);
+          return { version: '0.161.0', source: 'transcript' };
+        },
+      });
+      const src = { ...f.src, home: '/home/u', socketName: 'termhub-test' };
+      const live = await sessionLive('work', src);
+      await sessionLive('work', src);
+      // Признак «проверено» по запасной версии считается как раньше.
+      expect(live).toMatchObject({ ok: true, version: '0.161.0', tested: false });
+      expect(asked[0]).toEqual({ pane: PANE, socketName: 'termhub-test', home: '/home/u' });
+      expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+        'session work: codex version 0.161.0 is taken from the transcript, the running program did not name one',
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('вопрос на экране приезжает с вариантами и отпечатком', async () => {
     const live = await sessionLive('work', fake('claude', 'permission').src);
     expect(live).toMatchObject({
@@ -170,9 +194,17 @@ describe('agentInfo — версия и модель из транскрипта
           '',
         ].join('\n'),
       );
-      expect(await agentInfo('claude', claude, 'node')).toEqual({ version: '2.1.322', model: 'Sonnet 5.5' });
+      expect(await agentInfo('claude', claude, 'node')).toEqual({
+        version: '2.1.322',
+        model: 'Sonnet 5.5',
+        source: 'transcript',
+      });
       // Команда панели — версия идущего процесса: она старше записанной в файле.
-      expect(await agentInfo('claude', claude, '2.1.400')).toEqual({ version: '2.1.400', model: 'Sonnet 5.5' });
+      expect(await agentInfo('claude', claude, '2.1.400')).toEqual({
+        version: '2.1.400',
+        model: 'Sonnet 5.5',
+        source: 'process',
+      });
 
       const codex = path.join(dir, 'codex.jsonl');
       writeFileSync(
@@ -184,7 +216,11 @@ describe('agentInfo — версия и модель из транскрипта
           '',
         ].join('\n'),
       );
-      expect(await agentInfo('codex', codex, 'node')).toEqual({ version: '0.167.0', model: 'gpt-9-unknown' });
+      expect(await agentInfo('codex', codex, 'node')).toEqual({
+        version: '0.167.0',
+        model: 'gpt-9-unknown',
+        source: 'transcript',
+      });
       expect(await agentInfo('codex', path.join(dir, 'missing.jsonl'), 'node')).toEqual({});
     } finally {
       rmSync(dir, { recursive: true, force: true });

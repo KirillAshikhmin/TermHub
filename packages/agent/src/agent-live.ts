@@ -10,6 +10,7 @@
 
 import fsp from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
 
 import type {
   ActResult,
@@ -32,7 +33,14 @@ import {
   readScreen,
   type PendingInvite,
 } from './agent-screen.js';
-import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
+import {
+  codexClients,
+  processExecutable,
+  resolve as resolvePane,
+  HEAD_BYTES,
+  type TranscriptResult,
+  type TranscriptSources,
+} from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
 import { failureReason } from './tmux-run.js';
@@ -41,6 +49,20 @@ import { failureReason } from './tmux-run.js';
 export interface AgentInfo {
   version?: string;
   model?: string;
+  /** Откуда версия: `process` — у программы, запущенной в панели; `transcript` — из файла
+   *  беседы, то есть версия, которой беседа записана (у Codex — которой поток был создан).
+   *  Вторая — запасная: запущенная программа может быть уже другой. */
+  source?: 'process' | 'transcript';
+}
+
+/** Где искать запущенную программу агента: панель и источники определителя. */
+export interface VersionPlace {
+  /** Адрес панели в виде определителя: `сессия:@окно.%панель`. */
+  pane: string;
+  socketName?: string;
+  home?: string;
+  /** Подмена источников определителя — шов для тестов. */
+  sources?: Partial<TranscriptSources>;
 }
 
 /** Источники — единственный шов: живой tmux, определитель и чтение транскрипта
@@ -55,8 +77,8 @@ export interface LiveSources {
   paste(session: string, text: string, pane?: string): Promise<void>;
   resolve(pane: string): Promise<TranscriptResult>;
   /** Версия и модель: `file` — текущий файл беседы (его может ещё не быть),
-   *  `command` — команда панели. */
-  version(agent: AgentId, file: string | undefined, command: string): Promise<AgentInfo>;
+   *  `command` — команда панели, `where` — панель, в которой ищется запущенная программа. */
+  version(agent: AgentId, file: string | undefined, command: string, where?: VersionPlace): Promise<AgentInfo>;
   sleep(ms: number): Promise<void>;
   /** Монотонные часы, мс: по ним живёт память ключей идемпотентности. */
   now(): number;
@@ -96,7 +118,10 @@ export async function sessionLive(session: string, sources?: Partial<LiveSources
     const ctx = await look(session, src);
     if (!ctx.ok) return ctx;
     const { profile, screen } = ctx;
-    const info = await src.version(ctx.agent, ctx.file, ctx.command).catch((): AgentInfo => ({}));
+    const info = await src
+      .version(ctx.agent, ctx.file, ctx.command, { pane: ctx.pane, socketName: src.socketName, home: src.home })
+      .catch((): AgentInfo => ({}));
+    noteSource(session, ctx.agent, info);
     // Экран называет модель сейчас (Codex), транскрипт — по последнему ответу.
     const model = screen.model ?? info.model;
     return {
@@ -917,25 +942,123 @@ function withDefaults(over?: Partial<LiveSources>): LiveSources {
 const infoCache = new Map<string, { size: number; mtimeMs: number; info: AgentInfo }>();
 const INFO_CACHE_MAX = 64;
 
-/** Версия и модель агента из его транскрипта (и из команды панели у Claude). Экран
- *  опрашивается раз в секунду, поэтому ответ помнится, пока файл не изменился. */
-export async function agentInfo(agent: AgentId, file: string | undefined, command: string): Promise<AgentInfo> {
-  const named = agent === 'claude' ? /^\d+\.\d+\.\d+$/.exec(command)?.[0] : undefined;
-  if (!file) return named ? { version: named } : {};
-  let info: AgentInfo = {};
-  try {
-    const stat = await fsp.stat(file);
-    const cached = infoCache.get(file);
-    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) info = cached.info;
-    else {
-      info = await readInfo(agent, file, stat.size);
-      if (infoCache.size >= INFO_CACHE_MAX) infoCache.clear();
-      infoCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, info });
-    }
-  } catch {
-    info = {};
+/** Версия запущенного агента по процессу: ключ — pid клиента и время его старта (pid
+ *  оболочки панели не меняется, когда агента в ней перезапускают). Помнится и «версии
+ *  путь не назвал»: исполняемый файл процесса за его жизнь не меняется. */
+const versionCache = new Map<string, string | undefined>();
+const VERSION_CACHE_MAX = 64;
+/** Сколько каталогов вверх от исполняемого файла ищется `package.json` пакета codex. */
+const PACKAGE_DEPTH = 8;
+/** О каких запасных версиях уже сказано в логе. */
+const sourceNoted = new Set<string>();
+
+/** Версия в пути исполняемого файла Codex: сегмент `X.Y.Z` (хвост вроде `.upgrading` или
+ *  `-aarch64-apple-darwin` отбрасывается), стоящий после сегмента с именем codex, — так
+ *  кладут Homebrew (`Caskroom/codex/0.167.0/bin/codex`) и автономная установка
+ *  (`.codex/packages/…/releases/0.167.0-…/bin/codex`). Сегмент до имени codex — версия
+ *  чего-то чужого (node в пути пакета npm) и не берётся. */
+export function versionFromPath(file: string): string | undefined {
+  const parts = file.split('/');
+  if (!/^codex/i.test(parts.at(-1) ?? '')) return undefined;
+  let named = false;
+  let version: string | undefined;
+  for (const part of parts.slice(0, -1)) {
+    const found = /^(\d+\.\d+\.\d+)(?:[.+-].*)?$/.exec(part);
+    if (found && named) version = found[1];
+    else if (/codex/i.test(part)) named = true;
   }
-  return named ? { ...info, version: named } : info;
+  return version;
+}
+
+/** Путь версии не несёт (пакет npm): версия ближайшего вверх по пути `package.json`,
+ *  чей пакет называется codex. */
+async function versionFromPackage(file: string): Promise<string | undefined> {
+  let dir = path.dirname(file);
+  for (let depth = 0; depth < PACKAGE_DEPTH; depth++) {
+    try {
+      const pkg = field(JSON.parse(await fsp.readFile(path.join(dir, 'package.json'), 'utf8')));
+      const version = /^\d+\.\d+\.\d+/.exec(typeof pkg?.version === 'string' ? pkg.version : '')?.[0];
+      if (version && typeof pkg?.name === 'string' && /(?:^|\/)codex(?:$|-)/.test(pkg.name)) return version;
+    } catch {
+      // Файла нет или он не разобрался — смотрим каталогом выше.
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return undefined;
+}
+
+/** Версия Codex, запущенного в панели: по исполняемому файлу его процесса. `codex --version`
+ *  не зовётся намеренно — файл по этому пути обновление могло уже заменить. */
+async function runningCodex(where: VersionPlace): Promise<string | undefined> {
+  const sources = { home: where.home, socketName: where.socketName, ...where.sources };
+  for (const row of await codexClients(where.pane, sources)) {
+    const key = `${row.pid}:${row.startedAt.getTime()}`;
+    let version = versionCache.get(key);
+    if (!versionCache.has(key)) {
+      const file = await processExecutable(row.pid, sources);
+      // Процесс успел выйти — помнить нечего.
+      if (file === undefined) continue;
+      version = versionFromPath(file) ?? (await versionFromPackage(file));
+      if (versionCache.size >= VERSION_CACHE_MAX) versionCache.clear();
+      versionCache.set(key, version);
+    }
+    if (version !== undefined) return version;
+  }
+  return undefined;
+}
+
+export function clearVersionCache(): void {
+  versionCache.clear();
+  sourceNoted.clear();
+}
+
+/** Запасной источник версии назван в логе один раз на сессию и версию: плашка «не
+ *  проверено» по такой версии может говорить о программе, которая уже не запущена. */
+function noteSource(session: string, agent: AgentId, info: AgentInfo): void {
+  if (info.source !== 'transcript' || info.version === undefined) return;
+  const key = `${session}\u0000${agent}\u0000${info.version}`;
+  if (sourceNoted.has(key)) return;
+  if (sourceNoted.size >= VERSION_CACHE_MAX) sourceNoted.clear();
+  sourceNoted.add(key);
+  console.warn(
+    `session ${session}: ${agent} version ${info.version} is taken from the transcript, the running program did not name one`,
+  );
+}
+
+/** Версия и модель агента. Версия — у запущенной программы: у Claude это команда панели
+ *  (процесс назван номером версии), у Codex — исполняемый файл клиента в панели `where`.
+ *  Версия из транскрипта — запасная и помечена `source: 'transcript'`: у Codex это
+ *  `cli_version` первой строки, то есть версия, которой поток был создан. Модель — из
+ *  транскрипта. Экран опрашивается раз в секунду, поэтому чтение файла помнится, пока он
+ *  не изменился, а версия программы — пока жив её процесс. */
+export async function agentInfo(
+  agent: AgentId,
+  file: string | undefined,
+  command: string,
+  where?: VersionPlace,
+): Promise<AgentInfo> {
+  const running =
+    agent === 'claude'
+      ? /^\d+\.\d+\.\d+$/.exec(command)?.[0]
+      : where && (await runningCodex(where).catch(() => undefined));
+  let info: AgentInfo = {};
+  if (file)
+    try {
+      const stat = await fsp.stat(file);
+      const cached = infoCache.get(file);
+      if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) info = cached.info;
+      else {
+        info = await readInfo(agent, file, stat.size);
+        if (infoCache.size >= INFO_CACHE_MAX) infoCache.clear();
+        infoCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, info });
+      }
+    } catch {
+      info = {};
+    }
+  if (running) return { ...info, version: running, source: 'process' };
+  return info.version === undefined ? info : { ...info, source: 'transcript' };
 }
 
 async function readInfo(agent: AgentId, file: string, size: number): Promise<AgentInfo> {
