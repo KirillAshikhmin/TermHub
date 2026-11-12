@@ -2143,3 +2143,34 @@ describe('Codex: указатель списка — не строка ввод�
     expect(readScreen(['• done', '', '› план:', '  1. первое', '  2. второе', ...HINT], codex)).toMatchObject({ kind: 'idle' });
   });
 });
+
+describe('Codex: нумерованный список в настоящей строке ввода (повторное ревью)', () => {
+  const codex = profileOf('codex');
+  const LIST = '1. первое\n2. второе\n3. третье';
+
+  /** Живой снимок строки ввода с другим текстом: оформление знака «›» сохранено. */
+  function typed(name: string, was: string): string[] {
+    const lines = shot('codex', name);
+    const at = lines.findIndex((line) => line.endsWith(`\x1b[0m ${was}`));
+    expect(at, name).toBeGreaterThan(0);
+    const head = lines[at]!.slice(0, lines[at]!.length - was.length);
+    return [...lines.slice(0, at), `${head}1. первое`, '  2. второе', '  3. третье', ...lines.slice(at + 1)];
+  }
+
+  it('ждущий и работающий Codex: знак «›» нарисован отдельно — нумерованные строки под ним это текст', () => {
+    expect(readScreen(typed('input', 'hello draft text'), codex)).toMatchObject({ kind: 'idle', input: LIST });
+    expect(readScreen(typed('queue-hint', 'note one'), codex)).toMatchObject({ kind: 'working', input: LIST });
+  });
+
+  it('знак «›» без своего оформления, а текст за пробелом — с оформлением: это строка ввода, не пункт списка', () => {
+    const lines = ['• done', '', '› \x1b[2mAsk Codex to do anything\x1b[0m', '', '  model · Ready · Context 50% left', ''];
+    expect(readScreen(lines, codex)).toMatchObject({ kind: 'idle', input: '' });
+    expect(read('codex', 'fresh')).toMatchObject({ kind: 'idle', input: '' });
+  });
+
+  it('пункт списка одним куском с указателем и нумерованный текст без оформления — по-прежнему не строка ввода', () => {
+    const hint = ['', '  use the arrows to move', ''];
+    expect(readScreen(['  Pick', '', '\x1b[1;36m› 1. Yes\x1b[0m', '  2. No', ...hint], codex).kind).toBe('unknown');
+    expect(readScreen(['  Pick', '', '› 1. Yes', '  2. No', ...hint], codex).kind).toBe('unknown');
+  });
+});

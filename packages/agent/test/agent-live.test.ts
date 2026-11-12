@@ -1493,3 +1493,22 @@ describe('в панели должен идти процесс агента (р�
     expect(f.sent).toEqual(['paste:hello']);
   });
 });
+
+describe('запрос нумерованным списком доходит до клавиши отправки (повторное ревью)', () => {
+  const LIST = '1. первое\n2. второе\n3. третье';
+  const typed = (name: string, was: string): string[] => {
+    const lines = shot('codex', name);
+    const at = lines.findIndex((line) => line.endsWith(`\x1b[0m ${was}`));
+    const head = lines[at]!.slice(0, lines[at]!.length - was.length);
+    return [...lines.slice(0, at), `${head}1. первое`, '  2. второе', '  3. третье', ...lines.slice(at + 1)];
+  };
+
+  it('ждущему Codex — Enter, работающему — Tab', async () => {
+    const idle = fake('codex', 'idle', (sent) => (sent.startsWith('paste:') ? typed('input', 'hello draft text') : sent === '\r' ? 'working' : undefined));
+    expect(await act(idle, { kind: 'prompt', text: LIST })).toMatchObject({ ok: true });
+    expect(idle.sent).toEqual([`paste:${LIST}`, '\r']);
+    const busy = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? typed('queue-hint', 'note one') : sent === '\t' ? 'queued-followup' : undefined));
+    expect(await act(busy, { kind: 'prompt', text: LIST })).toMatchObject({ ok: true });
+    expect(busy.sent).toEqual([`paste:${LIST}`, '\t']);
+  });
+});
