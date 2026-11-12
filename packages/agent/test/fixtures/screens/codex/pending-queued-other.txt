@@ -1,0 +1,49 @@
+
+  [38;2;148;226;213m• [39mCats
+  [38;2;148;226;213m• [39mDogs
+
+[48;5;8m
+[38;2;99;168;248m↪ [2mRe: Cats or dogs?[0m[48;5;8m
+
+  Dogs
+
+
+[2m[49m• [0mThe 90-second sleep is still running.
+
+[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250msleep[38;2;205;214;244m 90[39m
+[2m  └ (no output)[0m
+
+[2m• [0mdone
+
+[2m  Worked for 1m 53s • 20:57[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mCall request_user_input_async twice in a row: first with the single question "Tea or coffee?" (options Tea, Coffee), then with the single question "Red or blue?" (options Red,
+  Blue). Do not wait for answers; right after that run `sleep 150`, then say done.
+
+
+[2m[49m• [0mI’ll ask both questions, then immediately run the 150-second sleep.
+
+[38;2;99;168;248m? Tea or coffee?[39m
+
+  [38;2;148;226;213m• [39mTea
+  [38;2;148;226;213m• [39mCoffee
+
+[38;2;99;168;248m? Red or blue?[39m
+
+  [38;2;148;226;213m• [39mRed
+  [38;2;148;226;213m• [39mBlue
+
+Working [2m(35s • [0;1mesc[0;2m to interrupt) · 1 background terminal running · /ps to view · /stop to close[0m
+
+[2m• [0mQueued follow-up inputs
+
+  [2m2 of 2[0m
+  [38;2;99;168;248mRed or blue?[39m
+
+    1. Red
+    2. Blue
+  [1m[38;2;99;168;248m› 3. [0;2mOther[0m
+
+  [1menter[0m submit   [1m⌃][0m skip   [1m⇧→[0m prev question
+

@@ -1,0 +1,10 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 181,
+  "rows": 49,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "Anonymized live screen: Codex is working and holds a question in its «Queued follow-up inputs» block above the input line («? 1 question», «⇧← to answer»). Everything above the working line and the directory in the status line are replaced with neutral text; the working line, the block, the input line and the footer keep the captured bytes. The version is the one of the installed CLI, the session itself did not name it."
+}

@@ -1,0 +1,10 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 181,
+  "rows": 49,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "The first of two queued questions opened with Shift+Left: counter «1 of 2», footer adds «⇧← next question». The working directory in the screen is shortened to ~/probe/work."
+}

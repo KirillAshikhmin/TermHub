@@ -6,7 +6,7 @@ import type { AgentId, ScreenKind } from '@termhub/protocol/chat';
 import { describe, expect, it } from 'vitest';
 
 import { profileOf } from '../src/agent-profiles.js';
-import { readPopup, readScreen } from '../src/agent-screen.js';
+import { readPending, readPopup, readScreen } from '../src/agent-screen.js';
 
 // Снимки сняты с живых агентов на отдельном сокете tmux (`capture-pane -p -e`):
 // рядом с каждым — json с версией агента и размером панели. Ожидания ниже выписаны
@@ -98,6 +98,14 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'pending-side': 'idle',
     'pending-side-wide': 'idle',
     'pending-opened': 'question',
+    'pending-queued': 'working',
+    'pending-queued-timer': 'working',
+    'pending-queued-two': 'working',
+    'pending-queued-opened': 'question',
+    'pending-queued-first-of-two': 'question',
+    'pending-queued-last-of-two': 'question',
+    'pending-queued-other': 'question',
+    'pending-queued-other-typed': 'question',
     'menu-model': 'menu',
     'menu-permissions': 'menu',
     'menu-update': 'menu',
@@ -1300,6 +1308,99 @@ describe('вопросы: пояснения вариантов, заметка,
       expect(screen.input).toBe('');
       expect(screen.question).toBeUndefined();
     }
+  });
+
+  it('Codex: вопрос в очереди отложенного ввода — работа с признаком «вопрос ждёт», клавиша и число из приглашения', () => {
+    const lines = shot('codex', 'pending-queued');
+    expect(readScreen(lines, codex)).toMatchObject({ kind: 'working', status: 'Working', input: '', pending: true });
+    expect(readPending(lines, codex)).toEqual({ key: 'answerPending', count: 1 });
+    const three = lines.map((l) => l.replace('1 question', '3 questions'));
+    expect(readPending(three, codex)).toEqual({ key: 'answerPending', count: 3 });
+    // Побочная беседа — другое приглашение и другая клавиша.
+    expect(readPending(shot('codex', 'pending-side'), codex)).toEqual({ key: 'showPending' });
+    expect(readPending(shot('codex', 'idle'), codex)).toBeUndefined();
+    expect(readPending(shot('codex', 'pending-opened'), codex)).toBeUndefined();
+  });
+
+  it('Codex: строка счёта с таймером и строка работы с припиской — та же работа с признаком', () => {
+    // Замер: «? 1 question · 20s», «Working (24s • esc to interrupt) · 1 background terminal running · …».
+    const timer = shot('codex', 'pending-queued-timer');
+    expect(readScreen(timer, codex)).toMatchObject({ kind: 'working', status: 'Working', elapsed: 24, pending: true });
+    expect(readPending(timer, codex)).toEqual({ key: 'answerPending', count: 1 });
+    const two = shot('codex', 'pending-queued-two');
+    expect(readScreen(two, codex)).toMatchObject({ kind: 'working', elapsed: 21, pending: true });
+    expect(readPending(two, codex)).toEqual({ key: 'answerPending', count: 2 });
+  });
+
+  it('Codex: вопрос из очереди, открытый Shift+←, — вопрос с вариантами и своим ответом последним', () => {
+    const screen = read('codex', 'pending-queued-opened');
+    expect(screen.pending).toBeUndefined();
+    const q = screen.question!;
+    expect(q.title).toBe('Cats or dogs?');
+    expect(q.body).toBeUndefined();
+    expect(q.options).toEqual([
+      { key: '1', label: 'Cats', selected: true },
+      { key: '2', label: 'Dogs' },
+      { key: '3', label: 'Other', free: true },
+    ]);
+    expect(q.freeText).toBe(true);
+    expect(q.stamp).toBe(questionStamp('Cats or dogs?', q.options));
+
+    const first = read('codex', 'pending-queued-first-of-two').question!;
+    expect(first.title).toBe('Tea or coffee?');
+    expect(first.options.map((o) => o.label)).toEqual(['Tea', 'Coffee', 'Other']);
+    const last = read('codex', 'pending-queued-last-of-two').question!;
+    expect(last.title).toBe('Red or blue?');
+    expect(last.options.map((o) => o.label)).toEqual(['Red', 'Blue', 'Other']);
+    expect(last.stamp).not.toBe(first.stamp);
+
+    // Указатель на «Other» и набранный в нём текст вопроса не меняют: отпечаток прежний.
+    const other = read('codex', 'pending-queued-other').question!;
+    expect(other.options[2]).toEqual({ key: '3', label: 'Other', selected: true, free: true });
+    const typed = read('codex', 'pending-queued-other-typed').question!;
+    expect(typed.options[2]).toEqual({ key: '3', label: 'green', selected: true, free: true });
+    expect([other.stamp, typed.stamp]).toEqual([last.stamp, last.stamp]);
+  });
+
+  it('Codex: тот же диалог без заголовка очереди над ним — не вопрос', () => {
+    const lines = shot('codex', 'pending-queued-opened');
+    const head = lines.findIndex((l) => plain([l])[0] === '• Queued follow-up inputs');
+    expect(head).toBeGreaterThan(0);
+    const cut = readScreen(lines.filter((_, i) => i !== head), codex);
+    expect(cut.kind).toBe('unknown');
+    expect(cut.question).toBeUndefined();
+  });
+
+  it('Codex: блок очереди узнаётся по месту и по всем строкам вместе, а не по словам', () => {
+    const lines = shot('codex', 'pending-queued');
+    const at = (word: string): number => lines.findIndex((l) => plain([l])[0]!.includes(word));
+    const head = at('Queued follow-up inputs');
+    const count = at('? 1 question');
+    const hint = at('⇧← to answer');
+    expect([count - head, hint - count]).toEqual([1, 1]);
+    const without = (...drop: number[]): string[] => lines.filter((_, i) => !drop.includes(i));
+    const none = (changed: string[]): void => {
+      const screen = readScreen(changed, codex);
+      expect(screen.kind).toBe('working');
+      expect(screen.pending).toBeUndefined();
+      expect(readPending(changed, codex)).toBeUndefined();
+    };
+    // Нет строки приглашения, нет строки счёта, нет заголовка блока.
+    none(without(hint));
+    none(without(count));
+    none(without(head));
+    // В очереди стоит не вопрос.
+    none(lines.map((l, i) => (i === count ? '  ↳ check the build log' : l)));
+    // Те же три строки в переписке: между ними и строкой ввода стоит реплика агента.
+    const talk = [...lines];
+    talk.splice(hint + 1, 0, '', '• The block above is a quote from the manual.');
+    none(talk);
+    // Те же строки выше по экрану, а блока над строкой ввода нет.
+    const above = without(head, count, hint);
+    above.splice(2, 0, lines[head]!, lines[count]!, lines[hint]!, '');
+    none(above);
+    // Строка приглашения, набранная текстом (не тусклая), — не приглашение агента.
+    none(lines.map((l, i) => (i === hint ? '    ⇧← to answer' : i === count ? '  ? 1 question' : l)));
   });
 
   it('признака «вопрос ждёт» нет там, где агент его не рисует', () => {

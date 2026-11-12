@@ -22,7 +22,7 @@ import type {
 } from '@termhub/protocol/chat';
 
 import { profileOf, isTested, type AgentProfile, type NotesSign } from './agent-profiles.js';
-import { readScreen } from './agent-screen.js';
+import { readPending, readScreen, type PendingInvite } from './agent-screen.js';
 import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
@@ -54,6 +54,8 @@ export interface LiveSources {
 const STEP_MS = 120;
 /** Сколько ждать, что экран подтвердит шаг. */
 const SETTLE_MS = 2400;
+/** Сколько опросов подряд экран обязан не меняться, чтобы считаться устоявшимся. */
+const CALM_STEPS = 2;
 /** Сколько ждать меню модели (история 49а). */
 const MENU_MS = 5000;
 /** Пауза между нажатиями стирания строки: в замере они шли раздельно. */
@@ -126,6 +128,8 @@ interface Ctx {
   command: string;
   file: string | undefined;
   screen: ScreenState;
+  /** Приглашение «вопрос ждёт» на этом экране: какая клавиша им названа. */
+  invite: PendingInvite | undefined;
 }
 
 /** Сессия → снимок экрана → агент панели → распознанный экран. */
@@ -162,6 +166,7 @@ async function look(session: string, src: LiveSources): Promise<Ctx | ChatFailur
     command: shot.command,
     file,
     screen: readScreen(shot.lines, profile),
+    invite: readPending(shot.lines, profile),
   };
 }
 
@@ -175,6 +180,23 @@ async function peek(ctx: Ctx): Promise<ScreenState> {
   const shot = await ctx.src.capture(ctx.session);
   if (shot.pane !== ctx.pane) return UNKNOWN;
   return readScreen(shot.lines, ctx.profile);
+}
+
+interface Seen {
+  screen: ScreenState;
+  invite: PendingInvite | undefined;
+  lines: string[];
+}
+
+/** То же, что `peek`, но со строками экрана и приглашением «вопрос ждёт». */
+async function peekSeen(ctx: Ctx): Promise<Seen> {
+  const shot = await ctx.src.capture(ctx.session);
+  if (shot.pane !== ctx.pane) return { screen: UNKNOWN, invite: undefined, lines: [] };
+  return {
+    screen: readScreen(shot.lines, ctx.profile),
+    invite: readPending(shot.lines, ctx.profile),
+    lines: shot.lines,
+  };
 }
 
 /** Ждёт, пока экран подтвердит шаг. `met: false` — срок вышел, экран — последний. */
@@ -317,16 +339,48 @@ async function mode(ctx: Ctx, to: unknown): Promise<ActResult> {
   return done(now);
 }
 
-/** Ожидающий вопрос: агент говорит о нём в подвале и показывает по клавише. Клавиша идёт
- *  один раз и только при этом признаке на экране; вопрос не открылся — отказ. */
+/** Ожидающий вопрос: агент говорит о нём приглашением и показывает по клавише. Клавишу
+ *  называет приглашение, которое сейчас на экране; идёт она один раз. Обычное
+ *  приглашение обязано открыть вопрос — иначе отказ. Приглашение `anyScreen`: после
+ *  клавиши ждём устоявшийся экран и отдаём его как есть — вопрос, иной экран или
+ *  неузнанный (чат покажет его окошком терминала); ни повторных, ни возвратных клавиш.
+ *  Приглашение осталось на месте прежним — клавиша не сработала, `stale`. */
 async function showQuestion(ctx: Ctx): Promise<ActResult> {
-  const { screen, profile } = ctx;
-  if (!atInput(screen) || screen.pending !== true) return fail('stale', 'no pending question on the agent screen');
-  const key = profile.keys.showPending;
+  const { screen, profile, invite } = ctx;
+  if (!atInput(screen) || screen.pending !== true || !invite) {
+    return fail('stale', 'no pending question on the agent screen');
+  }
+  const key = profile.keys[invite.key];
   if (key === undefined) return fail('unsupported', 'agent has no key to show a pending question');
+  const sign = profile.screen.pending?.find((item) => item.key === invite.key);
   await press(ctx, key);
-  const opened = await until(ctx, (s) => (s.kind === 'question' || s.kind === 'permission') && s.question !== undefined);
-  return opened.met ? done(opened.screen) : fail('stale', 'the pending question did not open');
+  const isQuestion = (s: ScreenState): boolean =>
+    (s.kind === 'question' || s.kind === 'permission') && s.question !== undefined;
+  if (sign?.anyScreen !== true) {
+    const opened = await until(ctx, isQuestion);
+    return opened.met ? done(opened.screen) : fail('stale', 'the pending question did not open');
+  }
+  let last: Seen = { screen: UNKNOWN, invite: undefined, lines: [] };
+  let calm = 0;
+  for (let i = Math.ceil(SETTLE_MS / STEP_MS); i > 0; i--) {
+    await ctx.src.sleep(STEP_MS);
+    const now = await peekSeen(ctx);
+    if (isQuestion(now.screen)) return done(now.screen);
+    calm = sameLines(now.lines, last.lines) ? calm + 1 : 0;
+    last = now;
+    // Приглашения прежнего вида нет, и экран перестал меняться — он и есть ответ.
+    if (!sameInvite(now.invite, invite) && calm >= CALM_STEPS) break;
+  }
+  if (sameInvite(last.invite, invite)) return fail('stale', 'the pending question prompt did not change');
+  return done(last.screen);
+}
+
+function sameInvite(a: PendingInvite | undefined, b: PendingInvite): boolean {
+  return a !== undefined && a.key === b.key && a.count === b.count;
+}
+
+function sameLines(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((line, index) => line === b[index]);
 }
 
 /** Переход к шагу полосы над вопросом: по клавише на шаг, после каждой экран обязан
@@ -442,7 +496,9 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
     if (free.selected) {
       // Указатель уже на свободном варианте: цифра стала бы текстом. Набранное там
       // до нас не дополняем.
-      if (!profile.screen.free.test(label)) return fail('stale', 'the free-text answer already has text');
+      const blankLabel =
+        profile.screen.free.test(label) || profile.screen.dialogs.some((d) => d.freeLast?.test(label) === true);
+      if (!blankLabel) return fail('stale', 'the free-text answer already has text');
     } else {
       await press(ctx, free.key);
       const at = await until(ctx, (s) => same(s) && freeOf(s)?.selected === true);

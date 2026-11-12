@@ -628,6 +628,84 @@ describe('sessionAct — показать ожидающий вопрос', () =
   });
 });
 
+describe('sessionAct — вопрос в очереди отложенного ввода Codex (⇧← to answer)', () => {
+  const SHIFT_LEFT = '\x1b[1;2D';
+  const queued = (): string[] => shot('codex', 'pending-queued');
+
+  it('клавишу выбирает приглашение на экране: Shift+←, а не Ctrl+/; вопрос открылся — в ответе он', async () => {
+    const f = fake('codex', 'pending-queued', () => 'pending-queued-opened');
+    const result = await act(f, { kind: 'show-question' });
+    expect(f.sent).toEqual([SHIFT_LEFT]);
+    expect(screenOf(result)).toMatchObject({ kind: 'question', question: { title: 'Cats or dogs?' } });
+    // То же с таймером в строке счёта и с двумя вопросами: открывается первый.
+    const two = fake('codex', 'pending-queued-two', () => 'pending-queued-first-of-two');
+    expect(screenOf(await act(two, { kind: 'show-question' })).question?.title).toBe('Tea or coffee?');
+    expect(two.sent).toEqual([SHIFT_LEFT]);
+  });
+
+  it('ответ на открытый вопрос очереди: цифра отвечает сама (замер)', async () => {
+    const f = fake('codex', 'pending-queued-opened', () => 'working');
+    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'pending-queued-opened'), option: '2' });
+    expect(f.sent).toEqual(['2']);
+    expect(screenOf(result).kind).toBe('working');
+  });
+
+  it('свой ответ: цифра ставит указатель на «Other», текст набирается в его строке, Enter отвечает', async () => {
+    const f = fake('codex', 'pending-queued-last-of-two', (sent) =>
+      sent === '3' ? 'pending-queued-other' : sent === 'green' ? 'pending-queued-other-typed' : 'pending-queued-opened',
+    );
+    const stamp = stampOf('codex', 'pending-queued-last-of-two');
+    const result = await act(f, { kind: 'answer', stamp, text: 'green' });
+    expect(f.sent).toEqual(['3', 'green', '\r']);
+    // После ответа Codex показывает следующий вопрос очереди.
+    expect(screenOf(result).question?.title).toBe('Cats or dogs?');
+    // В строке «Other» уже набран текст — чужое не дополняем.
+    const typed = fake('codex', 'pending-queued-other-typed');
+    expect(await act(typed, { kind: 'answer', stamp, text: 'more' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(typed.sent).toEqual([]);
+  });
+
+  it('после клавиши экран иной или не узнан — успех с фактическим экраном, клавиша одна', async () => {
+    const other = fake('codex', 'pending-queued', () => 'menu-model');
+    expect(screenOf(await act(other, { kind: 'show-question' }))).toMatchObject({ kind: 'menu', menu: 'model' });
+    expect(other.sent).toEqual([SHIFT_LEFT]);
+
+    const strange = fake('codex', 'pending-queued', () => ['', 'Answer the queued question', '', '  something new']);
+    expect(await act(strange, { kind: 'show-question' })).toMatchObject({ ok: true, screen: { kind: 'unknown' } });
+    expect(strange.sent).toEqual([SHIFT_LEFT]);
+
+    // Блок ушёл, агент работает дальше — тоже фактический экран, без возвратных клавиш.
+    const gone = fake('codex', 'pending-queued', () => 'working');
+    const after = screenOf(await act(gone, { kind: 'show-question' }));
+    expect(after.kind).toBe('working');
+    expect(after.pending).toBeUndefined();
+    expect(gone.sent).toEqual([SHIFT_LEFT]);
+  });
+
+  it('приглашение осталось на месте без изменений — stale, клавиша ушла один раз', async () => {
+    const f = fake('codex', 'pending-queued');
+    expect(await act(f, { kind: 'show-question' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([SHIFT_LEFT]);
+    // Идёт только время в строке работы — приглашение то же.
+    const ticking = fake('codex', 'pending-queued', () => queued().map((l) => l.replace('37m 06s', '37m 09s')));
+    expect(await act(ticking, { kind: 'show-question' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(ticking.sent).toEqual([SHIFT_LEFT]);
+  });
+
+  it('вопросов в очереди стало меньше — приглашение изменилось: фактический экран', async () => {
+    const two = queued().map((l) => l.replace('1 question', '2 questions'));
+    const f = fake('codex', two, () => 'pending-queued');
+    expect(screenOf(await act(f, { kind: 'show-question' }))).toMatchObject({ kind: 'working', pending: true });
+    expect(f.sent).toEqual([SHIFT_LEFT]);
+  });
+
+  it('блока на экране нет — stale без клавиш', async () => {
+    const f = fake('codex', 'working');
+    expect(await act(f, { kind: 'show-question' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([]);
+  });
+});
+
 describe('sessionAct — прерывание, режим, модель, сжатие, строка агента', () => {
   it('interrupt шлёт клавишу прерывания работающему агенту', async () => {
     const f = fake('claude', 'working', () => 'idle');

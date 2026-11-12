@@ -79,6 +79,47 @@ describe('профиль Codex', () => {
     expect(profile.tested).toEqual({ min: '0.167.0', max: '0.167.0' });
   });
 
+  it('ожидающий вопрос: два приглашения, у каждого своя клавиша', () => {
+    // Ctrl+/ — побочная беседа; Shift+← — очередь отложенного ввода (CSI 1;2 D).
+    expect(profile.keys.showPending).toBe('\x1f');
+    expect(profile.keys.answerPending).toBe('\x1b[1;2D');
+    const [side, queued] = profile.screen.pending!;
+    expect(side!.key).toBe('showPending');
+    expect(side!.footer!.test('Side from main thread · main needs input · ⌃/ to switch · ⌃c to close')).toBe(true);
+    expect(side!.footer!.test('Side from main thread · main finished · ⌃/ to switch')).toBe(false);
+    expect(side!.anyScreen).toBeUndefined();
+    expect(queued!.key).toBe('answerPending');
+    // В очереди бывает не только вопрос: после клавиши годится любой изменившийся экран.
+    expect(queued!.anyScreen).toBe(true);
+    const block = queued!.block!;
+    expect(block.head.test('• Queued follow-up inputs')).toBe(true);
+    expect(block.head.test('  • Queued follow-up inputs')).toBe(false);
+    expect(block.count.exec('  ? 1 question')?.[1]).toBe('1');
+    expect(block.count.exec('  ? 12 questions')?.[1]).toBe('12');
+    expect(block.count.exec('  ? 1 question · 20s')?.[1]).toBe('1');
+    expect(block.count.test('  ? 1 question about cats')).toBe(false);
+    expect(block.count.test('  ↳ check the build log')).toBe(false);
+    expect(block.hint.test('    ⇧← to answer')).toBe(true);
+    expect(block.hint.test('    ⌥↑ to edit')).toBe(false);
+    // Строка работы с припиской о фоновом терминале — та же строка работы.
+    const status = profile.screen.status.exec(
+      'Working (24s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close',
+    );
+    expect([status?.[1], status?.[2]]).toEqual(['Working', '24s']);
+    // Вопрос, открытый из очереди: свой подвал, заголовок блока над ним, «Other» последним.
+    const opened = profile.screen.dialogs.find((d) => d.under !== undefined)!;
+    expect(opened.kind).toBe('question');
+    expect(opened.under!.test('• Queued follow-up inputs')).toBe(true);
+    expect(opened.footer!.test('enter submit   ⌃] skip   ⇧→ main prompt')).toBe(true);
+    expect(opened.footer!.test('enter submit   ⌃] skip   ⇧→ main prompt   ⇧← next question')).toBe(true);
+    expect(opened.footer!.test('enter submit   ⌃] skip   ⇧→ prev question')).toBe(true);
+    expect(opened.footer!.test('enter to submit answer')).toBe(false);
+    expect(opened.freeLast!.test('Other')).toBe(true);
+    expect(opened.freeLast!.test('Other things')).toBe(false);
+    expect(profileOf('claude').screen.pending).toBeUndefined();
+    expect(profileOf('claude').keys.answerPending).toBeUndefined();
+  });
+
   it('запрос разрешения на инструмент MCP — данные профиля: свой подвал и свой заголовок', () => {
     const hint = 'enter to submit | esc to cancel';
     const mcp = profile.screen.dialogs.filter((d) => d.footer?.test(hint));

@@ -20,7 +20,7 @@ import type {
   ScreenStep,
 } from '@termhub/protocol/chat';
 
-import type { AgentProfile, DialogSign } from './agent-profiles.js';
+import type { AgentProfile, DialogSign, PendingSign } from './agent-profiles.js';
 
 /** Строка экрана без оформления; `dim` — номера знаков, нарисованных тусклым, `lit` —
  *  нарисованных с фоном (так агент выделяет текущий шаг полосы над вопросом). */
@@ -131,6 +131,26 @@ function isSeparator(text: string): boolean {
   return /^[\s─━╌╍┄┈▔═]+$/u.test(text) && text.trim().length >= 4;
 }
 
+/** Приглашение «вопрос ждёт» на экране: какую клавишу профиля оно называет и сколько
+ *  вопросов ждёт, если агент это рисует. */
+export interface PendingInvite {
+  key: PendingSign['key'];
+  count?: number;
+}
+
+/** Приглашение «вопрос ждёт» у строки ввода агента. Нет строки ввода или приглашения —
+ *  `undefined`. Тот же разбор, что ставит `pending` в `readScreen`. */
+export function readPending(lines: string[], profile: AgentProfile): PendingInvite | undefined {
+  const rows = lines.map(strip);
+  const bottom = lastFilled(rows, rows.length - 1);
+  if (bottom < 0) return undefined;
+  let invite: PendingInvite | undefined;
+  readAbove(rows, trayOf(rows, bottom, profile).last, profile, (found) => {
+    invite = found;
+  });
+  return invite;
+}
+
 export function readScreen(lines: string[], profile: AgentProfile): ScreenState {
   const rows = lines.map(strip);
   const bottom = lastFilled(rows, rows.length - 1);
@@ -145,7 +165,12 @@ export function readScreen(lines: string[], profile: AgentProfile): ScreenState 
 }
 
 /** Экран без списка под подвалом: `last` — его последняя строка. */
-function readAbove(rows: Row[], last: number, profile: AgentProfile): ScreenState {
+function readAbove(
+  rows: Row[],
+  last: number,
+  profile: AgentProfile,
+  note?: (invite: PendingInvite) => void,
+): ScreenState {
   const signs = profile.screen;
 
   // Подсказка под вариантами бывает перенесена на две строки.
@@ -170,7 +195,7 @@ function readAbove(rows: Row[], last: number, profile: AgentProfile): ScreenStat
   if (menu) return { kind: 'menu', menu };
 
   const box = findBox(rows, last, profile);
-  if (typeof box !== 'string') return readBox(rows, box, profile);
+  if (typeof box !== 'string') return readBox(rows, box, profile, note);
 
   for (const dialog of signs.dialogs) {
     if (dialog.footer || !dialog.title) continue;
@@ -388,6 +413,7 @@ function readDialog(
   }
   if (top < 0 || options.length < 2 || extra.length > 0) return null;
   options.reverse();
+  if (dialog.freeLast) options[options.length - 1]!.free = true;
   if (options.some((option, index) => option.key !== String(index + 1))) return null;
   if (options.filter((option) => option.selected).length > 1) return null;
 
@@ -457,9 +483,14 @@ function readHead(
   };
   let gap = 0;
   let seen = false;
+  let under = dialog.under === undefined;
   for (let i = from; i >= 0 && from - i < HEAD_LIMIT; i--) {
     const text = rows[i]!.text;
     if (signs.rule.test(text)) break;
+    if (dialog.under?.test(text)) {
+      under = true;
+      break;
+    }
     if (text.trim() === '') {
       gap++;
       if (seen && gap >= 2) break;
@@ -481,7 +512,7 @@ function readHead(
     current.unshift(text.trim());
   }
   close();
-  if (paragraphs.length === 0) return null;
+  if (!under || paragraphs.length === 0) return null;
 
   const at = dialog.title
     ? paragraphs.findIndex((lines) => dialog.title!.test(lines[0]!))
@@ -577,7 +608,32 @@ function ruledBox(rows: Row[], bottom: number, last: number, profile: AgentProfi
   return { top, first: top + 1, last: bottom - 1, footer, items: itemsOf(footer, profile) };
 }
 
-function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
+/** Приглашение «вопрос ждёт»: признак в подвале либо блок прямо над строкой ввода —
+ *  последние непустые строки над ней, от строки с отступом вверх до заголовка. */
+function pendingOf(rows: Row[], box: Box, profile: AgentProfile): PendingInvite | undefined {
+  for (const sign of profile.screen.pending ?? []) {
+    if (sign.footer?.test(box.footer)) return { key: sign.key };
+    const block = sign.block;
+    if (!block) continue;
+    const end = lastFilled(rows, box.top - 1);
+    let head = end;
+    while (head >= 0 && end - head < STATUS_REACH && /^\s/u.test(rows[head]!.text)) head--;
+    if (head < 0 || head === end || !block.head.test(rows[head]!.text)) continue;
+    for (let i = head + 1; i < end; i++) {
+      const found = block.count.exec(rows[i]!.text);
+      const hint = rows[i + 1]!;
+      if (found && block.hint.test(hint.text) && hint.dim.size > 0) return { key: sign.key, count: Number(found[1]) };
+    }
+  }
+  return undefined;
+}
+
+function readBox(
+  rows: Row[],
+  box: Box,
+  profile: AgentProfile,
+  note?: (invite: PendingInvite) => void,
+): ScreenState {
   const signs = profile.screen;
   const head = rows[box.first]!;
   const start = signs.prompt.length + 1;
@@ -643,6 +699,8 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
   const working = status !== undefined || signs.working?.test(box.footer) === true;
   const model = modelOf(box.items, profile);
   const mode = modeOf(box.footer, profile, model !== undefined || busy !== undefined || ready);
+  const invite = pendingOf(rows, box, profile);
+  if (invite) note?.(invite);
   return {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),
@@ -654,7 +712,7 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
     ...(queued > 0 ? { queued } : {}),
     ...(model === undefined ? {} : { model }),
     ...backgroundOf(box.footer, profile),
-    ...(signs.pending?.test(box.footer) ? { pending: true } : {}),
+    ...(invite ? { pending: true } : {}),
   };
 }
 
