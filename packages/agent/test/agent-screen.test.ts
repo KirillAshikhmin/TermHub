@@ -54,6 +54,12 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     slash: 'idle',
     queued: 'working',
     shell: 'unknown',
+    'idle-footer-item': 'idle',
+    'agents-working': 'working',
+    'agents-idle': 'idle',
+    'agents-input': 'idle',
+    'agents-question': 'question',
+    'agents-permission': 'permission',
   },
   codex: {
     idle: 'idle',
@@ -135,14 +141,42 @@ describe.each(AGENTS)('снимки %s: один набор проверок н�
     }
   });
 
-  it('пустой экран и экран оболочки → unknown', () => {
+  it('пустой экран и экран оболочки → unknown, и причина названа', () => {
     const profile = profileOf(agent);
-    expect(readScreen([], profile)).toEqual({ kind: 'unknown' });
-    expect(readScreen(['', '', ''], profile)).toEqual({ kind: 'unknown' });
-    expect(readScreen(shot('claude', 'shell'), profile)).toEqual({ kind: 'unknown' });
+    expect(readScreen([], profile)).toEqual({ kind: 'unknown', why: 'empty screen' });
+    expect(readScreen(['', '', ''], profile)).toEqual({ kind: 'unknown', why: 'empty screen' });
+    expect(readScreen(shot('claude', 'shell'), profile)).toEqual({
+      kind: 'unknown',
+      why: 'no agent on screen',
+    });
     expect(
       readScreen(['user@host probe % ls', 'README.md  src', 'user@host probe % '], profile),
-    ).toEqual({ kind: 'unknown' });
+    ).toEqual({ kind: 'unknown', why: 'no agent on screen' });
+  });
+
+  it('обрезанный экран агента: причина своя, не та, что у оболочки и пустого', () => {
+    // Верхняя половина снимка: переписка агента видна, низа со строкой ввода нет.
+    // У Claude не сошлась рамка ввода, у Codex — подвал под строкой ввода.
+    const lines = shot(agent, 'permission');
+    const half = readScreen(lines.slice(0, lines.length >> 1), profileOf(agent));
+    expect(half).toEqual({
+      kind: 'unknown',
+      why: agent === 'claude' ? 'no input frame' : 'footer not recognized',
+    });
+    // Оборван посреди вариантов: последняя строка — вариант без подсказки диалога.
+    const second = plain(lines).findIndex((l) => /^\s*2\. /.test(l));
+    expect(readScreen(lines.slice(0, second + 1), profileOf(agent))).toEqual({
+      kind: 'unknown',
+      why: 'dialog cut off',
+    });
+  });
+
+  it('причина — только у неузнанного экрана, и текста с экрана в ней нет', () => {
+    for (const name of names) {
+      const screen = read(agent, name);
+      if (screen.kind === 'unknown') expect(screen.why).toMatch(/^[a-z ]+$/);
+      else expect(screen).not.toHaveProperty('why');
+    }
   });
 
   it('вопрос при другой ширине панели даёт тот же отпечаток', () => {
@@ -454,6 +488,137 @@ describe('Codex', () => {
   it('списка на экране нет → пусто', () => {
     expect(readPopup(shot('codex', 'idle'), profileOf('codex'))).toEqual([]);
     expect(readPopup(shot('codex', 'permission'), profileOf('codex'))).toEqual([]);
+  });
+});
+
+describe('Claude Code с фоновыми агентами', () => {
+  // Под подвалом стоит список фоновых агентов, в подвале — «1 shell», «← 2 agents»,
+  // «↓ to manage». Низ снимка agents-working снят с живой сессии.
+  const claude = profileOf('claude');
+  const ITEM = /^\s{2}◯ general-purpose\s/;
+
+  /** Тот же снимок со списком из `count` фоновых агентов. */
+  function withAgents(name: string, count: number): string[] {
+    const lines = shot('claude', name);
+    const flat = plain(lines);
+    const first = flat.findIndex((l) => ITEM.test(l));
+    expect(first).toBeGreaterThan(0);
+    const items = Array.from({ length: count }, () => lines[first]!);
+    return [...lines.slice(0, first), ...items];
+  }
+
+  it('работа: строка состояния, время и режим из подвала', () => {
+    expect(read('claude', 'agents-working')).toEqual({
+      kind: 'working',
+      status: 'Bloviating…',
+      elapsed: 15,
+      mode: 'auto',
+      input: '',
+    });
+  });
+
+  it('ожидание ввода и текст в строке ввода', () => {
+    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(read('claude', 'agents-input')).toEqual({
+      kind: 'idle',
+      mode: 'auto',
+      input: 'hello draft text',
+    });
+  });
+
+  it('список от 1 до 10 строк вердикт не меняет и в ответ не попадает', () => {
+    const working = read('claude', 'agents-working');
+    const idle = read('claude', 'agents-input');
+    for (let count = 1; count <= 10; count++) {
+      expect(readScreen(withAgents('agents-working', count), claude)).toEqual(working);
+      expect(readScreen(withAgents('agents-input', count), claude)).toEqual(idle);
+    }
+  });
+
+  it('строка «› Message from @…» в переписке — не ввод и не вопрос', () => {
+    for (const name of ['agents-working', 'agents-idle']) {
+      const lines = shot('claude', name);
+      expect(plain(lines)).toContain('› Message from @general-purpose (ctrl+o to expand)');
+      const screen = readScreen(lines, claude);
+      expect(screen.input).toBe('');
+      expect(screen.question).toBeUndefined();
+      expect(screen.queued).toBeUndefined();
+    }
+    // Та же строка прямо над рамкой ввода.
+    const lines = shot('claude', 'agents-idle');
+    const at = plain(lines).indexOf('› Message from @general-purpose (ctrl+o to expand)');
+    const moved = [
+      ...lines.slice(0, at),
+      '',
+      '',
+      '',
+      ...lines.slice(at, at + 1),
+      ...lines.slice(at + 4),
+    ];
+    expect(moved).toHaveLength(lines.length);
+    expect(readScreen(moved, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+  });
+
+  it('вопрос и разрешение над списком — тот же отпечаток, что без списка', () => {
+    for (const name of ['question', 'permission']) {
+      const bare = read('claude', name);
+      const listed = read('claude', `agents-${name}`);
+      expect(bare.question?.stamp).toMatch(/^[0-9a-f]{16}$/);
+      expect(listed).toEqual(bare);
+      for (let count = 1; count <= 10; count++) {
+        expect(readScreen(withAgents(`agents-${name}`, count), claude)).toEqual(bare);
+      }
+    }
+  });
+
+  it('подвал с подсказкой в скобках, пунктом «⧉ имя» и счётчиком агентов — режим назван', () => {
+    expect(read('claude', 'idle-footer-item')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    // Тот же подвал над списком фоновых агентов и во время работы.
+    const footer = shot('claude', 'idle-footer-item').findLast((l) => l.includes('auto mode on'))!;
+    for (const [name, kind] of [['agents-idle', 'idle'], ['agents-working', 'working']] as const) {
+      const lines = shot('claude', name);
+      const at = lines.findLastIndex((l) => l.includes('auto mode on'));
+      const tail = kind === 'working' ? ' · esc to interrupt' : '';
+      const swapped = [...lines.slice(0, at), footer + tail, ...lines.slice(at + 1)];
+      expect(readScreen(swapped, claude)).toMatchObject({ kind, mode: 'auto', input: '' });
+    }
+  });
+
+  it('незнакомый пункт подвала после узнанного режима экран неузнанным не делает', () => {
+    const lines = shot('claude', 'agents-idle');
+    const at = lines.findLastIndex((l) => l.includes('auto mode on'));
+    for (const item of ['⧉ index', '3 shells', 'some new thing 42', '✦ whatever (ctrl+q)']) {
+      const footer = `  ⏵⏵ auto mode on (shift+tab to cycle) · ${item} · ← 2 agents · ${item}`;
+      const swapped = [...lines.slice(0, at), footer, ...lines.slice(at + 1)];
+      expect(readScreen(swapped, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+      const bare = shot('claude', 'idle-auto');
+      const last = bare.findLastIndex((l) => l.includes('auto mode on'));
+      expect(readScreen([...bare.slice(0, last), footer, ...bare.slice(last + 1)], claude)).toEqual({
+        kind: 'idle',
+        mode: 'auto',
+        input: '',
+      });
+    }
+  });
+
+  it('список сам по себе экран не узнаёт: оболочка и обрезанный снимок остаются unknown', () => {
+    const tray = shot('claude', 'agents-working').slice(-4);
+    expect(readScreen([...shot('claude', 'shell'), ...tray], claude).kind).toBe('unknown');
+    expect(readScreen(tray, claude).kind).toBe('unknown');
+    const lines = shot('claude', 'agents-working');
+    expect(readScreen([...lines.slice(0, lines.length >> 1), ...tray], claude).kind).toBe('unknown');
+  });
+
+  it('под подвалом не список, а что-то ещё — экран не узнан, причина названа', () => {
+    const lines = shot('claude', 'agents-idle');
+    const first = plain(lines).findIndex((l) => ITEM.test(l));
+    const odd = [...lines.slice(0, first - 1), '  something else', '  one more line', '  and more', ''];
+    expect(readScreen(odd, claude)).toEqual({ kind: 'unknown', why: 'content below footer' });
+    // Список длиннее предела профиля — тоже не узнан.
+    expect(readScreen(withAgents('agents-idle', 40), claude)).toEqual({
+      kind: 'unknown',
+      why: 'content below footer',
+    });
   });
 });
 

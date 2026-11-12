@@ -1,0 +1,36 @@
+
+
+[38;5;246m✻[39m [38;5;246mSautéed for 4s · done 17:31[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mCreate a file hello.txt containing the word hello. Use the Write tool.[39m
+
+[38;5;114m[49m⏺[39m [1mWrite[0m(]8;id=1c3ocjm;file:///home/user/probe/hello.txt\hello.txt]8;;\)
+[38;5;246m  ⎿  [39mWrote [1m1[0m line to [1m]8;id=1c3ocjm;file:///home/user/probe/hello.txt\hello.txt[0m]8;;\
+     [2m[38;5;231m 1 [0m[38;5;231mhello[39m
+
+[38;5;231m⏺[39m Файл [38;5;153mhello.txt[39m создан в рабочей директории, в нём одно слово [38;5;153mhello[39m.
+
+[38;5;246m✻[39m [38;5;246mBrewed for 7s · done 17:32[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mUse the AskUserQuestion tool to ask me one question: which color do I prefer - red, green or [39m
+  [38;5;231mblue. After my answer reply with one word.[39m
+[38;5;246m[49m────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;16m[48;5;153m ☐ Цвет [39m[49m
+
+[1m[38;5;231mКакой цвет вы предпочитаете — красный, зелёный или синий?[0m
+
+[38;5;153m❯[39m [38;5;246m1.[39m [38;5;153mКрасный[39m
+     [38;5;246mКрасный цвет[39m
+  [38;5;246m2.[39m Зелёный
+     [38;5;246mЗелёный цвет[39m
+  [38;5;246m3.[39m Синий
+     [38;5;246mСиний цвет[39m
+  [38;5;246m4. Type something.[39m
+[38;5;246m────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  5. Chat about this
+
+[38;5;246mEnter to select · ↑/↓ to navigate · Esc to cancel[39m
+
+[1m  ⏺ main[0m
+[38;5;246m  ◯ general-purpose[39m  [38;5;246mRun the tests[39m                                            [38;5;246m2m 2s · ↓ 94.3k tokens[39m
+[38;5;246m  ◯ general-purpose[39m  [38;5;246mCheck the build[39m                                           [38;5;246m30s · ↓ 102.6k tokens[39m

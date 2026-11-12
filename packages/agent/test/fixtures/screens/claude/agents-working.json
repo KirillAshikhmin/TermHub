@@ -1,0 +1,11 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 240,
+  "rows": 63,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "note": "Bottom of the screen (status line, input frame, footer, background agent list) is a live capture, byte for byte; the conversation above it and the task descriptions are replaced with neutral text."
+}

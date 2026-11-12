@@ -37,8 +37,6 @@ interface Box {
   footer: string;
 }
 
-const UNKNOWN: ScreenState = { kind: 'unknown' };
-
 /** Сколько строк над вариантами может занимать шапка диалога (команда, правка). */
 const HEAD_LIMIT = 60;
 /** Сколько строк пояснений и переносов бывает у одного варианта. */
@@ -108,16 +106,19 @@ function isSeparator(text: string): boolean {
 
 export function readScreen(lines: string[], profile: AgentProfile): ScreenState {
   const rows = lines.map(strip);
-  const last = lastFilled(rows, rows.length - 1);
-  if (last < 0) return UNKNOWN;
+  const bottom = lastFilled(rows, rows.length - 1);
+  if (bottom < 0) return unknown('empty screen');
   const signs = profile.screen;
+  const last = aboveTray(rows, bottom, profile);
 
   // Подсказка под вариантами бывает перенесена на две строки.
   const above = lastFilled(rows, last - 1);
+  let hinted = false;
   for (const dialog of signs.dialogs) {
     if (!dialog.footer) continue;
     const at = [last, above].find((i) => i >= 0 && dialog.footer!.test(rows[i]!.text.trim()));
     if (at === undefined) continue;
+    hinted = true;
     const question = readDialog(rows, at - 1, dialog, profile);
     if (question) return { kind: dialog.kind, question };
   }
@@ -126,14 +127,36 @@ export function readScreen(lines: string[], profile: AgentProfile): ScreenState 
   if (menu) return { kind: 'menu', menu };
 
   const box = findBox(rows, last, profile);
-  if (box) return readBox(rows, box, profile);
+  if (typeof box !== 'string') return readBox(rows, box, profile);
 
   for (const dialog of signs.dialogs) {
     if (dialog.footer || !dialog.title) continue;
     const question = readDialog(rows, last, dialog, profile);
     if (question) return { kind: dialog.kind, question };
   }
-  return UNKNOWN;
+  if (hinted) return unknown('dialog not recognized');
+  if (optionOf(rows[last]!.text, profile)) return unknown('dialog cut off');
+  return unknown(box);
+}
+
+/** Неузнанный экран и правило, которое на нём не сошлось. Причина — слова из этого
+ *  файла: текст с экрана в неё не попадает, она уходит в интерфейс и диагностику. */
+function unknown(why: string): ScreenState {
+  return { kind: 'unknown', why };
+}
+
+/** Последняя строка экрана над списком под подвалом (`tray` профиля). Списка нет или
+ *  он устроен иначе — прежняя последняя строка: лишнее под подвалом экран не узнаёт. */
+function aboveTray(rows: Row[], last: number, profile: AgentProfile): number {
+  const tray = profile.screen.tray;
+  if (!tray) return last;
+  let head = last;
+  while (head >= 0 && !blank(rows[head]) && tray.item.test(rows[head]!.text)) head--;
+  head++;
+  const count = last - head;
+  if (count < 1 || count > tray.max || !tray.head.test(rows[head]!.text)) return last;
+  if (head < 2 || !blank(rows[head - 1]) || blank(rows[head - 2])) return last;
+  return head - 2;
 }
 
 /** Список команд, который агент показывает над строкой ввода по «/». Нет списка или
@@ -142,8 +165,8 @@ export function readPopup(lines: string[], profile: AgentProfile): ChatCommand[]
   const rows = lines.map(strip);
   const last = lastFilled(rows, rows.length - 1);
   if (last < 0) return [];
-  const box = findBox(rows, last, profile);
-  if (!box) return [];
+  const box = findBox(rows, aboveTray(rows, last, profile), profile);
+  if (typeof box === 'string') return [];
   const signs = profile.screen;
 
   const out: ChatCommand[] = [];
@@ -325,46 +348,68 @@ function readHead(
   return { title, body };
 }
 
-/** Строка ввода агента внизу экрана — или `null`, если экран устроен иначе. */
-function findBox(rows: Row[], last: number, profile: AgentProfile): Box | null {
+/** Строка ввода агента внизу экрана — или причина, по которой её там нет. */
+function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string {
   const signs = profile.screen;
-  const prompt = signs.prompt;
-  // После знака Claude ставит неразрывный пробел, Codex — обычный.
-  const startsInput = (text: string): boolean =>
-    text === prompt || (text.startsWith(prompt) && /^[  ]/u.test(text.slice(prompt.length)));
+  // Переписки агента на экране нет вовсе — это не оборванный экран, а чужой.
+  const missing = (): string =>
+    rows.some((row) => signs.talk.test(row.text)) ? 'no input frame' : 'no agent on screen';
 
   if (signs.box === 'ruled') {
     // Подвал под нижней линейкой: до трёх строк (режим и подсказки переносятся).
     let bottom = last;
     while (bottom >= 0 && last - bottom <= 3 && !signs.rule.test(rows[bottom]!.text)) bottom--;
-    if (bottom < 1 || !signs.rule.test(rows[bottom]!.text)) return null;
-    let top = bottom - 1;
-    while (top >= 0 && !signs.rule.test(rows[top]!.text)) top--;
-    if (top < 0 || top === bottom - 1) return null;
-    if (!startsInput(rows[top + 1]!.text)) return null;
-    for (let i = top + 2; i < bottom; i++) {
-      const text = rows[i]!.text;
-      if (text !== '' && !text.startsWith('  ')) return null;
+    if (bottom >= 1 && signs.rule.test(rows[bottom]!.text)) {
+      return ruledBox(rows, bottom, last, profile) ?? 'input frame malformed';
     }
-    const footer = rows
-      .slice(bottom + 1, last + 1)
-      .map((row) => row.text.trim())
-      .join(' ');
-    return { top, first: top + 1, last: bottom - 1, footer };
+    // Рамка есть, но выше: под её подвалом стоит то, чего профиль не знает.
+    for (let i = bottom; i >= 1; i--) {
+      if (signs.rule.test(rows[i]!.text) && ruledBox(rows, i, i, profile)) {
+        return 'content below footer';
+      }
+    }
+    return missing();
   }
 
   const footer = rows[last]!.text;
-  if (!signs.footer?.test(footer) || signs.notFooter?.test(footer)) return null;
+  if (!signs.footer?.test(footer) || signs.notFooter?.test(footer)) {
+    return rows.some((row) => signs.talk.test(row.text))
+      ? 'footer not recognized'
+      : 'no agent on screen';
+  }
   const end = lastFilled(rows, last - 1);
-  if (end < 0 || end === last - 1) return null;
+  if (end < 0 || end === last - 1) return 'no input frame';
   let first = end;
-  while (first >= 0 && !startsInput(rows[first]!.text)) {
+  while (first >= 0 && !startsInput(rows[first]!.text, signs.prompt)) {
     const text = rows[first]!.text;
-    if (text === '' || !text.startsWith('  ')) return null;
+    if (text === '' || !text.startsWith('  ')) return 'no input frame';
     first--;
   }
-  if (first < 0) return null;
+  if (first < 0) return 'no input frame';
   return { top: first, first, last: end, footer };
+}
+
+/** После знака Claude ставит неразрывный пробел, Codex — обычный. */
+function startsInput(text: string, prompt: string): boolean {
+  return text === prompt || (text.startsWith(prompt) && /^[ \u00a0]/u.test(text.slice(prompt.length)));
+}
+
+/** Рамка `ruled` с нижней линейкой `bottom`; подвал — строки под ней до `last`. */
+function ruledBox(rows: Row[], bottom: number, last: number, profile: AgentProfile): Box | null {
+  const signs = profile.screen;
+  let top = bottom - 1;
+  while (top >= 0 && !signs.rule.test(rows[top]!.text)) top--;
+  if (top < 0 || top === bottom - 1) return null;
+  if (!startsInput(rows[top + 1]!.text, signs.prompt)) return null;
+  for (let i = top + 2; i < bottom; i++) {
+    const text = rows[i]!.text;
+    if (text !== '' && !text.startsWith('  ')) return null;
+  }
+  const footer = rows
+    .slice(bottom + 1, last + 1)
+    .map((row) => row.text.trim())
+    .join(' ');
+  return { top, first: top + 1, last: bottom - 1, footer };
 }
 
 function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {

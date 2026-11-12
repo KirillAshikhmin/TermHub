@@ -1,0 +1,11 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 100,
+  "rows": 35,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "note": "Composite: permission.txt with the background agent list of agents-working appended under the dialog; such a screen was not captured live."
+}

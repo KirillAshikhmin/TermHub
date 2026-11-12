@@ -36,6 +36,19 @@ describe('профиль Claude Code', () => {
   it('проверенная версия', () => {
     expect(profile.tested).toEqual({ min: '2.1.322', max: '2.1.322' });
   });
+
+  it('список фоновых агентов под подвалом — данные профиля', () => {
+    // Строки — с живого экрана: первой стоит «main», указатель «⏺» — на выбранной.
+    const tray = profile.screen.tray!;
+    expect(tray.head.test('  ⏺ main')).toBe(true);
+    expect(tray.head.test('  ◯ main')).toBe(true);
+    expect(tray.item.test('  ◯ general-purpose  Run the tests      2m 2s · ↓ 94.3k tokens')).toBe(true);
+    expect(tray.head.test('  ◯ general-purpose  Run the tests')).toBe(false);
+    expect(tray.item.test('  ⏵⏵ auto mode on · 1 shell · ← 2 agents · ↓ to manage')).toBe(false);
+    expect(tray.item.test('  2. No')).toBe(false);
+    expect(tray.max).toBeGreaterThanOrEqual(10);
+    expect(profileOf('codex').screen.tray).toBeUndefined();
+  });
 });
 
 describe('профиль Codex', () => {

@@ -54,6 +54,9 @@ export interface ScreenState {
   menu?: string;
   /** Модель, как её называет экран (Codex пишет её в подвале; Claude — нет). */
   model?: string;
+  /** Только для `unknown`: какое правило распознавания не сошлось — короткая английская
+   *  фраза для диагностики. Текста с экрана в ней нет. */
+  why?: string;
 }
 
 export interface LiveState {
