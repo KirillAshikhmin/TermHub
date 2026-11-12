@@ -76,7 +76,28 @@ describe('профиль Codex', () => {
   });
 
   it('проверенная версия', () => {
-    expect(profile.tested).toEqual({ min: '0.167.0', max: '0.167.0' });
+    expect(profile.tested).toEqual({ min: '0.167.0', max: '0.167.2' });
+  });
+
+  it('запрос работающему агенту: клавиша очереди и безопасное стирание строки — данные профиля', () => {
+    // Замер таска 19 на Codex 0.167.2: Tab ставит набранное в очередь («tab to queue
+    // message»), Enter отправляет сразу в идущий ход; Ctrl+U стирает строку ввода и
+    // работу не трогает (Ctrl+C там — прерывание).
+    expect(profile.keys.queue).toBe('\t');
+    expect(profile.keys.clearBusy).toBe('\x15');
+    // У Claude отправка работающему — та же клавиша, отдельных нет.
+    expect(profileOf('claude').keys.queue).toBeUndefined();
+    expect(profileOf('claude').keys.clearBusy).toBeUndefined();
+    const footer = profile.screen.footer!;
+    expect(footer.test('  tab to queue message')).toBe(true);
+    expect(footer.test('  tab to queue message                               97% context left')).toBe(true);
+    expect(footer.test('tab to queue message')).toBe(false);
+    expect(footer.test('  press tab to queue message')).toBe(false);
+    const waiting = profile.screen.status.exec(
+      'Waiting for background terminal (1m 00s • esc to interrupt) · 1 background terminal running · /ps t…',
+    );
+    expect([waiting?.[1], waiting?.[2]]).toEqual(['Waiting for background terminal', '1m 00s']);
+    expect(profile.screen.status.test('Waiting for background terminal')).toBe(false);
   });
 
   it('ожидающий вопрос: два приглашения, у каждого своя клавиша', () => {
@@ -179,13 +200,14 @@ describe('isTested', () => {
   it('проверенная версия — да', () => {
     expect(isTested('claude', '2.1.322')).toBe(true);
     expect(isTested('codex', '0.167.0')).toBe(true);
+    expect(isTested('codex', '0.167.2')).toBe(true);
   });
 
   it('версия новее проверенной — нет', () => {
     expect(isTested('claude', '2.1.323')).toBe(false);
     expect(isTested('claude', '2.2.0')).toBe(false);
     expect(isTested('claude', '3.0.0')).toBe(false);
-    expect(isTested('codex', '0.167.2')).toBe(false);
+    expect(isTested('codex', '0.167.3')).toBe(false);
     expect(isTested('codex', '0.168.0')).toBe(false);
   });
 

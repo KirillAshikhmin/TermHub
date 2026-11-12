@@ -119,6 +119,13 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'statusline-idle': 'idle',
     'statusline-working': 'working',
     'statusline-working-wide': 'working',
+    'queue-hint': 'working',
+    'queue-hint-multiline': 'working',
+    'queue-hint-statusline': 'working',
+    'queued-followup': 'working',
+    'queued-followup-two': 'working',
+    'waiting-terminal': 'working',
+    'waiting-terminal-typed': 'working',
   },
 };
 
@@ -855,6 +862,88 @@ describe('Codex со строкой состояния пользователя'
     // Оборван над подвалом: на строке ввода и на пустой строке под ней.
     expect(readScreen(lines.slice(0, input + 1), codex).kind).toBe('unknown');
     expect(readScreen(lines.slice(0, status), codex).kind).toBe('unknown');
+  });
+});
+
+// Замер таска 19 на Codex 0.167.2: работающий Codex с текстом в строке ввода меняет
+// последнюю строку подвала на «tab to queue message»; Tab ставит текст в очередь блоком
+// «Queued follow-up inputs»; строка работы бывает «Waiting for background terminal».
+describe('Codex: запрос работающему агенту', () => {
+  const codex = profileOf('codex');
+
+  it('текст в строке работающего Codex без строки состояния: подвал «tab to queue message … context left»', () => {
+    expect(read('codex', 'queue-hint')).toEqual({
+      kind: 'working',
+      status: 'Working',
+      elapsed: 24,
+      input: 'note one',
+    });
+    expect(read('codex', 'queue-hint-multiline')).toMatchObject({
+      kind: 'working',
+      input: 'line one\nline two\nline three',
+    });
+  });
+
+  it('то же со строкой состояния пользователя: под ней только «tab to queue message» — working с текстом, а не unknown', () => {
+    expect(read('codex', 'queue-hint-statusline')).toEqual({
+      kind: 'working',
+      status: 'Working',
+      elapsed: 3 * 3600 + 11 * 60 + 43,
+      mode: 'default',
+      input: 'draft note',
+      model: 'GPT-6-Astra',
+    });
+  });
+
+  it('сообщение в очереди после Tab: строки «↳ …» считаются, строка ввода пуста, вопросом блок не назван', () => {
+    expect(read('codex', 'queued-followup')).toEqual({
+      kind: 'working',
+      status: 'Working',
+      elapsed: 37,
+      mode: 'default',
+      input: '',
+      queued: 1,
+      model: 'GPT-6-Astra',
+    });
+    expect(read('codex', 'queued-followup-two')).toMatchObject({ kind: 'working', queued: 2, input: '' });
+    expect(readPending(shot('codex', 'queued-followup'), codex)).toBeUndefined();
+    expect(read('codex', 'queued-followup')).not.toHaveProperty('pending');
+  });
+
+  it('«Waiting for background terminal (… • esc to interrupt)» — строка работы', () => {
+    expect(read('codex', 'waiting-terminal')).toEqual({
+      kind: 'working',
+      status: 'Waiting for background terminal',
+      elapsed: 60,
+      mode: 'default',
+      input: '',
+      queued: 1,
+      model: 'GPT-6-Astra',
+    });
+    expect(read('codex', 'waiting-terminal-typed')).toMatchObject({
+      kind: 'working',
+      status: 'Waiting for background terminal',
+      input: 'note four',
+      queued: 1,
+    });
+  });
+
+  it('те же слова без скобки с «esc to interrupt» работой не считаются', () => {
+    const lines = plain(shot('codex', 'waiting-terminal')).map((l) =>
+      l.startsWith('Waiting for background terminal') ? 'Waiting for background terminal' : l,
+    );
+    expect(readScreen(lines, codex).kind).toBe('idle');
+  });
+
+  it('«tab to queue message» без строки ввода над ним или в оболочке — экран не узнан', () => {
+    const lines = plain(shot('codex', 'queue-hint-statusline'));
+    const at = lines.findIndex((l) => l.startsWith('› draft note'));
+    expect(at).toBeGreaterThan(0);
+    const cut = [...lines.slice(0, at), '', ...lines.slice(at + 1)];
+    expect(readScreen(cut, codex).kind).toBe('unknown');
+    expect(readScreen(['$ ls', 'README.md', '', '  tab to queue message'], codex).kind).toBe('unknown');
+    // Под подсказкой очереди стоит ещё что-то — подвал не тот.
+    expect(readScreen([...lines, '  enter to confirm'], codex).kind).toBe('unknown');
   });
 });
 

@@ -14,7 +14,7 @@
 | Что | Версия |
 |---|---|
 | Claude Code | 2.1.322 |
-| Codex CLI | 0.167.0 (запуск пресетом TermHub: `-c tui.animations=false --no-alt-screen`) |
+| Codex CLI | 0.167.0, домеры — на 0.167.2 (запуск пресетом TermHub: `-c tui.animations=false --no-alt-screen`) |
 | tmux | 3.7c |
 | ОС | macOS (Darwin 27) |
 
@@ -304,6 +304,43 @@ navigate», живьём не измерено; после каждой клав
 - **Codex**: первое сообщение во время работы уходит в текущий ход сразу (появляется в
   переписке, «steer»), следующие встают в список «Messages to be submitted after next tool
   call» строками `↳ …` — их и считает распознавание. Esc прерывает ход и отправляет очередь.
+  Это замер на 0.167.0 с отправкой по Enter; что делают Enter и Tab на 0.167.2 — ниже.
+
+### Запрос работающему Codex (замер на 0.167.2)
+
+Отдельный сокет tmux, временный каталог, панель 100×32, без строки состояния пользователя;
+Codex выполнял `sleep 90` фоновой командой.
+
+- **Экран.** Пока Codex работает и в строке ввода есть текст, последняя строка подвала —
+  «tab to queue message», справа «97% context left» (снимки `queue-hint`,
+  `queue-hint-multiline`). Со строкой состояния, собранной пользователем (`/statusline`),
+  она встаёт на место строки подсказок «← for agents · ? for shortcuts», под строкой
+  состояния, и правой части у неё нет — так выглядел экран владельца, на котором чат
+  отвечал «footer not recognized». Этот вид собран из живого снимка строки состояния и
+  измеренной строки подсказки (`queue-hint-statusline`, составной): в пробной сессии строки
+  состояния пользователя не было.
+- **Tab ставит в очередь.** Над строкой ввода появляется блок «• Queued follow-up inputs»,
+  в нём строка «↳ текст» на сообщение и под ними «⇧← edit last queued message»; строка
+  ввода пуста, ход идёт дальше (`queued-followup`, `queued-followup-two`). Когда ход
+  закончился, Codex сам отправил сообщение из очереди следующим запросом.
+- **Enter отправляет сразу.** Текст появляется в переписке строкой «› текст» над строкой
+  работы — уточнением идущему ходу; в очередь он не встаёт, ход не прерывается. Сообщение,
+  уже стоявшее в очереди, осталось в ней.
+- **Чат ставит в очередь**: работающему Codex запрос уходит клавишей Tab (`keys.queue`),
+  ожидающему — прежним Enter. На ожидании ввода Tab отправляет запрос, как Enter (замер), так
+  что ход, закончившийся между вставкой и клавишей, ничего не ломает.
+- **Строка работы «Waiting for background terminal (1m 00s • esc to interrupt) · 1 background
+  terminal running · /ps t…»** — пока ход ждёт фоновую команду; под ней строка «└ sleep 90»
+  (`waiting-terminal`, `waiting-terminal-typed`). Это работа: подвал с текстом в строке тот
+  же «tab to queue message», Tab так же ставит в очередь.
+- **Ctrl+U стирает строку ввода работающего Codex и работу не трогает.** Одно нажатие —
+  одна строка текста; у многострочного текста следующее нажатие убирает перенос перед
+  стёртой строкой (три строки — пять нажатий). На пустой строке Ctrl+U ничего не делает.
+  Чат жмёт его (`keys.clearBusy`) только когда Tab запрос не забрал, и только по экрану, где
+  Codex работает и строка непуста. Ctrl+C, Esc и Backspace на работающем Codex не
+  пробовались.
+- Не измерено: что называет строка состояния пользователя («Working» или иное), пока идёт
+  «Waiting for background terminal»; Tab при открытом списке команд по «/».
 
 ## Вложения
 
@@ -339,7 +376,8 @@ navigate», живьём не измерено; после каждой клав
 | Экран | Claude | Codex |
 |---|---|---|
 | Ожидание ввода | `idle`, `idle-accept`, `idle-plan`, `idle-auto` | `idle`, `idle-plan` |
-| Работа | `working`, `working-start` | `working`, `working-typing` |
+| Работа | `working`, `working-start` | `working`, `working-typing`, `waiting-terminal` |
+| Запрос работающему | — | `queue-hint`, `queue-hint-multiline`, `queue-hint-statusline` (составной), `waiting-terminal-typed`, `queued-followup`, `queued-followup-two` |
 | Вопрос | `question`, `question-narrow`, `question-multi`, `question-review`, `question-free`, `question-free-typed`, `question-series`, `question-series-review` (два последних — составные) | `question`, `question-narrow`, `question-described`, `question-notes`, `question-notes-typed`, `question-first-of-two`, `question-last-of-two` |
 | Ожидающий вопрос | — | `pending-side`, `pending-side-wide`, `pending-opened` |
 | Вопрос в очереди отложенного ввода | — | `pending-queued` (обезличенный снимок живой сессии), `pending-queued-timer`, `pending-queued-two`, `pending-queued-opened`, `pending-queued-first-of-two`, `pending-queued-last-of-two`, `pending-queued-other`, `pending-queued-other-typed`, `pending-queued-other-digit` |

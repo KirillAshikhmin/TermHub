@@ -1,0 +1,32 @@
+[2m  Worked for 1m 41s • 21:22[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mnote two
+
+
+[2m[49m• [0mNoted.
+
+[2m  Worked for 2s • 21:22[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mReply with one word: ok
+
+
+[2m[49m• [0mok
+
+[2m  Worked for 3s • 21:22[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mRun the shell command: sleep 45 — then reply with one word: done
+
+
+[2m[49m• [0mI’ll run the command and wait for it to finish.
+
+Working [2m(8s • [0;1mesc[0;2m to interrupt) · 1 background terminal running · /ps to view · /stop to close[0m
+
+
+[1m›[0m line one
+  line two
+  line three
+
+  [1mtab[0m to queue message                                                            97% context left

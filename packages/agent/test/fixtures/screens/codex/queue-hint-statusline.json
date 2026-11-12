@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 207,
+  "rows": 59,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "anonymized": true,
+  "note": "Composite: the anonymized live capture statusline-working with a text in the input line and the hints line replaced by the measured «tab to queue message» line (bytes of that line as captured in queue-hint, without the right-hand part) — the screen the owner reported: working Codex, user-configured status line, typed text."
+}

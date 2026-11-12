@@ -242,6 +242,107 @@ describe('sessionAct — запрос', () => {
   });
 });
 
+// Замер таска 19 на Codex 0.167.2: работающему Codex набранное ставит в очередь Tab
+// (Enter отправил бы сразу в идущий ход); Ctrl+U стирает строку, не прерывая работу.
+describe('sessionAct — запрос работающему Codex', () => {
+  it('со строкой состояния пользователя: вставка узнана под подвалом «tab to queue message», в очередь ставит Tab', async () => {
+    const f = fake('codex', 'statusline-working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-hint-statusline' : sent === '\t' ? 'queued-followup' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: 'тест' });
+    expect(f.sent).toEqual(['paste:тест', '\t']);
+    expect(screenOf(result)).toMatchObject({ kind: 'working', input: '', queued: 1 });
+  });
+
+  it('без строки состояния и при «Waiting for background terminal» — так же', async () => {
+    const plain = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? 'queued-followup' : undefined,
+    );
+    expect(screenOf(await act(plain, { kind: 'prompt', text: 'note one' }))).toMatchObject({ kind: 'working', queued: 1 });
+    expect(plain.sent).toEqual(['paste:note one', '\t']);
+    const waiting = fake('codex', 'waiting-terminal', (sent) =>
+      sent.startsWith('paste:') ? 'waiting-terminal-typed' : sent === '\t' ? 'queued-followup-two' : undefined,
+    );
+    expect(screenOf(await act(waiting, { kind: 'prompt', text: 'note four' }))).toMatchObject({ queued: 2, input: '' });
+    expect(waiting.sent).toEqual(['paste:note four', '\t']);
+  });
+
+  it('ожидающему Codex запрос уходит прежней клавишей отправки', async () => {
+    const f = fake('codex', 'idle', (sent) => (sent.startsWith('paste:') ? 'input' : sent === '\r' ? 'working' : undefined));
+    expect(screenOf(await act(f, { kind: 'prompt', text: 'hello draft text' })).kind).toBe('working');
+    expect(f.sent).toEqual(['paste:hello draft text', '\r']);
+  });
+
+  it('ход закончился, пока шла вставка: строка уже у ожидающего агента — клавиша отправки, а не очереди', async () => {
+    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? 'input' : sent === '\r' ? 'working' : undefined));
+    expect(screenOf(await act(f, { kind: 'prompt', text: 'hello draft text' })).kind).toBe('working');
+    expect(f.sent).toEqual(['paste:hello draft text', '\r']);
+  });
+
+  it('Tab запрос не принял: строка стирается Ctrl+U, работа не тронута, отказ это называет', async () => {
+    const f = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\x15' ? 'working' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: 'note one' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/removed from the agent input line/);
+    expect(f.sent).toEqual(['paste:note one', '\t', '\x15']);
+  });
+
+  it('многострочный текст стирается построчно: Ctrl+U жмётся, пока строка не опустеет', async () => {
+    let erased = 0;
+    const f = fake('codex', 'working', (sent) => {
+      if (sent.startsWith('paste:')) return 'queue-hint-multiline';
+      if (sent !== '\x15') return undefined;
+      erased++;
+      // По замеру: первое нажатие стирает строку, второе — перенос перед ней.
+      return erased < 4 ? undefined : erased === 4 ? 'queue-hint' : 'working';
+    });
+    const result = await act(f, { kind: 'prompt', text: 'line one\nline two\nline three' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/removed from the agent input line/);
+    expect(f.sent.slice(0, 2)).toEqual(['paste:line one\nline two\nline three', '\t']);
+    expect(f.sent.slice(2)).toEqual(['\x15', '\x15', '\x15', '\x15', '\x15']);
+  });
+
+  it('строка не стёрлась — нажатий конечное число, отказ говорит, что текст остался', async () => {
+    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? 'queue-hint' : undefined));
+    const result = await act(f, { kind: 'prompt', text: 'note one' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/left in the agent input line/);
+    const erases = f.sent.slice(2);
+    expect(f.sent.slice(0, 2)).toEqual(['paste:note one', '\t']);
+    expect(erases.length).toBeGreaterThan(0);
+    expect(erases.length).toBeLessThanOrEqual(8);
+    expect(erases.every((key) => key === '\x15')).toBe(true);
+  });
+
+  it('после вставки экран не узнан: клавиш больше нет — ни очереди, ни стирания; отказ говорит, что текст мог остаться', async () => {
+    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? ['$ ls', 'README.md'] : undefined));
+    const result = await act(f, { kind: 'prompt', text: 'note one' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/may be left in the agent input line/);
+    expect(f.sent).toEqual(['paste:note one']);
+  });
+
+  it('после Tab экран не узнан — стирание вслепую не идёт', async () => {
+    const f = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? 'menu-model' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: 'note one' });
+    expect(f.sent).toEqual(['paste:note one', '\t']);
+    expect(screenOf(result).kind).toBe('menu');
+  });
+
+  it('«Waiting for background terminal»: over и take-input — busy, Ctrl+C не уходит', async () => {
+    const over = fake('codex', 'waiting-terminal-typed');
+    expect(await act(over, { kind: 'prompt', text: 'привет', over: true })).toMatchObject({ ok: false, reason: 'busy' });
+    const take = fake('codex', 'waiting-terminal-typed');
+    expect(await act(take, { kind: 'take-input' })).toMatchObject({ ok: false, reason: 'busy' });
+    expect([...over.sent, ...take.sent]).toEqual([]);
+  });
+});
+
 describe('sessionAct — ответ на вопрос', () => {
   it('отпечаток не совпал с экраном — stale, клавиши не отправлены', async () => {
     const f = fake('claude', 'question');

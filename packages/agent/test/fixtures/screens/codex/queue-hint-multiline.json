@@ -1,0 +1,11 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 100,
+  "rows": 32,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "anonymized": true,
+  "note": "Live probe capture (isolated tmux socket, Codex started with -c tui.animations=false --no-alt-screen, no user status line); only the directory is replaced. Codex is working and a three-line text was pasted into its input line; footer «tab to queue message»."
+}

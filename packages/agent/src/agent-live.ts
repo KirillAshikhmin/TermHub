@@ -275,9 +275,41 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   }
   await ctx.src.paste(ctx.session, text, ctx.pane);
   const typed = await until(ctx, (s) => atInput(s) && !!s.input);
-  if (!typed.met) return fail('stale', 'pasted text did not show up in the agent input line');
-  await press(ctx, profile.keys.submit);
-  return done((await until(ctx, (s) => !atInput(s) || !s.input)).screen);
+  if (!typed.met) {
+    // Экран после вставки не узнан: стирать по нему нечем, вслепую клавиши не идут.
+    const left = profile.keys.queue !== undefined && screen.kind === 'working' && !atInput(typed.screen);
+    return fail(
+      'stale',
+      `pasted text did not show up in the agent input line${left ? '; it may be left in the agent input line' : ''}`,
+    );
+  }
+  // Работающему агенту запрос ставится в очередь клавишей профиля, если она у него своя.
+  const queue = typed.screen.kind === 'working' ? profile.keys.queue : undefined;
+  await press(ctx, queue ?? profile.keys.submit);
+  const sent = await until(ctx, (s) => !atInput(s) || !s.input);
+  if (queue === undefined || sent.met) return done(sent.screen);
+  // Клавиша очереди текст не забрала. Строка до вставки была пуста — в ней только наше.
+  const swept = await sweepInput(ctx, sent.screen);
+  return fail(
+    'stale',
+    `the agent did not queue the message; the pasted text ${swept ? 'was removed from' : 'is left in'} the agent input line`,
+  );
+}
+
+/** Убирает текст из строки ввода работающего агента клавишей `clearBusy` профиля: она
+ *  стирает строку и работу не трогает. Нажатие идёт только по экрану, где агент работает
+ *  и строка непуста; строк несколько — нажатий до двух на строку (текст, затем перенос). */
+async function sweepInput(ctx: Ctx, from: ScreenState): Promise<boolean> {
+  const key = ctx.profile.keys.clearBusy;
+  if (key === undefined) return false;
+  let now = from;
+  const limit = 2 * (now.input ?? '').split('\n').length + 2;
+  for (let i = 0; i < limit && now.kind === 'working' && !!now.input; i++) {
+    await press(ctx, key);
+    await ctx.src.sleep(KEY_GAP_MS);
+    now = await peek(ctx);
+  }
+  return atInput(now) && now.input === '';
 }
 
 /** Стирает строку ввода агента клавишами профиля. Только при непустой строке и только

@@ -1,0 +1,32 @@
+
+  [38;2;99;168;248m>_ [1m[39mOpenAI Codex[0;2m (v0.167.2)[0m
+     [2m/home/user/probe[0m
+
+  [1m[38;2;243;139;168mTip:[0m Use the [1m[38;2;243;139;168mdesktop app[0m. Run [38;2;166;227;161mcodex app[39m to open it. It installs automatically if needed.
+
+[48;5;8m
+[1;2m› [0m[48;5;8mRun the shell command: sleep 90 — then reply with one word: done
+
+
+[2m[49m• [0mI’ll run the command and reply when it finishes.
+
+Working [2m(24s • [0;1mesc[0;2m to interrupt) · 1 background terminal running · /ps to view · /stop to close[0m
+
+
+[1m›[0m note one
+
+  [1mtab[0m to queue message                                                            97% context left
+
+
+
+
+
+
+
+
+
+
+
+
+
+

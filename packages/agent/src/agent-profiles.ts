@@ -177,6 +177,12 @@ export interface AgentProfile {
      *  ТОЛЬКО при непустой строке: на пустой те же клавиши у Claude открывают меню
      *  отката, а Codex закрывают. */
     clearInput: string[];
+    /** Поставить набранное в очередь работающего агента. Нет — работающему запрос уходит
+     *  клавишей `submit` (Claude сам ставит его в очередь). */
+    queue?: string;
+    /** Стереть текущую строку ввода у работающего агента, не трогая его работу; строк
+     *  несколько — нажатие повторяется. Нет — безопасного способа у агента не измерено. */
+    clearBusy?: string;
     /** Показать ожидающий вопрос (`screen.pending`). Нет — агент такого не рисует. */
     showPending?: string;
     /** Ответить на вопрос из очереди отложенного ввода (`screen.pending` с блоком). */
@@ -354,18 +360,24 @@ const CLAUDE: AgentProfile = {
   },
 };
 
-/** Codex CLI 0.167.0, запущенный пресетом TermHub (`tui.animations=false`,
+/** Codex CLI 0.167.0–0.167.2, запущенный пресетом TermHub (`tui.animations=false`,
  *  `--no-alt-screen`). */
 const CODEX: AgentProfile = {
   agent: 'codex',
   name: 'Codex',
-  tested: { min: '0.167.0', max: '0.167.0' },
+  tested: { min: '0.167.0', max: '0.167.2' },
   keys: {
     submit: '\r',
     interrupt: '\x1b',
     modeCycle: '\x1b[Z',
     newline: '\x1b\r',
     clearInput: ['\x03'],
+    // Tab — так его называет подвал работающего Codex с текстом в строке: «tab to queue
+    // message». Enter там отправляет текст сразу в идущий ход, а не в очередь; на ожидании
+    // ввода Tab отправляет, как Enter (замер).
+    queue: '\t',
+    // Ctrl+U: стирает строку ввода, на пустой ничего не делает, работу не прерывает (замер).
+    clearBusy: '\x15',
     // Ctrl+/ — так его называет сам подвал: «main needs input · ⌃/ to switch».
     showPending: '\x1f',
     // Shift+← (CSI 1;2 D) — так его называет блок очереди: «⇧← to answer».
@@ -450,7 +462,9 @@ const CODEX: AgentProfile = {
     prompt: '›',
     box: 'open',
     rule: /^─{8,}$/,
-    footer: /^\s{2}\S.* · \S|\bcontext left$/,
+    // Последней строкой бывает и одна подсказка очереди — у работающего Codex с текстом в
+    // строке ввода, когда строка состояния собрана пользователем.
+    footer: /^\s{2}\S.* · \S|\bcontext left$|^\s{2}tab to queue message$/,
     notFooter: /\b(?:enter|esc)\b/i,
     footerLines: 3,
     statusLine: { sep: /\s{2,}|\s·\s/, working: /^Working$/, idle: /^Ready$/ },
@@ -474,7 +488,8 @@ const CODEX: AgentProfile = {
     ],
     talk: /^[›•]\s/,
     // За скобкой бывает приписка: «· 1 background terminal running · /ps to view · …».
-    status: /^(?:\S\s)?(Working)\s*\((.+?)\s•\sesc to interrupt\)(?:\s·\s.*)?$/,
+    // Пока ход ждёт фоновую команду, строка работы зовётся иначе, скобка та же.
+    status: /^(?:\S\s)?(Working|Waiting for background terminal)\s*\((.+?)\s•\sesc to interrupt\)(?:\s·\s.*)?$/,
     queue: { item: /^\s+↳\s/ },
     // «Question 1/1 (1 unanswered)» у вопроса, «Field 1/1» у запроса на инструмент MCP.
     chip: /^(?:Question|Field) \d+\/\d+\b/,
