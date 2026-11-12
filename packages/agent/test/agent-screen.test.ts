@@ -24,6 +24,11 @@ function plain(lines: string[]): string[] {
   return lines.map((l) => l.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\][^\x1b]*\x1b\\/g, ''));
 }
 
+/** Варианты без пояснений — для ожиданий, выписанных до того, как пояснения появились. */
+function bare<T extends { hint?: string }>(options: T[]): Omit<T, 'hint'>[] {
+  return options.map(({ hint: _hint, ...rest }) => rest);
+}
+
 function read(agent: AgentId, name: string) {
   return readScreen(shot(agent, name), profileOf(agent));
 }
@@ -50,6 +55,8 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'question-review': 'question',
     'question-free': 'question',
     'question-free-typed': 'question',
+    'question-series': 'question',
+    'question-series-review': 'question',
     permission: 'permission',
     'permission-narrow': 'permission',
     'menu-model': 'menu',
@@ -81,6 +88,16 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     permission: 'permission',
     'permission-narrow': 'permission',
     'permission-mcp': 'permission',
+    'permission-mcp-live': 'permission',
+    'permission-mcp-moved': 'permission',
+    'question-described': 'question',
+    'question-notes': 'question',
+    'question-notes-typed': 'question',
+    'question-first-of-two': 'question',
+    'question-last-of-two': 'question',
+    'pending-side': 'idle',
+    'pending-side-wide': 'idle',
+    'pending-opened': 'question',
     'menu-model': 'menu',
     'menu-permissions': 'menu',
     'menu-update': 'menu',
@@ -299,7 +316,7 @@ describe('Claude Code', () => {
   it('вопрос с вариантами', () => {
     const q = read('claude', 'question').question!;
     expect(q.title).toBe('Какой цвет вы предпочитаете — красный, зелёный или синий?');
-    expect(q.options).toEqual([
+    expect(bare(q.options)).toEqual([
       { key: '1', label: 'Красный', selected: true },
       { key: '2', label: 'Зелёный' },
       { key: '3', label: 'Синий' },
@@ -314,7 +331,7 @@ describe('Claude Code', () => {
     const q = read('claude', 'question-multi').question!;
     expect(q.title).toBe('Какие фрукты вам нравятся — яблоко, банан, вишня?');
     expect(q.multi).toBe(true);
-    expect(q.options).toEqual([
+    expect(bare(q.options)).toEqual([
       { key: '1', label: 'Яблоко', selected: true, checked: true },
       { key: '2', label: 'Банан', checked: false },
       { key: '3', label: 'Вишня', checked: true },
@@ -446,13 +463,12 @@ describe('Codex', () => {
   it('вопрос с вариантами: подпись отделена от пояснения', () => {
     const q = read('codex', 'question').question!;
     expect(q.title).toBe('Which color do you prefer: red, green, or blue?');
-    expect(q.options).toEqual([
+    expect(bare(q.options)).toEqual([
       { key: '1', label: 'Red', selected: true },
       { key: '2', label: 'Green' },
       { key: '3', label: 'Blue' },
       { key: '4', label: 'None of the above' },
     ]);
-    expect(q.freeText).toBeUndefined();
   });
 
   it('запрос разрешения', () => {
@@ -860,7 +876,8 @@ describe('Codex: запрос разрешения на инструмент MCP
   }
 
   it('читается запросом разрешения: заголовок, тело, четыре варианта, указатель на первом', () => {
-    expect(read('codex', 'permission-mcp')).toEqual({
+    const screen = read('codex', 'permission-mcp');
+    expect({ ...screen, question: { ...screen.question!, options: bare(screen.question!.options) } }).toEqual({
       kind: 'permission',
       question: {
         stamp: questionStamp(TITLE, OPTIONS, 'Query: release notes'),
@@ -1159,5 +1176,227 @@ describe('фоновые агенты и команды оболочки', () =>
   it('неузнанный экран со списком под ним фоновых не называет', () => {
     const tray = shot('claude', 'agents-working').slice(-4);
     expect(Object.keys(readScreen([...shot('claude', 'shell'), ...tray], claude)).sort()).toEqual(['kind', 'why']);
+  });
+});
+
+// Замер таска 16 на Codex 0.167.2: пояснения вариантов, заметка (свой ответ), два вопроса
+// подряд, «вопрос ждёт» в побочной беседе и живой запрос на инструмент MCP. Отпечатки ниже
+// выписаны распознаванием ДО этих правок — пояснения и заметка менять их не вправе.
+describe('вопросы: пояснения вариантов, заметка, ожидающий вопрос', () => {
+  const codex = profileOf('codex');
+
+  it('прежние отпечатки не изменились', () => {
+    const before: [AgentId, string, string][] = [
+      ['claude', 'permission', '003bac1e0e0fd528'],
+      ['claude', 'permission-narrow', '003bac1e0e0fd528'],
+      ['claude', 'agents-permission', '003bac1e0e0fd528'],
+      ['claude', 'question', '46ddd0e63b82ac40'],
+      ['claude', 'question-narrow', '46ddd0e63b82ac40'],
+      ['claude', 'agents-question', '46ddd0e63b82ac40'],
+      ['claude', 'question-free', 'e3c5e7e98149bb87'],
+      ['claude', 'question-free-typed', 'e3c5e7e98149bb87'],
+      ['claude', 'question-multi', 'bd4e54736adb052d'],
+      ['claude', 'question-review', 'f28682d105515327'],
+      ['codex', 'question', '4b6faf99d2d7eeef'],
+      ['codex', 'question-narrow', '4b6faf99d2d7eeef'],
+      ['codex', 'permission', '972877912d315f17'],
+      ['codex', 'permission-narrow', '972877912d315f17'],
+      ['codex', 'permission-mcp', 'be48c67eec586458'],
+      ['codex', 'question-described', 'dd9a21e7408b7a91'],
+      ['codex', 'pending-opened', '671612fb84e9333d'],
+      ['codex', 'permission-mcp-live', '6cd232cccc7d104a'],
+    ];
+    for (const [agent, name, stamp] of before) {
+      expect(`${agent}/${name} ${read(agent, name).question?.stamp}`).toBe(`${agent}/${name} ${stamp}`);
+    }
+  });
+
+  it('Codex: пояснение варианта стоит в его строке и в подпись не входит', () => {
+    const q = read('codex', 'question-described').question!;
+    expect(q.title).toBe('Which color do you prefer—red, green, or blue?');
+    expect(q.options).toEqual([
+      { key: '1', label: 'Red', hint: 'Bold and energetic.', selected: true },
+      { key: '2', label: 'Green', hint: 'Fresh and natural.' },
+      { key: '3', label: 'Blue', hint: 'Calm and cool.' },
+      { key: '4', label: 'None of the above', hint: 'Optionally, add details in notes (tab)' },
+    ]);
+    expect(q.stamp).toBe(questionStamp(q.title, q.options.map(({ key, label }) => ({ key, label }))));
+  });
+
+  it('Codex: пояснение, перенесённое в узкой панели, склеено', () => {
+    expect(read('codex', 'question-narrow').question!.options.map((o) => o.hint)).toEqual([
+      'Choose red as your preferred color.',
+      'Choose green as your preferred color.',
+      'Choose blue as your preferred color.',
+      'Optionally, add details in notes (tab)',
+    ]);
+  });
+
+  it('Claude: пояснение — строка под вариантом; у вариантов без неё поля нет', () => {
+    const q = read('claude', 'question').question!;
+    expect(q.options.map((o) => [o.label, o.hint])).toEqual([
+      ['Красный', 'Красный цвет'],
+      ['Зелёный', 'Зелёный цвет'],
+      ['Синий', 'Синий цвет'],
+      ['Type something.', undefined],
+      ['Chat about this', undefined],
+    ]);
+  });
+
+  it('Claude: перенос подписи варианта разрешения пояснением не становится', () => {
+    const wide = read('claude', 'permission').question!;
+    const narrow = read('claude', 'permission-narrow').question!;
+    expect(narrow.options.map((o) => o.label)).toEqual(wide.options.map((o) => o.label));
+    expect(narrow.options.every((o) => o.hint === undefined)).toBe(true);
+  });
+
+  it('Codex: один вопрос принимает свой ответ заметкой; поле заметки закрыто — поля notes нет', () => {
+    const q = read('codex', 'question-described').question!;
+    expect(q.freeText).toBe(true);
+    expect(q.notes).toBeUndefined();
+    expect(q.options.some((o) => o.free)).toBe(false);
+  });
+
+  it('Codex: открытое поле заметки — тот же вопрос; пустое поле (заглушка тусклым) — пустая строка', () => {
+    const open = read('codex', 'question-notes').question!;
+    expect(open.stamp).toBe(read('codex', 'question-described').question!.stamp);
+    expect(open.notes).toBe('');
+    expect(open.options.map((o) => o.selected === true)).toEqual([false, true, false, false]);
+    expect(open.freeText).toBe(true);
+  });
+
+  it('Codex: набранная заметка читается текстом, указатель — на «None of the above»', () => {
+    const typed = read('codex', 'question-notes-typed').question!;
+    expect(typed.stamp).toBe(read('codex', 'question-described').question!.stamp);
+    expect(typed.notes).toBe('teal instead');
+    expect(typed.options.find((o) => o.selected)?.key).toBe('4');
+    expect(typed.options).toHaveLength(4);
+  });
+
+  it('Codex: заметка, похожая на вариант, вариантом не становится', () => {
+    const lines = shot('codex', 'question-notes-typed').map((l) => l.replace('teal instead', '5. teal'));
+    const q = readScreen(lines, codex).question!;
+    expect(q.options).toHaveLength(4);
+    expect(q.notes).toBe('5. teal');
+  });
+
+  it('Codex: два вопроса подряд — оба читаются, свой ответ на них не предлагается', () => {
+    const first = read('codex', 'question-first-of-two').question!;
+    expect(first.title).toBe('Which fruit do you like?');
+    expect(first.options.map((o) => o.label)).toEqual(['Apple', 'Banana', 'Cherry', 'None of the above']);
+    expect(first.freeText).toBeUndefined();
+    const last = read('codex', 'question-last-of-two').question!;
+    expect(last.title).toBe('Which size do you prefer?');
+    expect(last.options.map((o) => o.label)).toEqual(['Small', 'Large', 'None of the above']);
+    expect(last.freeText).toBeUndefined();
+    expect(last.stamp).not.toBe(first.stamp);
+  });
+
+  it('Codex: побочная беседа, пока главный поток ждёт ответа, — ожидание ввода с признаком «вопрос ждёт»', () => {
+    for (const name of ['pending-side', 'pending-side-wide']) {
+      const screen = read('codex', name);
+      expect(screen.kind).toBe('idle');
+      expect(screen.pending).toBe(true);
+      expect(screen.input).toBe('');
+      expect(screen.question).toBeUndefined();
+    }
+  });
+
+  it('признака «вопрос ждёт» нет там, где агент его не рисует', () => {
+    expect(read('codex', 'idle').pending).toBeUndefined();
+    expect(read('codex', 'statusline-idle').pending).toBeUndefined();
+    expect(read('codex', 'pending-opened').pending).toBeUndefined();
+    expect(read('claude', 'idle').pending).toBeUndefined();
+    // Слова без клавиши переключения (главный поток уже закончил) — не признак.
+    const done = shot('codex', 'pending-side').map((l) => l.replace('main needs input', 'main finished'));
+    expect(readScreen(done, codex)).toMatchObject({ kind: 'idle' });
+    expect(readScreen(done, codex).pending).toBeUndefined();
+  });
+
+  it('Codex: живой запрос на инструмент MCP — заголовок, тело, варианты с пояснениями', () => {
+    const q = read('codex', 'permission-mcp-live').question!;
+    expect(q.title).toBe('Allow the probe_notes MCP server to run tool "save_note"?');
+    expect(q.body).toBe('text: hello');
+    expect(q.options).toEqual([
+      { key: '1', label: 'Allow', hint: 'Run the tool and continue', selected: true },
+      { key: '2', label: 'Allow for this session', hint: 'Run the tool and remember this choice for this session' },
+      { key: '3', label: 'Always allow', hint: 'Run the tool and remember this choice for future tool calls' },
+      { key: '4', label: 'Cancel', hint: 'Cancel this tool call' },
+    ]);
+    const moved = read('codex', 'permission-mcp-moved').question!;
+    expect(moved.stamp).toBe(q.stamp);
+    expect(moved.options.find((o) => o.selected)?.key).toBe('2');
+  });
+
+  it('Codex: «Field N/M» при M>1 — форма из нескольких полей, запросом разрешения не считается', () => {
+    const several = shot('codex', 'permission-mcp-live').map((l) => l.replace('Field 1/1', 'Field 1/3'));
+    expect(readScreen(several, codex)).toEqual({ kind: 'unknown', why: 'dialog not recognized' });
+    const second = shot('codex', 'permission-mcp').map((l) => l.replace('Field 1/1', 'Field 2/2'));
+    expect(readScreen(second, codex).kind).toBe('unknown');
+  });
+});
+
+// Серия вопросов Claude: над вопросом полоса шагов «←  ☒ Название  ☐ Название  ✔ Submit  →»,
+// текущий шаг подсвечен фоном. Полоса одиночного вопроса и экрана подтверждения — с живых
+// снимков; полоса из нескольких вопросов собрана по их геометрии (см. json снимков).
+describe('Claude Code: полоса шагов над вопросом', () => {
+  const claude = profileOf('claude');
+
+  it('серия: названия, отвеченные, текущий по подсветке, шаг отправки и номер текущего', () => {
+    const q = read('claude', 'question-series').question!;
+    expect(q.steps).toEqual([
+      { label: 'Животное', done: true },
+      { label: 'Цвет', current: true },
+      { label: 'Размер' },
+      { label: 'Submit', submit: true },
+    ]);
+    expect(q.step).toBe(2);
+    expect(q.title).toBe('Какой цвет вы предпочитаете — красный, зелёный или синий?');
+    expect(q.body).toBeUndefined();
+  });
+
+  it('одиночный вопрос: один шаг с названием; вопрос с отметками — вопрос и шаг отправки', () => {
+    expect(read('claude', 'question').question).toMatchObject({ steps: [{ label: 'Цвет', current: true }], step: 1 });
+    expect(read('claude', 'question-multi').question).toMatchObject({
+      steps: [{ label: 'Фрукты', done: true, current: true }, { label: 'Submit', submit: true }],
+      step: 1,
+    });
+  });
+
+  it('экран подтверждения: текущий — шаг отправки', () => {
+    const q = read('claude', 'question-series-review').question!;
+    expect(q.steps).toEqual([
+      { label: 'Животное', done: true },
+      { label: 'Цвет', done: true },
+      { label: 'Размер', done: true },
+      { label: 'Submit', submit: true, current: true },
+    ]);
+    expect(q.step).toBe(4);
+    expect(q.title).toBe('Ready to submit your answers?');
+  });
+
+  it('без оформления текущий шаг не назван — и номера нет', () => {
+    const q = readScreen(plain(shot('claude', 'question-series')), claude).question!;
+    expect(q.steps?.map((step) => step.label)).toEqual(['Животное', 'Цвет', 'Размер', 'Submit']);
+    expect(q.steps?.some((step) => step.current)).toBe(false);
+    expect(q.step).toBeUndefined();
+  });
+
+  it('вопросы серии с разным названием дают разные отпечатки, отметка «отвечен» отпечаток не меняет', () => {
+    const base = read('claude', 'question-series').question!.stamp;
+    // Тот же текст и те же варианты под другим названием — другой вопрос серии.
+    const renamed = shot('claude', 'question-series').map((l) => l.replace(' ☐ Цвет ', ' ☐ Тон '));
+    expect(readScreen(renamed, claude).question!.stamp).not.toBe(base);
+    const answered = shot('claude', 'question-series').map((l) => l.replace(' ☐ Цвет ', ' ☒ Цвет '));
+    expect(readScreen(answered, claude).question!.stamp).toBe(base);
+    // Одиночный вопрос с тем же текстом — отпечаток прежний, не серийный.
+    expect(base).not.toBe(read('claude', 'question').question!.stamp);
+    expect(read('claude', 'question').question!.stamp).toBe('46ddd0e63b82ac40');
+  });
+
+  it('у Codex полосы нет — полей нет', () => {
+    const q = read('codex', 'question-described').question!;
+    expect(q.steps).toBeUndefined();
+    expect(q.step).toBeUndefined();
   });
 });

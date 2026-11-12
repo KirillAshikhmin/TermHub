@@ -73,6 +73,9 @@ export function parseAction(value: unknown): ChatAction | null {
         ...(raw.text === undefined ? {} : { text: raw.text }),
       };
     }
+    case 'step':
+      if (typeof raw.stamp !== 'string' || typeof raw.to !== 'number' || !Number.isInteger(raw.to)) return null;
+      return { kind: 'step', stamp: raw.stamp, to: raw.to };
     case 'mode':
       return typeof raw.to === 'string' ? { kind: 'mode', to: raw.to } : null;
     case 'model':
@@ -81,6 +84,7 @@ export function parseAction(value: unknown): ChatAction | null {
     case 'interrupt':
     case 'compact':
     case 'take-input':
+    case 'show-question':
       return { kind: raw.kind };
     default:
       return null;

@@ -56,7 +56,11 @@ describe('чат: живая часть в оболочке', () => {
     expect(chat.el.querySelector('.th-feed__head .th-live__state')).not.toBeNull();
     expect(chat.slots.status.childElementCount).toBe(0);
     expect(chat.slots.composer.querySelector('.th-composer')).not.toBeNull();
-    expect(chat.slots.composer.previousElementSibling!.classList.contains('th-live__controls')).toBe(true);
+    // над полем ввода — место карточки вопроса, над ним — ряд управления
+    expect(chat.slots.composer.previousElementSibling).toBe(chat.slots.question);
+    expect(chat.slots.question.previousElementSibling!.classList.contains('th-live__controls')).toBe(true);
+    // окошко терминала — выше ряда управления, а не между карточкой и полем
+    expect(chat.slots.terminal.compareDocumentPosition(chat.slots.question) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(chat.live.state()!.screen.kind).toBe('idle');
 
     const before = feedCalls.filter((c) => c.after !== undefined).length;
@@ -143,6 +147,84 @@ describe('чат: вид и строка «в терминале набрано�
     await vi.advanceTimersByTimeAsync(10);
     expect(chat.el.style.getPropertyValue('--chat-fs')).toMatch(/^\d+px$/);
     expect(chat.el.style.getPropertyValue('--chat-lh')).toBe('1');
+    chat.teardown();
+  });
+});
+
+describe('чат: закрытие окна терминала ставит фокус в поле ввода', () => {
+  const unknown: LiveResult = { ok: true, agent: 'claude', tested: true, screen: { kind: 'unknown' }, modes: [], models: [] };
+  const coarse = (on: boolean): void => {
+    window.matchMedia = ((query: string) => ({ matches: on && query.includes('coarse'), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+  };
+  const field = (chat: ReturnType<typeof mountChat>): HTMLElement => chat.el.querySelector<HTMLElement>('.th-composer__field')!;
+  const open = async (chat: ReturnType<typeof mountChat>): Promise<void> => {
+    current = unknown;
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(chat.el.querySelector<HTMLElement>('.th-chat-term')!.hidden).toBe(false);
+    (document.activeElement as HTMLElement | null)?.blur();
+  };
+
+  it('кнопка закрытия окна — фокус в поле ввода', async () => {
+    coarse(false);
+    current = state('idle');
+    const chat = mountChat(host, 'work', transport);
+    await open(chat);
+    chat.el.querySelector<HTMLButtonElement>('.th-chat-term__close')!.click();
+    expect(document.activeElement).toBe(field(chat));
+    chat.teardown();
+  });
+
+  it('окно свернулось само после узнанного экрана — фокус в поле ввода; на телефоне — нет', async () => {
+    coarse(false);
+    current = state('idle');
+    const chat = mountChat(host, 'work', transport);
+    await open(chat);
+    current = state('idle');
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(chat.el.querySelector<HTMLElement>('.th-chat-term')!.hidden).toBe(true);
+    expect(document.activeElement).toBe(field(chat));
+
+    coarse(true);
+    await open(chat);
+    current = state('idle');
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(chat.el.querySelector<HTMLElement>('.th-chat-term')!.hidden).toBe(true);
+    expect(document.activeElement).not.toBe(field(chat));
+    // кнопкой — ставится и на телефоне
+    await open(chat);
+    chat.el.querySelector<HTMLButtonElement>('.th-chat-term__close')!.click();
+    expect(document.activeElement).toBe(field(chat));
+    chat.teardown();
+  });
+
+  it('фокус в поле своего ответа карточки вопроса не перехватывается', async () => {
+    coarse(false);
+    current = state('idle');
+    const chat = mountChat(host, 'work', transport);
+    await vi.advanceTimersByTimeAsync(10);
+    chat.el.querySelector<HTMLButtonElement>('.th-live__term-btn')!.click(); // открыл сам
+    current = {
+      ok: true, agent: 'claude', tested: true, modes: [], models: [],
+      screen: { kind: 'question', question: { stamp: 'F', title: 'Что?', freeText: true, options: [{ key: '1', label: 'Да' }, { key: '2', label: 'Type something.', free: true }] } },
+    };
+    await vi.advanceTimersByTimeAsync(1100);
+    const own = chat.el.querySelector<HTMLInputElement>('.th-live-q__input')!;
+    own.focus();
+    chat.el.querySelector<HTMLButtonElement>('.th-chat-term__close')!.click();
+    expect(document.activeElement).toBe(own);
+    chat.teardown();
+  });
+
+  it('у гостя без поля ввода закрытие окна ничего не трогает', async () => {
+    coarse(false);
+    current = state('idle');
+    const guest = { ...transport, clientScope: { write: false, files: false } } as unknown as Transport;
+    const chat = mountChat(host, 'work', guest);
+    await vi.advanceTimersByTimeAsync(10);
+    chat.el.querySelector<HTMLButtonElement>('.th-live__term-btn')!.click();
+    expect(() => chat.el.querySelector<HTMLButtonElement>('.th-chat-term__close')!.click()).not.toThrow();
+    expect(chat.composer).toBeNull();
+    expect(document.activeElement === document.body || document.activeElement === null).toBe(true);
     chat.teardown();
   });
 });

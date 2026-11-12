@@ -14,6 +14,8 @@ export interface ScreenOption {
   /** Клавиша, которой агент принимает этот вариант (цифра, как он её рисует). */
   key: string;
   label: string;
+  /** Пояснение варианта, когда агент его рисует. В отпечаток вопроса не входит. */
+  hint?: string;
   /** На варианте стоит указатель агента. */
   selected?: boolean;
   /** Отметка в вопросе с несколькими ответами. */
@@ -21,6 +23,18 @@ export interface ScreenOption {
   /** Вариант «свой ответ»: после его клавиши агент ждёт текст. Его подпись меняется
    *  по мере набора, поэтому в отпечаток вопроса она не входит. */
   free?: boolean;
+}
+
+/** Шаг полосы над вопросом (серия вопросов Claude): вопрос серии или шаг отправки. */
+export interface ScreenStep {
+  /** Название шага, как его рисует агент. */
+  label: string;
+  /** Вопрос уже отвечен. */
+  done?: boolean;
+  /** Шаг, который сейчас на экране. */
+  current?: boolean;
+  /** Последний шаг — отправка ответов, а не вопрос. */
+  submit?: boolean;
 }
 
 export interface ScreenQuestion {
@@ -32,8 +46,16 @@ export interface ScreenQuestion {
   options: ScreenOption[];
   /** Несколько отметок и отдельное подтверждение. */
   multi?: boolean;
-  /** Среди вариантов есть «свой ответ» (он помечен `free`). */
+  /** Вопрос принимает свой ответ текстом: среди вариантов есть «свой ответ» (он помечен
+   *  `free`) либо у вопроса есть поле заметки (Codex). */
   freeText?: boolean;
+  /** Поле заметки открыто, и это его текст (пустое поле — пустая строка). Закрытого поля
+   *  в ответе нет. */
+  notes?: string;
+  /** Полоса шагов над вопросом, когда агент её рисует. */
+  steps?: ScreenStep[];
+  /** Номер текущего шага в `steps`, с единицы. Нет — экран текущий шаг не выделил. */
+  step?: number;
 }
 
 /** Фоновый агент из списка, который рисует сам агент. Заполнено только нарисованное. */
@@ -65,6 +87,9 @@ export interface ScreenState {
   agentCount?: number;
   /** Для `question` и `permission`. */
   question?: ScreenQuestion;
+  /** Вопрос ждёт, но на экране его нет: агент говорит о нём и показывает по клавише
+   *  (действие `show-question`). Бывает только при `idle` и `working`. */
+  pending?: boolean;
   /** id режима из профиля. */
   mode?: string;
   /** Текст в строке ввода агента. */
@@ -96,6 +121,10 @@ export type ChatAction =
   /** `over` — отправить поверх текста, который уже набран в строке агента. */
   | { kind: 'prompt'; text: string; over?: boolean }
   | { kind: 'answer'; stamp: string; option?: string; options?: string[]; text?: string }
+  /** Показать ожидающий вопрос (`ScreenState.pending`): клавиша открытия из профиля. */
+  | { kind: 'show-question' }
+  /** Перейти к шагу `to` (с единицы) полосы над вопросом `stamp`. */
+  | { kind: 'step'; stamp: string; to: number }
   | { kind: 'interrupt' }
   | { kind: 'mode'; to: string }
   | { kind: 'model'; to: string }

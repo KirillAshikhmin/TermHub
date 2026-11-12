@@ -21,7 +21,7 @@ import type {
   ScreenState,
 } from '@termhub/protocol/chat';
 
-import { profileOf, isTested, type AgentProfile } from './agent-profiles.js';
+import { profileOf, isTested, type AgentProfile, type NotesSign } from './agent-profiles.js';
 import { readScreen } from './agent-screen.js';
 import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
@@ -222,6 +222,10 @@ async function run(ctx: Ctx, action: ChatAction): Promise<ActResult> {
       return prompt(ctx, action);
     case 'answer':
       return answer(ctx, action);
+    case 'show-question':
+      return showQuestion(ctx);
+    case 'step':
+      return step(ctx, action);
     case 'mode':
       return mode(ctx, action.to);
     case 'model':
@@ -313,6 +317,55 @@ async function mode(ctx: Ctx, to: unknown): Promise<ActResult> {
   return done(now);
 }
 
+/** Ожидающий вопрос: агент говорит о нём в подвале и показывает по клавише. Клавиша идёт
+ *  один раз и только при этом признаке на экране; вопрос не открылся — отказ. */
+async function showQuestion(ctx: Ctx): Promise<ActResult> {
+  const { screen, profile } = ctx;
+  if (!atInput(screen) || screen.pending !== true) return fail('stale', 'no pending question on the agent screen');
+  const key = profile.keys.showPending;
+  if (key === undefined) return fail('unsupported', 'agent has no key to show a pending question');
+  await press(ctx, key);
+  const opened = await until(ctx, (s) => (s.kind === 'question' || s.kind === 'permission') && s.question !== undefined);
+  return opened.met ? done(opened.screen) : fail('stale', 'the pending question did not open');
+}
+
+/** Переход к шагу полосы над вопросом: по клавише на шаг, после каждой экран обязан
+ *  показать соседний шаг той же полосы — иначе остановка. */
+async function step(ctx: Ctx, action: Extract<ChatAction, { kind: 'step' }>): Promise<ActResult> {
+  const { screen, profile } = ctx;
+  const question = screen.question;
+  if (screen.kind !== 'question' || !question) return fail('stale', 'no question on the agent screen');
+  if (typeof action.stamp !== 'string' || action.stamp !== question.stamp) {
+    return fail('stale', 'the question on the agent screen is a different one');
+  }
+  const { stepNext, stepPrev } = profile.keys;
+  const names = question.steps?.map((item) => item.label);
+  if (!names || question.step === undefined || stepNext === undefined || stepPrev === undefined) {
+    return fail('unsupported', 'this question has no steps to move between');
+  }
+  if (!Number.isInteger(action.to) || action.to < 1 || action.to > names.length) {
+    return fail('unsupported', 'no such step in the question');
+  }
+  const bar = names.join('\u0000');
+  let now = question.step;
+  let last = screen;
+  while (now !== action.to) {
+    const next = now + (action.to > now ? 1 : -1);
+    await press(ctx, action.to > now ? stepNext : stepPrev);
+    const moved = await until(
+      ctx,
+      (s) =>
+        s.kind === 'question' &&
+        s.question?.step === next &&
+        s.question.steps?.map((item) => item.label).join('\u0000') === bar,
+    );
+    if (!moved.met) return fail('stale', 'the agent screen did not follow the step');
+    now = next;
+    last = moved.screen;
+  }
+  return done(last);
+}
+
 async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>): Promise<ActResult> {
   const { screen, profile } = ctx;
   const question = screen.question;
@@ -324,15 +377,22 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
     return fail('stale', 'the question on the agent screen is a different one');
   }
   const same = (s: ScreenState): boolean => s.kind === screen.kind && s.question?.stamp === question.stamp;
-  const gone = async (): Promise<ActResult> => done((await until(ctx, (s) => !same(s))).screen);
   const stopped = (): ActResult => fail('stale', 'the agent screen did not follow the answer step');
+  // Ответ принят, когда вопроса на экране больше нет, а сам экран узнан: кадр посреди
+  // перерисовки не успех — ждём следующий; не дождались — отказ.
+  const gone = async (): Promise<ActResult> => {
+    const after = await until(ctx, (s) => !same(s) && s.kind !== 'unknown');
+    return after.met ? done(after.screen) : stopped();
+  };
 
   if (action.text !== undefined) {
     // Свой ответ: клавиша свободного варианта ставит на него указатель, текст набирается
     // в его строке, клавиша отправки отвечает.
     const free = question.options.find((o) => o.free);
-    if (!free || question.multi) return fail('unsupported', 'this question takes no free-text answer');
-    if (action.option !== undefined && action.option !== free.key) {
+    const noted = free ? undefined : notesOf(ctx);
+    if ((!free && !noted) || question.multi) return fail('unsupported', 'this question takes no free-text answer');
+    const target = free ?? question.options[question.options.length - 1]!;
+    if (action.option !== undefined && action.option !== target.key) {
       return fail('unsupported', 'free text goes with the free-text option only');
     }
     const text =
@@ -344,6 +404,40 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
             .trim()
         : '';
     if (text === '') return fail('unsupported', 'empty answer');
+    if (!free) {
+      // Свой ответ заметкой (Codex): указатель стрелкой до последнего варианта, клавиша
+      // заметки открывает поле, текст набирается в нём, клавиша отправки отвечает.
+      const { optionDown, notes: notesKey } = profile.keys;
+      if (optionDown === undefined || notesKey === undefined) {
+        return fail('unsupported', 'this question takes no free-text answer');
+      }
+      const keys = question.options.map((o) => o.key);
+      const at = (s: ScreenState): number => keys.indexOf(selectedKey(s) ?? '');
+      const last = keys.length - 1;
+      if (question.notes !== undefined) {
+        // Поле уже открыто: набранное до нас не дополняем, чужой вариант не трогаем.
+        if (question.notes !== '') return fail('stale', 'the notes field already has text');
+        if (at(screen) !== last) return fail('stale', 'the notes field is open on another option');
+      } else {
+        let now = at(screen);
+        if (now < 0) return fail('stale', 'no pointer in the question');
+        while (now < last) {
+          const next = now + 1;
+          await press(ctx, optionDown);
+          const moved = await until(ctx, (s) => same(s) && s.question!.notes === undefined && at(s) === next);
+          if (!moved.met) return stopped();
+          now = next;
+        }
+        await press(ctx, notesKey);
+        const opened = await until(ctx, (s) => same(s) && s.question!.notes === '' && at(s) === last);
+        if (!opened.met) return stopped();
+      }
+      await press(ctx, text);
+      const typed = await until(ctx, (s) => same(s) && !!s.question!.notes && at(s) === last);
+      if (!typed.met) return stopped();
+      await press(ctx, profile.keys.submit);
+      return gone();
+    }
     let label = free.label;
     if (free.selected) {
       // Указатель уже на свободном варианте: цифра стала бы текстом. Набранное там
@@ -385,6 +479,12 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
       if (!marked.met) return stopped();
     }
     await press(ctx, flow.next);
+    // В серии вопросов та же клавиша ведёт к следующему шагу: ответы не отправляются
+    // сами — шаг отправки человек видит и подтверждает отдельно.
+    if ((question.steps?.filter((item) => !item.submit).length ?? 0) > 1) {
+      const moved = await until(ctx, (s) => !same(s) && s.kind === 'question' && s.question?.step !== undefined);
+      return moved.met ? done(moved.screen) : stopped();
+    }
     const submitOf = (s: ScreenState): ScreenOption | undefined =>
       s.kind === 'question' && s.question && s.question.stamp !== question.stamp && !s.question.multi
         ? s.question.options.find((o) => flow.submit.test(o.label))
@@ -393,43 +493,25 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
     if (!review.met) return stopped();
     await press(ctx, submitOf(review.screen)!.key);
     const reviewStamp = review.screen.question!.stamp;
-    return done((await until(ctx, (s) => s.question?.stamp !== reviewStamp)).screen);
+    const sent = await until(ctx, (s) => s.question?.stamp !== reviewStamp && s.kind !== 'unknown');
+    return sent.met ? done(sent.screen) : stopped();
   }
 
   const option = question.options.find((o) => o.key === action.option);
   if (!option) return fail('unsupported', 'no such option in the question');
   if (option.free) return fail('unsupported', 'the free-text option needs a text');
   if (question.multi) return fail('unsupported', 'this question takes several marks');
-  if (needsConfirm(ctx)) {
-    // Подтверждает ли цифра сама, не измерено: цифра, затем экран. Диалог ушёл — ответ
-    // принят; тот же диалог с указателем на выбранном варианте — клавиша отправки;
-    // всё остальное — остановка без клавиш.
-    if (!option.selected) {
-      // Указатель уже на варианте — цифру не шлём: ответь она сама, прежний экран с тем
-      // же указателем ещё стоял бы, и клавиша отправки ушла бы в следующий.
-      await press(ctx, option.key);
-      const moved = await until(ctx, (s) => !same(s) || selectedKey(s) === option.key);
-      if (!same(moved.screen)) {
-        return moved.screen.question ? fail('stale', 'another question took the place of the answered one') : done(moved.screen);
-      }
-      if (!moved.met) return stopped();
-    }
-    await press(ctx, profile.keys.submit);
-    return gone();
-  }
   // Цифра варианта отвечает сразу, без клавиши отправки.
   await press(ctx, option.key);
   return gone();
 }
 
-/** Диалог на экране — из тех, что подтверждаются клавишей отправки (`confirm` профиля). */
-function needsConfirm(ctx: Ctx): boolean {
+/** Поле заметки для своего ответа: вопрос на экране его допускает (`freeText` ставит
+ *  распознавание по измеренным подсказкам), и профиль знает, как оно устроено. */
+function notesOf(ctx: Ctx): NotesSign | undefined {
   const { screen, profile } = ctx;
-  const title = screen.question?.title;
-  return (
-    title !== undefined &&
-    profile.screen.dialogs.some((d) => d.confirm === true && d.kind === screen.kind && d.title?.test(title) === true)
-  );
+  if (screen.question?.freeText !== true) return undefined;
+  return profile.screen.dialogs.find((d) => d.kind === screen.kind && d.notes)?.notes;
 }
 
 function selectedKey(screen: ScreenState): string | undefined {

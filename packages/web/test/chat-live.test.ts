@@ -291,6 +291,260 @@ describe('карточка вопроса', () => {
   });
 });
 
+describe('все виды вопросов', () => {
+  const HINTED: ScreenState = {
+    kind: 'question',
+    question: {
+      stamp: 'H', title: 'Какой цвет?', freeText: true,
+      options: [
+        { key: '1', label: 'Red', hint: 'Bold and energetic.', selected: true },
+        { key: '2', label: 'Blue', hint: 'Calm and cool.' },
+        { key: '3', label: 'None of the above', hint: 'Optionally, add details in notes (tab)' },
+      ],
+    },
+  };
+
+  it('пояснение показано под подписью варианта; вариант без пояснения — одна подпись', async () => {
+    const fx = fixture(live(HINTED));
+    await mount(fx);
+    const opts = qa('.th-live-q__opt');
+    expect(opts.map((o) => o.querySelector('.th-live-q__opt-label')!.textContent)).toEqual(['Red', 'Blue', 'None of the above']);
+    expect(opts.map((o) => o.querySelector('.th-live-q__opt-hint')?.textContent)).toEqual([
+      'Bold and energetic.', 'Calm and cool.', 'Optionally, add details in notes (tab)',
+    ]);
+    // подпись стоит выше пояснения
+    expect(opts[0]!.firstElementChild!.className).toBe('th-live-q__opt-label');
+    handle!.teardown();
+    host.question.replaceChildren();
+    await mount(fixture(live(QUESTION)));
+    expect(q('.th-live-q__opt-hint')).toBeNull();
+  });
+
+  it('свой ответ без отдельного варианта (Codex): пункт с полем после вариантов, текст уходит без клавиши варианта', async () => {
+    const fx = fixture(live(HINTED, { agent: 'codex' }));
+    await mount(fx);
+    const item = q('.th-live-q__free')!;
+    expect(item.querySelector('.th-live-q__free-label')!.textContent).toBe(t('chat.live.ownAnswer'));
+    expect(item.previousElementSibling!.classList.contains('th-live-q__opt')).toBe(true);
+    item.querySelector<HTMLInputElement>('input')!.value = 'teal';
+    fx.actNext({ ok: true, screen: IDLE });
+    item.querySelector<HTMLButtonElement>('button')!.click();
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'answer', stamp: 'H', text: 'teal' }]);
+  });
+
+  it('свой ответ и «Chat about this» — отдельными пунктами на своих местах, как у агента', async () => {
+    const screen: ScreenState = {
+      kind: 'question',
+      question: {
+        stamp: 'C', title: 'Что дальше?', freeText: true,
+        options: [
+          { key: '1', label: 'Да', hint: 'Продолжить' },
+          { key: '2', label: 'Type something.', free: true },
+          { key: '3', label: 'Chat about this' },
+        ],
+      },
+    };
+    await mount(fixture(live(screen)));
+    const items = [...q('.th-live-q__opts')!.children].map((c) => c.className.split(' ')[0]);
+    expect(items).toEqual(['th-live-q__opt', 'th-live-q__free', 'th-live-q__opt']);
+    expect(q('.th-live-q__free-label')!.textContent).toBe('Type something.');
+    expect(qa('.th-live-q__opt').map((o) => o.querySelector('.th-live-q__opt-label')!.textContent)).toEqual(['Да', 'Chat about this']);
+  });
+
+  it('несколько отметок с пояснениями: кнопка «Ответить» на месте', async () => {
+    const multi: ScreenState = {
+      kind: 'question',
+      question: { stamp: 'M2', title: 'Что включить?', multi: true, options: [{ key: '1', label: 'A', hint: 'первое', checked: false }, { key: '2', label: 'B', checked: false }] },
+    };
+    const fx = fixture(live(multi));
+    await mount(fx);
+    expect(q('.th-live-q__submit')!.textContent).toBe(t('chat.live.answer'));
+    qa('.th-live-q__opt')[0]!.click();
+    q<HTMLButtonElement>('.th-live-q__submit')!.click();
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'answer', stamp: 'M2', options: ['1'] }]);
+  });
+
+  it('гость: поле своего ответа и кнопки неактивны', async () => {
+    await mount(fixture(live(HINTED), { write: false, files: false }));
+    expect(q<HTMLInputElement>('.th-live-q__free input')!.disabled).toBe(true);
+    expect(qa('.th-live-q__opt').every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
+});
+
+describe('ожидающий вопрос', () => {
+  const PENDING: ScreenState = { kind: 'idle', mode: 'manual', pending: true };
+
+  it('пока вопрос ждёт — кнопка «Вопрос агента» в месте над полем ввода; нажатие просит показать и открывает карточку', async () => {
+    const fx = fixture(live(PENDING, { agent: 'codex' }));
+    await mount(fx);
+    const btn = host.question.querySelector<HTMLButtonElement>('.th-live-q__pending')!;
+    expect(btn.textContent).toBe(t('chat.live.pendingQuestion'));
+    expect(q('.th-live-q')).toBeNull();
+    await run(1000); // кнопка видна, пока вопрос ждёт
+    expect(host.question.querySelector('.th-live-q__pending')).toBe(btn);
+    fx.actNext({ ok: true, screen: QUESTION });
+    btn.click();
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'show-question' }]);
+    expect(q('.th-live-q__title')!.textContent).toBe('Какой файл править?');
+    expect(q('.th-live-q__pending')).toBeNull();
+  });
+
+  it('признака нет — кнопки нет; признак пропал — кнопка уходит', async () => {
+    const fx = fixture(live(IDLE));
+    await mount(fx);
+    expect(q('.th-live-q__pending')).toBeNull();
+    fx.next(live(PENDING));
+    await run(1000);
+    expect(q('.th-live-q__pending')).not.toBeNull();
+    fx.next(live(IDLE));
+    await run(1000);
+    expect(q('.th-live-q__pending')).toBeNull();
+  });
+
+  it('вопрос не открылся — тост, кнопка остаётся', async () => {
+    const fx = fixture(live(PENDING));
+    await mount(fx);
+    fx.actNext({ ok: false, reason: 'stale', detail: 'the pending question did not open' });
+    q<HTMLButtonElement>('.th-live-q__pending')!.click();
+    await run(0);
+    expect(toasts()).toContain(t('chat.live.pendingFailed'));
+    expect(q('.th-live-q__pending')).not.toBeNull();
+  });
+
+  it('гость видит кнопку неактивной с подписью «только просмотр»', async () => {
+    const fx = fixture(live(PENDING), { write: false, files: false });
+    await mount(fx);
+    const btn = q<HTMLButtonElement>('.th-live-q__pending')!;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toBe(t('chat.live.viewOnly'));
+    btn.click();
+    await run(0);
+    expect(fx.acts).toEqual([]);
+  });
+});
+
+describe('полоса шагов над вопросом', () => {
+  const SERIES: ScreenState = {
+    kind: 'question',
+    question: {
+      stamp: 'Q2', title: 'Какой цвет?', step: 2,
+      steps: [
+        { label: 'Животное', done: true },
+        { label: 'Цвет', current: true },
+        { label: 'Размер' },
+        { label: 'Submit', submit: true },
+      ],
+      options: [{ key: '1', label: 'Красный' }, { key: '2', label: 'Синий' }],
+    },
+  };
+
+  it('названия шагов, отвеченный и текущий помечены, «2 из 3» считает только вопросы; полоса стоит над текстом вопроса', async () => {
+    await mount(fixture(live(SERIES)));
+    const steps = qa('.th-live-q__step');
+    expect(steps.map((s) => s.textContent)).toEqual(['Животное', 'Цвет', 'Размер', 'Submit']);
+    expect(steps.map((s) => s.classList.contains('is-done'))).toEqual([true, false, false, false]);
+    expect(steps.map((s) => s.getAttribute('aria-current'))).toEqual([null, 'step', null, null]);
+    expect(steps[3]!.classList.contains('is-submit')).toBe(true);
+    expect(q('.th-live-q__count')!.textContent).toBe(t('chat.live.stepOf', { n: 2, m: 3 }));
+    const bar = q('.th-live-q__steps')!;
+    expect(bar.compareDocumentPosition(q('.th-live-q__title')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('нажатие на шаг шлёт step с отпечатком и номером; текущий шаг не нажимается', async () => {
+    const fx = fixture(live(SERIES));
+    await mount(fx);
+    const steps = qa('.th-live-q__step') as HTMLButtonElement[];
+    expect(steps[1]!.disabled).toBe(true);
+    fx.actNext({ ok: true, screen: { kind: 'question', question: { ...SERIES.question!, stamp: 'Q3', title: 'Какой размер?', step: 3 } } });
+    steps[2]!.click();
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'step', stamp: 'Q2', to: 3 }]);
+    expect(q('.th-live-q__title')!.textContent).toBe('Какой размер?');
+    expect(q('.th-live-q__count')!.textContent).toBe(t('chat.live.stepOf', { n: 3, m: 3 }));
+  });
+
+  it('шаг отправки: то, что рисует агент, счётчика «N из M» нет, кнопки вариантов — отправка и отмена', async () => {
+    const review: ScreenState = {
+      kind: 'question',
+      question: {
+        stamp: 'R', title: 'Ready to submit your answers?', body: 'Review your answers', step: 4,
+        steps: [...SERIES.question!.steps!.slice(0, 3).map((s) => ({ label: s.label, done: true })), { label: 'Submit', submit: true, current: true }],
+        options: [{ key: '1', label: 'Submit answers' }, { key: '2', label: 'Cancel' }],
+      },
+    };
+    const fx = fixture(live(review));
+    await mount(fx);
+    expect(q('.th-live-q__count')).toBeNull();
+    expect(q('.th-live-q__body')!.textContent).toBe('Review your answers');
+    qa('.th-live-q__opt')[0]!.click();
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'answer', stamp: 'R', option: '1' }]);
+  });
+
+  it('одиночный вопрос: название показано, счётчика и перехода нет; вопрос без полосы — полосы нет', async () => {
+    const single: ScreenState = { kind: 'question', question: { ...QUESTION.question!, steps: [{ label: 'Файл', current: true }], step: 1 } };
+    await mount(fixture(live(single)));
+    expect(qa('.th-live-q__step').map((s) => s.textContent)).toEqual(['Файл']);
+    expect(q('.th-live-q__count')).toBeNull();
+    handle!.teardown();
+    host.question.replaceChildren();
+    await mount(fixture(live(QUESTION)));
+    expect(q('.th-live-q__steps')).toBeNull();
+  });
+
+  it('экран не выделил текущий шаг или гость — шаги не нажимаются', async () => {
+    const blind: ScreenState = { kind: 'question', question: { ...SERIES.question!, step: undefined, steps: SERIES.question!.steps!.map(({ current: _c, ...s }) => s) } };
+    await mount(fixture(live(blind)));
+    expect((qa('.th-live-q__step') as HTMLButtonElement[]).every((b) => b.disabled)).toBe(true);
+    expect(q('.th-live-q__count')).toBeNull();
+    handle!.teardown();
+    host.question.replaceChildren();
+    await mount(fixture(live(SERIES), { write: false, files: false }));
+    expect((qa('.th-live-q__step') as HTMLButtonElement[]).every((b) => b.disabled)).toBe(true);
+  });
+});
+
+describe('место карточки', () => {
+  it('ряд управления встаёт перед местом вопроса: карточка — между ним и полем ввода', async () => {
+    wrap.replaceChildren(host.status, host.terminal, host.question, host.composer);
+    await mount(fixture(live(QUESTION)));
+    expect(host.question.previousElementSibling!.classList.contains('th-live__controls')).toBe(true);
+    expect(host.question.nextElementSibling).toBe(host.composer);
+    expect(host.question.querySelector('.th-live-q')).not.toBeNull();
+  });
+});
+
+describe('окно терминала закрылось', () => {
+  it('сообщает оболочке: кнопкой окна и «Скрыть терминал» — byButton, само после узнанного экрана — нет', async () => {
+    const closed: boolean[] = [];
+    host.onTerminalClosed = (byButton) => closed.push(byButton);
+    const fx = fixture(live({ kind: 'unknown' }));
+    await mount(fx);
+    await run(1000); // два неузнанных кадра — окно открыто
+    expect(q<HTMLElement>('.th-chat-term')!.hidden).toBe(false);
+    expect(closed).toEqual([]);
+    q<HTMLButtonElement>('.th-chat-term__close')!.click();
+    expect(closed).toEqual([true]);
+    q<HTMLButtonElement>('.th-live__term-btn')!.click(); // открыл сам
+    expect(closed).toEqual([true]);
+    q<HTMLButtonElement>('.th-live__term-btn')!.click(); // скрыл сам
+    expect(closed).toEqual([true, true]);
+    // новый эпизод: экран узнан, снова неузнан — окно открывается и само сворачивается
+    fx.next(live(IDLE));
+    await run(2000);
+    fx.next(live({ kind: 'unknown' }));
+    await run(2000);
+    expect(q<HTMLElement>('.th-chat-term')!.hidden).toBe(false);
+    fx.next(live(IDLE));
+    await run(2000);
+    expect(q<HTMLElement>('.th-chat-term')!.hidden).toBe(true);
+    expect(closed).toEqual([true, true, false]);
+  });
+});
+
 describe('режим', () => {
   it('показывает режим с экрана; после выбора — фактический из ответа; не совпал — тост и сбой', async () => {
     const fx = fixture(live(IDLE));

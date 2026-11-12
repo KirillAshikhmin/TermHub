@@ -33,8 +33,11 @@ export interface LiveHost {
   head?: HTMLElement;
   question: HTMLElement;
   terminal: HTMLElement;
-  /** Только якорь: ряд управления встаёт перед полем ввода. Содержимое не трогается. */
+  /** Только якорь. Содержимое не трогается. */
   composer: HTMLElement;
+  /** Окно терминала закрылось: `byButton` — человек закрыл его сам (кнопкой окна или
+   *  «Скрыть терминал»), иначе оно свернулось после узнанного экрана. */
+  onTerminalClosed?: (byButton: boolean) => void;
 }
 
 export interface LiveHandle {
@@ -163,7 +166,26 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   bgBtn.setAttribute('aria-expanded', 'false');
   bgBtn.hidden = true;
   controls.append(modeSel, modelBtn, ctxEl, agentsBtn, shellsEl, bgBtn, compactBtn, termBtn);
-  host.composer.before(controls);
+  // Ряд управления — над местом вопроса: карточка стоит сразу над полем ввода.
+  host.question.before(controls);
+
+  // Вопрос ждёт, но агент его не показывает: кнопка в месте вопроса, над полем ввода.
+  const pendingBtn = button('th-live-q__pending', t('chat.live.pendingQuestion'), () => void showPending());
+  if (readOnly) pendingBtn.title = t('chat.live.viewOnly');
+  const showPending = async (): Promise<void> => {
+    if (busy || readOnly) return;
+    busy = true;
+    render();
+    try {
+      const res = await act({ kind: 'show-question' });
+      if (!res.ok) toast(t('chat.live.pendingFailed'), 'error');
+    } catch {
+      toast(t('chat.live.actFailed'), 'error');
+    } finally {
+      busy = false;
+      if (!disposed) render();
+    }
+  };
 
   // Лист со списком — в области чата (якорь .th-chat), как окно терминала: не fixed.
   const sheet = el('div', 'th-live__sheet');
@@ -238,6 +260,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
 
   let manualTerm = false;
   let dismissedTerm = false;
+  /** Окно сейчас закрывает сам человек (кнопкой окна или «Скрыть терминал»). */
+  let closingByButton = false;
   // Эпизод неузнанного экрана: начинается, когда экран неузнан (или показывает меню)
   // SETTLE_FRAMES кадров подряд, кончается, когда он столько же кадров подряд узнан.
   // Окно открывается и сворачивается только на границах эпизода.
@@ -254,6 +278,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     onClose: () => {
       manualTerm = false;
       dismissedTerm = true;
+      // Кнопка окна уже скрыла его сама — до `syncTerminal`.
+      host.onTerminalClosed?.(true);
       syncTerminal();
     },
   });
@@ -281,20 +307,80 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   const answer = (q: ScreenQuestion, payload: { option?: string; options?: string[]; text?: string }): void =>
     void ui({ kind: 'answer', stamp: q.stamp, ...payload });
 
+  /** Свой ответ — отдельный пункт: подпись и поле с кнопкой отправки. */
+  const freeItem = (q: ScreenQuestion, label: string): HTMLElement => {
+    const item = el('div', 'th-live-q__free');
+    item.append(el('div', 'th-live-q__free-label', label));
+    const row = el('div', 'th-live-q__free-row');
+    const input = el('input', 'th-live-q__input');
+    input.type = 'text';
+    input.placeholder = t('chat.live.other');
+    input.setAttribute('aria-label', label);
+    const send = button('th-live-q__send', t('chat.live.otherSend'), () => {
+      const text = input.value.trim();
+      if (text) answer(q, { text });
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        send.click();
+      }
+    });
+    cardInputs.push(input, send);
+    row.append(input, send);
+    item.append(row);
+    return item;
+  };
+
+  /** Полоса шагов серии вопросов: названия, как их рисует агент, и «N из M» по вопросам. */
+  const stepsBar = (q: ScreenQuestion): HTMLElement | null => {
+    const steps = q.steps;
+    if (!steps || steps.length === 0) return null;
+    const bar = el('div', 'th-live-q__steps');
+    const questions = steps.filter((s) => !s.submit).length;
+    const several = steps.length > 1 && q.step !== undefined;
+    steps.forEach((s, index) => {
+      const b = button('th-live-q__step', s.label, () => void ui({ kind: 'step', stamp: q.stamp, to: index + 1 }));
+      if (s.done) b.classList.add('is-done');
+      if (s.submit) b.classList.add('is-submit');
+      if (s.current) b.setAttribute('aria-current', 'step');
+      // Текущий шаг и полоса, где агент текущего не выделил, не нажимаются.
+      if (several && !s.current) cardInputs.push(b);
+      else b.disabled = true;
+      bar.append(b);
+    });
+    const at = q.step === undefined ? undefined : steps[q.step - 1];
+    if (questions > 1 && at && !at.submit) {
+      const n = steps.slice(0, q.step).filter((s) => !s.submit).length;
+      bar.append(el('span', 'th-live-q__count', t('chat.live.stepOf', { n, m: questions })));
+    }
+    return bar;
+  };
+
   const buildCard = (q: ScreenQuestion): HTMLElement => {
     cardButtons.length = 0;
     cardInputs = [];
     picked.clear();
     const box = el('div', 'th-live-q');
+    const bar = stepsBar(q);
+    if (bar) box.append(bar);
     box.append(el('div', 'th-live-q__title', q.title));
     if (q.body) box.append(el('pre', 'th-live-q__body', q.body));
     const list = el('div', 'th-live-q__opts');
     const multi = q.multi === true;
+    let hasFree = false;
     for (const o of q.options) {
-      if (o.free) continue; // свободный вариант — поле «другой ответ», а не кнопка
-      const b = el('button', 'th-live-q__opt', o.label);
+      if (o.free) {
+        // Свободный вариант — пункт с полем на своём месте, а не кнопка.
+        hasFree = true;
+        list.append(freeItem(q, o.label));
+        continue;
+      }
+      const b = el('button', 'th-live-q__opt');
       b.type = 'button';
       b.dataset.key = o.key;
+      b.append(el('span', 'th-live-q__opt-label', o.label));
+      if (o.hint) b.append(el('span', 'th-live-q__opt-hint', o.hint));
       if (o.selected) b.classList.add('is-pointer');
       if (multi) {
         if (o.checked) picked.add(o.key);
@@ -310,6 +396,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       cardButtons.push(b);
       list.append(b);
     }
+    // Свой ответ без отдельного варианта (заметка Codex) — пунктом после вариантов.
+    if (q.freeText && !hasFree && !multi) list.append(freeItem(q, t('chat.live.ownAnswer')));
     box.append(list);
     if (multi) {
       const submit = button('th-live-q__submit', t('chat.live.answer'), () =>
@@ -317,26 +405,6 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       );
       cardInputs.push(submit);
       box.append(submit);
-    }
-    if (q.freeText || q.options.some((o) => o.free)) {
-      const row = el('div', 'th-live-q__free');
-      const input = el('input', 'th-live-q__input');
-      input.type = 'text';
-      input.placeholder = t('chat.live.other');
-      input.setAttribute('aria-label', t('chat.live.other'));
-      const send = button('th-live-q__send', t('chat.live.otherSend'), () => {
-        const text = input.value.trim();
-        if (text) answer(q, { text });
-      });
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          send.click();
-        }
-      });
-      cardInputs.push(input, send);
-      row.append(input, send);
-      box.append(row);
     }
     if (readOnly) box.append(el('div', 'th-live-q__readonly', t('chat.live.viewOnly')));
     return box;
@@ -358,8 +426,11 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   };
 
   const syncTerminal = (): void => {
+    const was = term.visible();
     if (manualTerm || (state && episode && !dismissedTerm)) term.show();
     else term.hide();
+    if (was && !term.visible()) host.onTerminalClosed?.(closingByButton);
+    closingByButton = false;
     term.setReason(termReason());
     termBtn.textContent = term.visible() ? t('chat.live.hideTerm') : t('chat.live.showTerm');
   };
@@ -368,6 +439,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     if (term.visible()) {
       manualTerm = false;
       dismissedTerm = true;
+      closingByButton = true;
     } else {
       manualTerm = true;
     }
@@ -457,6 +529,12 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     }
     termBtn.hidden = !s;
     syncBackground();
+
+    // Кнопка ожидающего вопроса: пока экран о нём говорит.
+    const pending = !!s && !offline && (kind === 'idle' || kind === 'working') && s.screen.pending === true;
+    if (pending && !pendingBtn.isConnected) host.question.prepend(pendingBtn);
+    else if (!pending) pendingBtn.remove();
+    pendingBtn.disabled = readOnly || busy;
 
     // Карточка вопроса.
     const q = s && (kind === 'question' || kind === 'permission') ? s.screen.question : undefined;
@@ -654,6 +732,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       closeSheet();
       sheet.remove();
       controls.remove();
+      pendingBtn.remove();
       bar.remove();
       notice?.remove();
       card?.remove();

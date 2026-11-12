@@ -5,9 +5,9 @@
 // ввода. Места пустые и ничего не знают о своём содержимом; их заполняет тот, кто ими
 // владеет, через `slots`.
 //
-// Раскладка сверху вниз: [состояние] [переписка] [вопрос] [терминал] [поле ввода].
-// Переписка занимает всё свободное место и прокручивается сама; остальное — по высоте
-// содержимого, поле ввода всегда у нижнего края.
+// Раскладка сверху вниз: [состояние] [переписка] [терминал] [ряд управления] [вопрос]
+// [поле ввода]. Переписка занимает всё свободное место и прокручивается сама; остальное —
+// по высоте содержимого, поле ввода всегда у нижнего края, карточка вопроса — сразу над ним.
 
 import { mountComposer, type ComposerHandle } from './chat-composer';
 import { createChatImages } from './chat-images';
@@ -29,11 +29,12 @@ export interface ChatSlots {
   /** Место над перепиской: плашка непроверенной версии агента (`chat-live.ts`). Состояние
    *  агента и «Стоп» стоят не здесь, а в строке шапки переписки. */
   status: HTMLElement;
-  /** Карточка вопроса или запроса разрешения (`chat-live.ts`). */
+  /** Карточка вопроса или запроса разрешения и кнопка ожидающего вопроса (`chat-live.ts`) —
+   *  сразу над полем ввода; ряд управления встаёт перед этим местом. */
   question: HTMLElement;
   /** Окошко живого терминала для неузнанного экрана (`chat-live.ts`, `chat-term.ts`). */
   terminal: HTMLElement;
-  /** Поле ввода (`chat-composer.ts`). Ряд управления (режим, модель, контекст) встаёт перед ним. */
+  /** Поле ввода (`chat-composer.ts`). */
   composer: HTMLElement;
 }
 
@@ -92,7 +93,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   const thread = document.createElement('div');
   thread.className = 'th-chat__thread';
   thread.setAttribute('aria-label', t('chat.thread'));
-  root.append(offlineEl, slots.status, thread, slots.question, slots.terminal, slots.composer);
+  root.append(offlineEl, slots.status, thread, slots.terminal, slots.question, slots.composer);
   host.append(sbar.el, toolbar, root);
   hideBar = wireToolbar({ toolbars: [toolbar], floatMount: root, toggleMount: sbar.toggleSlot }).hide;
 
@@ -138,7 +139,18 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   // (opencode, оболочка) — запрос живого экрана отвечает отказом, и полосы не видно.
   // Состояние с экрана (слово состояния, время, токены, «Стоп») стоит в строке шапки
   // переписки; пока оно показано, подпись шапки «Агент работает» не дублируется.
-  const live = mountLive({ ...slots, head: feed.stateSlot }, session, transport, (state, changed) => {
+  // Окно терминала закрылось — фокус возвращается в поле ввода. Не перехватывается у
+  // поля своего ответа карточки вопроса; на телефоне (грубый указатель) — только при
+  // закрытии кнопкой: иначе клавиатура выскакивала бы сама.
+  let composer: ComposerHandle | null = null;
+  const onTerminalClosed = (byButton: boolean): void => {
+    if (!composer) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.closest('.th-live-q__free')) return;
+    if (!byButton && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return;
+    composer.focus();
+  };
+  const live = mountLive({ ...slots, head: feed.stateSlot, onTerminalClosed }, session, transport, (state, changed) => {
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.
     feed.setBusy(state?.screen.kind === 'working');
@@ -147,7 +159,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
 
   // Поле ввода — тем, у кого есть право ввода; зрителю места под него нет вовсе.
   const readOnly = !!transport.clientScope && !transport.clientScope.write;
-  const composer: ComposerHandle | null = readOnly ? null : mountComposer(slots.composer, session, { transport, live, thread: feed });
+  composer = readOnly ? null : mountComposer(slots.composer, session, { transport, live, thread: feed });
 
   // Текст, набранный в строке агента в терминале, виден над полем (и зрителю — без кнопки).
   // Строка встаёт над рядом управления: тот остаётся вплотную к полю.

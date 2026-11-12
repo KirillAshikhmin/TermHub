@@ -50,6 +50,24 @@ describe('оболочка и действия', () => {
     expect(getComputedStyle(slot).display).toBe('none');
   });
 
+  it('место вопроса над полем ввода прокручивается само, а высоты поля не отнимает', () => {
+    const slot = el('div', 'th-chat__slot th-chat__slot--question');
+    el('div', 'th-live-q', slot);
+    document.body.append(slot);
+    expect(getComputedStyle(slot).overflowY).toBe('auto');
+    expect(getComputedStyle(slot).maxHeight).toMatch(/^\d/);
+    expect(getComputedStyle(slot).flexGrow).toBe('0');
+  });
+
+  it('пояснение варианта стоит под подписью, кнопка варианта не ниже 44 px', () => {
+    const opt = el('button', 'th-live-q__opt');
+    el('span', 'th-live-q__opt-label', opt);
+    el('span', 'th-live-q__opt-hint', opt);
+    document.body.append(opt);
+    expect(getComputedStyle(opt).flexDirection).toBe('column');
+    expect(getComputedStyle(opt).minHeight).toBe('44px');
+  });
+
   it('строки diff: добавленные и убранные различаются фоном', () => {
     const add = el('div', 'th-diff__line is-add');
     const del = el('div', 'th-diff__line is-del');

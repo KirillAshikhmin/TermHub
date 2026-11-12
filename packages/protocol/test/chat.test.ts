@@ -5,7 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 import { AGENT_CAPS, CAP_CHAT, CLIENT_CAPS } from '../src/capabilities.js';
 import { questionStamp } from '../src/chat.js';
-import type { ChatAction, LiveState, ScreenQuestion } from '../src/chat.js';
+import type { ChatAction, LiveState, ScreenOption, ScreenQuestion } from '../src/chat.js';
+
+/** Отпечаток вопроса «Which color?» с вариантами Red и Blue, посчитанный до пояснений. */
+const BARE_STAMP = '9460751f43fd2359';
 import { FrameType } from '../src/frames.js';
 
 describe('кадры чата', () => {
@@ -96,6 +99,20 @@ describe('questionStamp', () => {
       { key: '2', label: 'parrot', free: true },
     ]);
     expect(touched).toBe(plain);
+  });
+
+  it('пояснения вариантов в отпечаток не входят', () => {
+    const bare = questionStamp('Which color?', [
+      { key: '1', label: 'Red' },
+      { key: '2', label: 'Blue' },
+    ]);
+    const hinted: ScreenOption[] = [
+      { key: '1', label: 'Red', hint: 'Bold and energetic.' },
+      { key: '2', label: 'Blue', hint: 'Calm and cool.' },
+    ];
+    expect(questionStamp('Which color?', hinted)).toBe(bare);
+    // Известное значение: считалось до появления пояснений.
+    expect(bare).toBe(BARE_STAMP);
   });
 });
 

@@ -1,0 +1,11 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 100,
+  "rows": 32,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "note": "Composite: the live single-question capture with its chip line replaced by a three-question step bar. The bar geometry and the highlight of the current step (background 48;5;153) are those of the live question-multi and question-review captures; a bar with several questions was not captured live."
+}

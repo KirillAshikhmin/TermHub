@@ -39,9 +39,25 @@ export interface DialogSign {
   /** Свободный ответ — последний вариант перед внутренней линейкой: его подпись
    *  меняется по мере набора, и по тексту его не узнать. */
   freeBeforeRule?: boolean;
-  /** Цифра варианта может только переставить указатель, а отвечает клавиша отправки
-   *  (подвал «enter to submit»). Требует `title`: по нему диалог узнаётся при ответе. */
-  confirm?: boolean;
+  /** Строка счётчика над заголовком, с которой диалог этим диалогом не считается
+   *  («Field 1/3» — форма из нескольких полей, а не запрос разрешения). */
+  notCounter?: RegExp;
+  /** Свой ответ — заметка к варианту (Codex): поле открывается клавишей `keys.notes`,
+   *  текст набирается в нём, клавиша отправки отвечает. */
+  notes?: NotesSign;
+}
+
+/** Поле заметки в диалоге. Подсказки сверяются целиком: свой ответ измерен только на
+ *  одиночном вопросе, и другой состав подсказок (вопросов несколько) его не предлагает. */
+export interface NotesSign {
+  /** Подсказка под вариантами, пока поле закрыто (вся, одной строкой). */
+  closed: RegExp;
+  /** Подсказка при открытом поле. */
+  open: RegExp;
+  /** Строка самого поля над подсказкой: группа 1 — текст. */
+  line: RegExp;
+  /** Подпись варианта, к которому идёт свой ответ; он обязан быть последним. */
+  other: RegExp;
 }
 
 /** Известное меню: чат его не разбирает, а показывает окошком терминала. */
@@ -86,6 +102,9 @@ export interface ScreenSigns {
   /** Счётчики фоновой работы среди пунктов подвала (пункты разделены `sep`): группа 1 —
    *  число. Пункт обязан совпасть целиком. */
   background?: { sep: RegExp; shells: RegExp; agents: RegExp };
+  /** Вопрос ждёт, но на экране его нет: признак в подвале строки ввода. Клавиша, которой
+   *  агент его показывает, — `keys.showPending`. */
+  pending?: RegExp;
   /** Строка переписки агента (реплика, вызов инструмента). Нужна только причине отказа:
    *  отличает оборванный экран агента от экрана, где агента нет вовсе. */
   talk: RegExp;
@@ -100,6 +119,10 @@ export interface ScreenSigns {
   queue: { item: RegExp; under?: RegExp };
   /** Строки над заголовком вопроса, которые в заголовок не входят (вкладки, счётчик). */
   chip: RegExp;
+  /** Полоса шагов в строке `chip` («←  ☒ Название  ☐ Название  ✔ Submit  →»): `item` —
+   *  глобальный признак шага (группа 1 — знак, группа 2 — название), `done` и `submit` —
+   *  знаки отвеченного вопроса и шага отправки. Текущий шаг нарисован с фоном. */
+  steps?: { item: RegExp; done: string; submit: string };
   /** Подпись варианта «свой ответ». */
   free: RegExp;
   dialogs: DialogSign[];
@@ -126,6 +149,15 @@ export interface AgentProfile {
      *  ТОЛЬКО при непустой строке: на пустой те же клавиши у Claude открывают меню
      *  отката, а Codex закрывают. */
     clearInput: string[];
+    /** Показать ожидающий вопрос (`screen.pending`). Нет — агент такого не рисует. */
+    showPending?: string;
+    /** Указатель диалога на вариант ниже — для своего ответа заметкой (`DialogSign.notes`). */
+    optionDown?: string;
+    /** Открыть поле заметки в диалоге. */
+    notes?: string;
+    /** Следующий и предыдущий шаг полосы над вопросом (`screen.steps`). */
+    stepNext?: string;
+    stepPrev?: string;
   };
   modes: ModeSign[];
   models: ModelEntry[];
@@ -157,6 +189,10 @@ const CLAUDE: AgentProfile = {
     modeCycle: '\x1b[Z',
     newline: '\x1b\r',
     clearInput: ['\x1b', '\x1b'],
+    // Стрелка вправо измерена (переход к подтверждению ответов); влево — по стрелке «←»
+    // самой полосы и подсказке «Tab/Arrow keys to navigate», живьём не измерена.
+    stepNext: '\x1b[C',
+    stepPrev: '\x1b[D',
   },
   modes: [
     { id: 'manual', label: 'Manual', sign: /\bmanual mode on\b/ },
@@ -265,6 +301,7 @@ const CLAUDE: AgentProfile = {
     waiting: /^[^\s\p{L}\p{N}⏺❯⎿●]\sWaiting for (\d+) background agents? to finish$/u,
     queue: { item: /^❯\s/, under: /^\s+ctrl\+x ctrl\+s to send now$/ },
     chip: /^[←\s]*[☐☒✔]\s/,
+    steps: { item: /([☐☒✔])\s+(\S(?:.*?\S)?)(?=\s+[☐☒✔→]|\s*$)/gu, done: '☒', submit: '✔' },
     free: /^Type something\.?$/,
     dialogs: [
       {
@@ -299,6 +336,10 @@ const CODEX: AgentProfile = {
     modeCycle: '\x1b[Z',
     newline: '\x1b\r',
     clearInput: ['\x03'],
+    // Ctrl+/ — так его называет сам подвал: «main needs input · ⌃/ to switch».
+    showPending: '\x1f',
+    optionDown: '\x1b[B',
+    notes: '\t',
   },
   modes: [
     { id: 'default', label: 'Default' },
@@ -381,6 +422,9 @@ const CODEX: AgentProfile = {
     notFooter: /\b(?:enter|esc)\b/i,
     footerLines: 3,
     statusLine: { sep: /\s{2,}|\s·\s/, working: /^Working$/, idle: /^Ready$/ },
+    // Побочная беседа (/side), пока главный поток ждёт ответа на вопрос. Клавиша названа в
+    // том же пункте подвала — без неё признака нет («main finished» вопросом не является).
+    pending: /\bmain needs input · ⌃\/ to switch\b/,
     talk: /^[›•]\s/,
     status: /^(?:\S\s)?(Working)\s*\((.+?)\s•\sesc to interrupt\)$/,
     queue: { item: /^\s+↳\s/ },
@@ -388,7 +432,19 @@ const CODEX: AgentProfile = {
     chip: /^(?:Question|Field) \d+\/\d+\b/,
     free: /^$/,
     dialogs: [
-      { kind: 'question', footer: /\benter to submit answer\b/, below: 'label' },
+      // «enter to submit all» — у последнего из нескольких вопросов. Свой ответ — заметка
+      // к «None of the above» — измерен только на одиночном вопросе («Question 1/1»).
+      {
+        kind: 'question',
+        footer: /\benter to submit (?:answer|all)\b/,
+        below: 'label',
+        notes: {
+          closed: /^tab to add notes \| enter to submit answer \| esc to interrupt$/,
+          open: /^tab or esc to clear notes \| enter to submit answer$/,
+          line: /^\s{2}› (.*)$/,
+          other: /^None of the above$/,
+        },
+      },
       {
         kind: 'permission',
         footer: /^Press enter to confirm or esc to cancel$/,
@@ -404,7 +460,9 @@ const CODEX: AgentProfile = {
         footer: /^enter to submit \| esc to cancel$/,
         title: /^Allow \S.* to (?:run|use)\b/,
         below: 'label',
-        confirm: true,
+        // Цифра варианта отвечает сама (замер на 0.167.2), как и в прочих диалогах.
+        // После движения указателя счётчик дописывает «(1 required unanswered)».
+        notCounter: /^Field (?!1\/1\b)/,
       },
     ],
     menus: [

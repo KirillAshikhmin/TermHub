@@ -275,46 +275,58 @@ describe('sessionAct — ответ на вопрос', () => {
       );
   }
 
-  it('запрос Codex на инструмент MCP: цифра подтвердила сама — Enter не послан', async () => {
+  // Замер на Codex 0.167.2: цифра в диалоге MCP отвечает сама, как в прочих диалогах, —
+  // клавиши отправки после неё нет ни в одном исходе.
+  it('запрос Codex на инструмент MCP: цифра отвечает сама — Enter не послан', async () => {
     const f = fake('codex', 'permission-mcp', () => 'working');
     const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '2' });
     expect(f.sent).toEqual(['2']);
     expect(screenOf(result).kind).toBe('working');
   });
 
-  it('запрос Codex на инструмент MCP: цифра передвинула указатель — один Enter, диалог ушёл', async () => {
-    const f = fake('codex', 'permission-mcp', (sent) => (sent === '4' ? mcpAt('4') : 'working'));
-    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '4' });
-    expect(f.sent).toEqual(['4', '\r']);
+  it('запрос Codex на инструмент MCP: указатель уже на выбранном варианте — та же цифра, без Enter', async () => {
+    const f = fake('codex', 'permission-mcp', () => 'working');
+    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '1' });
+    expect(f.sent).toEqual(['1']);
     expect(screenOf(result).kind).toBe('working');
   });
 
-  it('запрос Codex на инструмент MCP: указатель не встал на выбранный вариант — stale, Enter не послан', async () => {
+  it('запрос Codex на инструмент MCP: диалог после цифры остался — stale, Enter вдогонку не идёт', async () => {
     const stamp = stampOf('codex', 'permission-mcp');
     const still = fake('codex', 'permission-mcp');
     expect(await act(still, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
     expect(still.sent).toEqual(['4']);
-    const wrong = fake('codex', 'permission-mcp', () => mcpAt('3'));
-    expect(await act(wrong, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
-    expect(wrong.sent).toEqual(['4']);
+    const moved = fake('codex', 'permission-mcp', () => mcpAt('4'));
+    expect(await act(moved, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(moved.sent).toEqual(['4']);
   });
 
-  it('запрос Codex на инструмент MCP: за время ожидания пришёл другой запрос — stale, Enter не послан', async () => {
-    const other = mcpAt('4').map((line) => line.replace('"search_pages"', '"delete_pages"'));
-    const f = fake('codex', 'permission-mcp', () => other);
-    const stamp = stampOf('codex', 'permission-mcp');
-    expect(readScreen(other, profileOf('codex')).question!.stamp).not.toBe(stamp);
-    expect(await act(f, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
-    expect(f.sent).toEqual(['4']);
-  });
-
-  it('запрос Codex на инструмент MCP: указатель уже на выбранном варианте — один Enter без цифры', async () => {
-    // Цифра здесь могла бы ответить сама, а экран с указателем на том же варианте ещё
-    // стоял бы — и Enter ушёл бы уже в следующий экран.
-    const f = fake('codex', 'permission-mcp', () => 'working');
+  it('неузнанный кадр после цифры — не успех: ответ ждёт экран, который узнан', async () => {
+    const f = fake('codex', 'permission-mcp', () => ['  half-drawn frame']);
+    // Два кадра перерисовки не узнаны, затем агент работает.
+    const garbage = f.src.capture!;
+    let after = 0;
+    f.src.capture = async (session) => {
+      if (f.sent.length > 0 && ++after > 2) return { ...(await garbage(session)), lines: shot('codex', 'working') };
+      return garbage(session);
+    };
     const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '1' });
-    expect(f.sent).toEqual(['\r']);
+    expect(f.sent).toEqual(['1']);
     expect(screenOf(result).kind).toBe('working');
+  });
+
+  it('экран после цифры так и не узнан — отказ stale, а не успех', async () => {
+    const f = fake('claude', 'question', () => ['  half-drawn frame']);
+    const result = await act(f, { kind: 'answer', stamp: stampOf('claude', 'question'), option: '2' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['2']);
+  });
+
+  it('вопрос Codex из нескольких: цифра отвечает, в ответе — следующий вопрос', async () => {
+    const f = fake('codex', 'question-first-of-two', () => 'question-last-of-two');
+    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'question-first-of-two'), option: '2' });
+    expect(f.sent).toEqual(['2']);
+    expect(screenOf(result).question?.title).toBe('Which size do you prefer?');
   });
 
   it('запрос Codex на инструмент MCP: чужой отпечаток и неизвестный вариант — клавиши не идут', async () => {
@@ -359,8 +371,9 @@ describe('sessionAct — ответ на вопрос', () => {
   });
 
   it('свой текст там, где вопрос его не допускает или в строке уже набрано, — отказ без клавиш', async () => {
-    const codex = fake('codex', 'question');
-    expect(await act(codex, { kind: 'answer', stamp: stampOf('codex', 'question'), text: 'teal' })).toMatchObject({
+    // Запрос разрешения Codex своего ответа не принимает (вопрос — принимает, заметкой).
+    const codex = fake('codex', 'permission');
+    expect(await act(codex, { kind: 'answer', stamp: stampOf('codex', 'permission'), text: 'teal' })).toMatchObject({
       ok: false,
       reason: 'unsupported',
     });
@@ -404,6 +417,214 @@ describe('sessionAct — ответ на вопрос', () => {
     expect(await act(multi, { kind: 'answer', stamp, option: '1' })).toMatchObject({ ok: false, reason: 'unsupported' });
     expect(await act(multi, { kind: 'answer', stamp, options: ['1', '9'] })).toMatchObject({ ok: false, reason: 'unsupported' });
     expect([...single.sent, ...multi.sent]).toEqual([]);
+  });
+});
+
+describe('sessionAct — свой ответ Codex заметкой', () => {
+  const DOWN = '\x1b[B';
+  const stamp = (): string => stampOf('codex', 'question-described');
+
+  /** Вопрос question-described без оформления: указатель на варианте `key`; `notes` —
+   *  поле заметки открыто с этим текстом (пустая строка — заглушка тусклым, как на экране). */
+  function codexQuestion(key: string, notes?: string): string[] {
+    const lines = shot('codex', 'question-described')
+      .map((line) => line.replace(/\x1b\[[0-9;]*m/g, '').trimEnd())
+      .map((line) => line.replace(/^  › (\d\. )/, '    $1'))
+      .map((line) => (line.startsWith(`    ${key}. `) ? `  › ${line.slice(4)}` : line));
+    if (notes === undefined) return lines;
+    const footer = lines.findIndex((line) => line.startsWith('  tab to add notes'));
+    expect(footer).toBeGreaterThan(0);
+    lines[footer] = '  tab or esc to clear notes | enter to submit answer';
+    lines.splice(footer, 0, notes === '' ? '  \x1b[1m›\x1b[0m \x1b[2mAdd notes\x1b[0m' : `  › ${notes}`, '');
+    return lines;
+  }
+
+  /** Подставной Codex: стрелка ведёт указатель вниз, Tab открывает заметку, текст в неё
+   *  набирается, Enter отвечает. `broken` — шаг, который экран не подтверждает. */
+  function codex(broken?: 'down' | 'tab' | 'text'): Fake {
+    let at = 1;
+    let notes: string | undefined;
+    return fake('codex', 'question-described', (sent) => {
+      if (sent === DOWN) {
+        if (broken !== 'down' && at < 4) at++;
+      } else if (sent === '\t') {
+        if (broken !== 'tab') notes = '';
+      } else if (sent === '\r') return 'working';
+      else if (broken !== 'text' && notes !== undefined) notes += sent;
+      return codexQuestion(String(at), notes);
+    });
+  }
+
+  it('подставные экраны читаются тем же вопросом', () => {
+    for (const lines of [codexQuestion('1'), codexQuestion('4'), codexQuestion('4', ''), codexQuestion('4', 'teal')]) {
+      expect(readScreen(lines, profileOf('codex')).question?.stamp).toBe(stamp());
+    }
+    expect(readScreen(codexQuestion('4', ''), profileOf('codex')).question?.notes).toBe('');
+    expect(readScreen(codexQuestion('4', 'teal'), profileOf('codex')).question?.notes).toBe('teal');
+  });
+
+  it('указатель ведётся стрелкой до «None of the above», Tab открывает заметку, текст, Enter', async () => {
+    const f = codex();
+    const result = await act(f, { kind: 'answer', stamp: stamp(), text: '  teal\ninstead ' });
+    expect(f.sent).toEqual([DOWN, DOWN, DOWN, '\t', 'teal instead', '\r']);
+    expect(screenOf(result).kind).toBe('working');
+  });
+
+  it('указатель уже на «None of the above» — стрелок нет', async () => {
+    const f = fake('codex', codexQuestion('4'), (sent) =>
+      sent === '\t' ? codexQuestion('4', '') : sent === '\r' ? 'working' : codexQuestion('4', sent),
+    );
+    await act(f, { kind: 'answer', stamp: stamp(), text: 'teal' });
+    expect(f.sent).toEqual(['\t', 'teal', '\r']);
+  });
+
+  it('указатель не сдвинулся — остановка после первой стрелки', async () => {
+    const f = codex('down');
+    expect(await act(f, { kind: 'answer', stamp: stamp(), text: 'teal' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([DOWN]);
+  });
+
+  it('поле заметки не открылось — текст не набирается', async () => {
+    const f = codex('tab');
+    expect(await act(f, { kind: 'answer', stamp: stamp(), text: 'teal' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([DOWN, DOWN, DOWN, '\t']);
+  });
+
+  it('набранное не появилось в заметке — Enter не нажимается', async () => {
+    const f = codex('text');
+    expect(await act(f, { kind: 'answer', stamp: stamp(), text: 'teal' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([DOWN, DOWN, DOWN, '\t', 'teal']);
+  });
+
+  it('в заметке уже набрано или она открыта на другом варианте — отказ без клавиш', async () => {
+    const typed = fake('codex', 'question-notes-typed');
+    expect(await act(typed, { kind: 'answer', stamp: stamp(), text: 'teal' })).toMatchObject({ ok: false, reason: 'stale' });
+    const elsewhere = fake('codex', 'question-notes');
+    expect(await act(elsewhere, { kind: 'answer', stamp: stamp(), text: 'teal' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect([...typed.sent, ...elsewhere.sent]).toEqual([]);
+  });
+
+  it('свой ответ на вопрос из нескольких, пустой текст и отметки у Codex — unsupported без клавиш', async () => {
+    const several = fake('codex', 'question-first-of-two');
+    const first = stampOf('codex', 'question-first-of-two');
+    expect(await act(several, { kind: 'answer', stamp: first, text: 'kiwi' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    const one = fake('codex', 'question-described');
+    expect(await act(one, { kind: 'answer', stamp: stamp(), text: '  ' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await act(one, { kind: 'answer', stamp: stamp(), options: ['1', '2'] })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect([...several.sent, ...one.sent]).toEqual([]);
+  });
+});
+
+describe('sessionAct — переход между вопросами серии', () => {
+  const RIGHT = '\x1b[C';
+  const LEFT = '\x1b[D';
+  const ON = '\x1b[38;5;16m\x1b[48;5;153m';
+  const OFF = '\x1b[39m\x1b[49m';
+  const NAMES = ['Животное', 'Цвет', 'Размер'];
+
+  /** Снимок серии с текущим шагом `at` (1–3 — вопросы, 4 — отправка). */
+  function series(at: number): string[] {
+    if (at === 4) return shot('claude', 'question-series-review');
+    const bar = `←  ${NAMES.map((name, i) => (i + 1 === at ? `${ON} ☐ ${name} ${OFF}` : ` ☐ ${name} `)).join('')} ✔ Submit  →`;
+    return shot('claude', 'question-series').map((line) => (line.includes('✔ Submit') ? bar : line));
+  }
+  const stampAt = (at: number): string => readScreen(series(at), profileOf('claude')).question!.stamp;
+
+  /** Подставной Claude: стрелки двигают текущий шаг. `stuck` — стрелки не действуют. */
+  function claude(start: number, stuck = false): Fake {
+    let at = start;
+    return fake('claude', series(start), (sent) => {
+      if (stuck) return undefined;
+      if (sent === RIGHT && at < 4) at++;
+      if (sent === LEFT && at > 1) at--;
+      return series(at);
+    });
+  }
+
+  it('подставные экраны читаются шагами серии', () => {
+    expect([1, 2, 3, 4].map((at) => readScreen(series(at), profileOf('claude')).question!.step)).toEqual([1, 2, 3, 4]);
+    expect(new Set([1, 2, 3].map(stampAt)).size).toBe(3);
+  });
+
+  it('вперёд — стрелка вправо на каждый шаг, в ответе экран нужного шага', async () => {
+    const f = claude(1);
+    const result = await act(f, { kind: 'step', stamp: stampAt(1), to: 3 });
+    expect(f.sent).toEqual([RIGHT, RIGHT]);
+    expect(screenOf(result).question).toMatchObject({ step: 3, stamp: stampAt(3) });
+  });
+
+  it('назад — стрелка влево; на шаг отправки — вправо до экрана подтверждения', async () => {
+    const back = claude(3);
+    expect(screenOf(await act(back, { kind: 'step', stamp: stampAt(3), to: 2 })).question?.step).toBe(2);
+    expect(back.sent).toEqual([LEFT]);
+    const submit = claude(3);
+    const result = await act(submit, { kind: 'step', stamp: stampAt(3), to: 4 });
+    expect(submit.sent).toEqual([RIGHT]);
+    expect(screenOf(result).question?.title).toBe('Ready to submit your answers?');
+  });
+
+  it('уже на нужном шаге — клавиш нет', async () => {
+    const f = claude(2);
+    expect(screenOf(await act(f, { kind: 'step', stamp: stampAt(2), to: 2 })).question?.step).toBe(2);
+    expect(f.sent).toEqual([]);
+  });
+
+  it('шаг не сменился после клавиши — остановка, дальше клавиши не идут', async () => {
+    const f = claude(1, true);
+    expect(await act(f, { kind: 'step', stamp: stampAt(1), to: 3 })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([RIGHT]);
+  });
+
+  it('чужой отпечаток — stale; шага нет, полосы нет или текущий не назван — unsupported; без клавиш', async () => {
+    const f = claude(2);
+    expect(await act(f, { kind: 'step', stamp: stampAt(1), to: 3 })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(await act(f, { kind: 'step', stamp: stampAt(2), to: 5 })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await act(f, { kind: 'step', stamp: stampAt(2), to: 0 })).toMatchObject({ ok: false, reason: 'unsupported' });
+    const codex = fake('codex', 'question-described');
+    expect(await act(codex, { kind: 'step', stamp: stampOf('codex', 'question-described'), to: 1 })).toMatchObject({
+      ok: false,
+      reason: 'unsupported',
+    });
+    expect([...f.sent, ...codex.sent]).toEqual([]);
+  });
+
+  it('ответ цифрой на вопрос серии: в ответе следующий вопрос', async () => {
+    const f = fake('claude', series(2), () => series(3));
+    const result = await act(f, { kind: 'answer', stamp: stampAt(2), option: '2' });
+    expect(f.sent).toEqual(['2']);
+    expect(screenOf(result).question?.step).toBe(3);
+  });
+
+  it('отпечаток одного вопроса серии к другому не подходит', async () => {
+    const f = fake('claude', series(3));
+    expect(await act(f, { kind: 'answer', stamp: stampAt(2), option: '1' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([]);
+  });
+});
+
+describe('sessionAct — показать ожидающий вопрос', () => {
+  it('экран говорит «вопрос ждёт» — уходит клавиша открытия из профиля, в ответе вопрос', async () => {
+    const f = fake('codex', 'pending-side', () => 'pending-opened');
+    const result = await act(f, { kind: 'show-question' });
+    expect(f.sent).toEqual(['\x1f']);
+    expect(screenOf(result)).toMatchObject({ kind: 'question', question: { title: 'Cats or dogs?' } });
+  });
+
+  it('признака на экране нет — stale без клавиш', async () => {
+    for (const [agent, name] of [['codex', 'idle'], ['codex', 'question-described'], ['claude', 'idle']] as const) {
+      const f = fake(agent, name);
+      expect(await act(f, { kind: 'show-question' })).toMatchObject({ ok: false, reason: 'stale' });
+      expect(f.sent).toEqual([]);
+    }
+  });
+
+  it('вопрос не открылся — отказ, клавиша ушла один раз', async () => {
+    const f = fake('codex', 'pending-side');
+    expect(await act(f, { kind: 'show-question' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['\x1f']);
+    const elsewhere = fake('codex', 'pending-side', () => 'idle');
+    expect(await act(elsewhere, { kind: 'show-question' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(elsewhere.sent).toEqual(['\x1f']);
   });
 });
 

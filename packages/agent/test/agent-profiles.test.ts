@@ -84,9 +84,15 @@ describe('профиль Codex', () => {
     const mcp = profile.screen.dialogs.filter((d) => d.footer?.test(hint));
     expect(mcp).toHaveLength(1);
     expect(mcp[0]!.kind).toBe('permission');
-    // Подвал требует Enter: только этот диалог подтверждается клавишей отправки.
-    expect(profile.screen.dialogs.filter((d) => d.confirm)).toEqual(mcp);
-    expect(profileOf('claude').screen.dialogs.some((d) => d.confirm)).toBe(false);
+    // Замер на 0.167.2: цифра отвечает сама — признака «подтверждать клавишей отправки» в
+    // профилях нет вовсе. Форма из нескольких полей («Field 1/3») этим запросом не считается.
+    for (const agent of ['claude', 'codex'] as const) {
+      expect(profileOf(agent).screen.dialogs.some((d) => 'confirm' in d)).toBe(false);
+    }
+    expect(mcp[0]!.notCounter?.test('Field 1/1')).toBe(false);
+    expect(mcp[0]!.notCounter?.test('Field 1/1 (1 required unanswered)')).toBe(false);
+    expect(mcp[0]!.notCounter?.test('Field 1/3')).toBe(true);
+    expect(mcp[0]!.notCounter?.test('Field 2/2 (1 required unanswered)')).toBe(true);
     // Заголовок обязателен: без строки с вопросом диалог не узнаётся.
     expect(mcp[0]!.title?.test('Allow Docs Server to run "search_pages"?')).toBe(true);
     expect(mcp[0]!.title?.test('Allow Desk Helper to use "Notes"?')).toBe(true);

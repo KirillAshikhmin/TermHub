@@ -1,0 +1,41 @@
+// Шов: разбор действия чата из чужого JSON — один на LAN и relay.
+
+import { describe, expect, it } from 'vitest';
+
+import { actPage, parseAction } from '../src/chat-request.js';
+
+describe('parseAction — «показать вопрос»', () => {
+  it('действие без полей разбирается, лишние поля отброшены', () => {
+    expect(parseAction({ kind: 'show-question' })).toEqual({ kind: 'show-question' });
+    expect(parseAction({ kind: 'show-question', key: '\x1f', stamp: 'x' })).toEqual({ kind: 'show-question' });
+  });
+
+  it('доходит до исполнителя тем же путём, что прочие действия', async () => {
+    const seen: unknown[] = [];
+    const result = await actPage(
+      async (session, action) => {
+        seen.push([session, action]);
+        return { ok: true, screen: { kind: 'question' } };
+      },
+      { session: 'work', action: { kind: 'show-question' } },
+    );
+    expect(result).toEqual({ ok: true, screen: { kind: 'question' } });
+    expect(seen).toEqual([['work', { kind: 'show-question' }]]);
+  });
+
+  it('незнакомое действие до исполнителя не доходит', async () => {
+    expect(parseAction({ kind: 'show-questions' })).toBeNull();
+    const result = await actPage(async () => ({ ok: true, screen: { kind: 'idle' } }), {
+      session: 'work',
+      action: { kind: 'open-question' },
+    });
+    expect(result).toEqual({ ok: false, reason: 'unsupported', detail: 'not a chat action' });
+  });
+
+  it('переход к шагу серии: отпечаток строкой и целый номер шага, иначе — не действие', () => {
+    expect(parseAction({ kind: 'step', stamp: 'abc', to: 2, extra: 1 })).toEqual({ kind: 'step', stamp: 'abc', to: 2 });
+    expect(parseAction({ kind: 'step', stamp: 'abc', to: '2' })).toBeNull();
+    expect(parseAction({ kind: 'step', stamp: 'abc', to: 1.5 })).toBeNull();
+    expect(parseAction({ kind: 'step', to: 2 })).toBeNull();
+  });
+});

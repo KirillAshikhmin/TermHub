@@ -4827,9 +4827,89 @@ main.th-feed {
   opacity: 0.5;
   cursor: default;
 }
+.th-live-q__opt {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 14px;
+}
+.th-live-q__opt-hint {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* Свой ответ — отдельный пункт списка: подпись и поле с кнопкой. */
 .th-live-q__free {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.th-live-q__free-label {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.th-live-q__free-row {
+  display: flex;
   gap: 6px;
+}
+/* Полоса шагов серии вопросов: названия, как их рисует агент, и «N из M». */
+.th-live-q__steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.th-live-q__step {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.th-live-q__step.is-done::before {
+  content: '✓ ';
+}
+.th-live-q__step[aria-current='step'] {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.th-live-q__step:disabled {
+  cursor: default;
+}
+.th-live-q__count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+/* Кнопка ожидающего вопроса — над полем ввода, пока агент о нём говорит. */
+.th-live-q__pending {
+  display: block;
+  min-height: 44px;
+  margin: 8px 12px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r);
+  background: var(--accent-tint);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.th-live-q__pending:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Место вопроса стоит сразу над полем ввода и не выталкивает его: при многих вариантах
+   (и на телефоне) карточка прокручивается сама. */
+.th-chat__slot--question {
+  max-height: 55vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .th-live-q__input {
   flex: 1;

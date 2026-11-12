@@ -17,14 +17,17 @@ import type {
   ScreenOption,
   ScreenQuestion,
   ScreenState,
+  ScreenStep,
 } from '@termhub/protocol/chat';
 
 import type { AgentProfile, DialogSign } from './agent-profiles.js';
 
-/** Строка экрана без оформления; `dim` — номера знаков, нарисованных тусклым. */
+/** Строка экрана без оформления; `dim` — номера знаков, нарисованных тусклым, `lit` —
+ *  нарисованных с фоном (так агент выделяет текущий шаг полосы над вопросом). */
 interface Row {
   text: string;
   dim: Set<number>;
+  lit: Set<number>;
 }
 
 /** Строка ввода агента и то, что вокруг неё. */
@@ -55,23 +58,44 @@ const ESCAPE = /\x1b(?:\[([0-9;:?]*)[ -/]*([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\)|
 function strip(line: string): Row {
   let text = '';
   const dim = new Set<number>();
+  const lit = new Set<number>();
   let faint = false;
+  let back = false;
   let i = 0;
   while (i < line.length) {
     if (line.charCodeAt(i) === 0x1b) {
       ESCAPE.lastIndex = i;
       const found = ESCAPE.exec(line);
       if (found) {
-        if (found[2] === 'm') faint = nextFaint(found[1] ?? '', faint);
+        if (found[2] === 'm') {
+          faint = nextFaint(found[1] ?? '', faint);
+          back = nextBack(found[1] ?? '', back);
+        }
         i = ESCAPE.lastIndex;
         continue;
       }
     }
     if (faint) dim.add(text.length);
+    if (back) lit.add(text.length);
     text += line[i];
     i++;
   }
-  return { text: text.replace(/\s+$/u, ''), dim };
+  return { text: text.replace(/\s+$/u, ''), dim, lit };
+}
+
+/** Есть ли фон после SGR-последовательности: 40–47, 100–107 и `48;…` ставят его, 49 и 0
+ *  снимают. Числа внутри цвета (`38;5;n`, `48;2;r;g;b`) кодами не считаются. */
+function nextBack(params: string, back: boolean): boolean {
+  const parts = params.split(';');
+  for (let i = 0; i < parts.length; i++) {
+    const code = parts[i] === '' ? 0 : Number(parts[i]);
+    if (code === 38 || code === 48 || code === 58) {
+      if (code === 48) back = true;
+      i += parts[i + 1] === '5' ? 2 : parts[i + 1] === '2' ? 4 : 0;
+    } else if (code === 0 || code === 49) back = false;
+    else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) back = true;
+  }
+  return back;
 }
 
 /** Тусклость после SGR-последовательности. Цвета вида `38;2;r;g;b` несут свои числа,
@@ -132,7 +156,13 @@ function readAbove(rows: Row[], last: number, profile: AgentProfile): ScreenStat
     const at = [last, above].find((i) => i >= 0 && dialog.footer!.test(rows[i]!.text.trim()));
     if (at === undefined) continue;
     hinted = true;
-    const question = readDialog(rows, at - 1, dialog, profile);
+    // Подсказка целиком: в узкой панели она занимает две строки.
+    const hint = rows
+      .slice(at, last + 1)
+      .map((row) => row.text.trim())
+      .filter((text) => text !== '')
+      .join(' ');
+    const question = readDialog(rows, at - 1, dialog, profile, hint);
     if (question) return { kind: dialog.kind, question };
   }
 
@@ -264,6 +294,8 @@ function readMenu(rows: Row[], last: number, profile: AgentProfile): string | un
 interface OptionLine {
   key: string;
   label: string;
+  /** Пояснение в той же строке, за колонкой пробелов после подписи. */
+  hint: string;
   /** Колонка, с которой начинается подпись. */
   column: number;
   selected: boolean;
@@ -277,10 +309,12 @@ function optionOf(text: string, profile: AgentProfile): OptionLine | null {
   const pointer = found[2];
   if (pointer !== undefined && pointer !== profile.screen.prompt) return null;
   const rest = found[5]!;
+  // Пояснение в той же строке отделено от подписи колонкой пробелов.
+  const parts = rest.split(/\s{2,}/u);
   return {
     key: found[3]!,
-    // Пояснение в той же строке отделено от подписи колонкой пробелов.
-    label: rest.split(/\s{2,}/u)[0]!,
+    label: parts[0]!,
+    hint: parts.slice(1).join(' ').trim(),
     column: text.length - rest.length,
     selected: pointer !== undefined,
     ...(found[4] === undefined ? {} : { checked: found[4] !== ' ' }),
@@ -294,8 +328,22 @@ function readDialog(
   bottom: number,
   dialog: DialogSign,
   profile: AgentProfile,
+  /** Подсказка под вариантами одной строкой — по ней узнаётся поле заметки. */
+  hint = '',
 ): ScreenQuestion | null {
   const signs = profile.screen;
+  // Открытое поле заметки стоит между вариантами и подсказкой. Его строка снимается до
+  // разбора вариантов: набранное в нём может выглядеть как вариант («5. …»).
+  let notes: string | undefined;
+  if (dialog.notes?.open.test(hint)) {
+    const at = lastFilled(rows, bottom);
+    const found = at < 0 ? null : dialog.notes.line.exec(rows[at]!.text);
+    if (!found) return null;
+    // Заглушка пустого поля нарисована тусклым, как в строке ввода.
+    const start = rows[at]!.text.length - found[1]!.length;
+    notes = rows[at]!.dim.has(start) ? '' : found[1]!;
+    bottom = at - 1;
+  }
   const options: ScreenOption[] = [];
   let extra: Row[] = [];
   let ruleBelow = false;
@@ -314,11 +362,13 @@ function readDialog(
       continue;
     }
     let label = line.label;
-    // Строки под вариантом собраны снизу вверх — разворачиваем.
+    const about = line.hint ? [line.hint] : [];
+    // Строки под вариантом собраны снизу вверх — разворачиваем. Всё, что не перенос
+    // подписи, — пояснение варианта.
     for (const more of extra.reverse()) {
       if (dialog.below === 'label' && indentOf(more.text) === line.column) {
         label += ` ${more.text.trim()}`;
-      }
+      } else about.push(more.text.trim());
     }
     extra = [];
     const free = signs.free.test(label) || (dialog.freeBeforeRule === true && ruleBelow);
@@ -326,6 +376,7 @@ function readDialog(
     options.push({
       key: line.key,
       label,
+      ...(about.length > 0 ? { hint: about.join(' ') } : {}),
       ...(line.selected ? { selected: true } : {}),
       ...(line.checked === undefined ? {} : { checked: line.checked }),
       ...(free ? { free: true } : {}),
@@ -343,15 +394,49 @@ function readDialog(
   const head = readHead(rows, top - 1, dialog, profile);
   if (!head) return null;
   const multi = options.some((option) => option.checked !== undefined);
-  const freeText = options.some((option) => option.free);
+  // Свой ответ заметкой: подсказка — одна из двух измеренных, и вариант, к которому
+  // заметка идёт, стоит последним.
+  const noted =
+    dialog.notes !== undefined &&
+    (notes !== undefined || dialog.notes.closed.test(hint)) &&
+    dialog.notes.other.test(options[options.length - 1]!.label);
+  if (notes !== undefined && !noted) return null;
+  const freeText = noted || options.some((option) => option.free);
+  const step = head.steps ? head.steps.findIndex((item) => item.current) + 1 : 0;
+  // Вопросы одной серии бывают с одним текстом и вариантами: отпечаток серии несёт ещё
+  // название текущего вопроса. Одиночный вопрос (шаг отправки не в счёт) — отпечаток прежний.
+  const series = (head.steps?.filter((item) => !item.submit).length ?? 0) > 1;
+  const named = series && step > 0 && !head.steps![step - 1]!.submit;
+  const stampBody = named ? `${head.body}\u0004${head.steps![step - 1]!.label}` : head.body;
   return {
-    stamp: questionStamp(head.title, options, head.body),
+    stamp: questionStamp(head.title, options, stampBody),
     title: head.title,
     ...(head.body ? { body: head.body } : {}),
     options,
     ...(multi ? { multi: true } : {}),
     ...(freeText ? { freeText: true } : {}),
+    ...(notes === undefined ? {} : { notes }),
+    ...(head.steps ? { steps: head.steps } : {}),
+    ...(step > 0 ? { step } : {}),
   };
+}
+
+/** Шаги полосы над вопросом; текущий — тот, чей знак нарисован с фоном. */
+function stepsOf(row: Row, profile: AgentProfile): ScreenStep[] | undefined {
+  const signs = profile.screen.steps;
+  if (!signs) return undefined;
+  const steps: ScreenStep[] = [];
+  for (const found of row.text.matchAll(signs.item)) {
+    steps.push({
+      label: found[2]!,
+      ...(found[1] === signs.done ? { done: true } : {}),
+      ...(found[1] === signs.submit ? { submit: true } : {}),
+      ...(row.lit.has(found.index) ? { current: true } : {}),
+    });
+  }
+  // Два выделенных шага — полоса прочитана неверно: текущим не назван ни один.
+  if (steps.filter((item) => item.current).length > 1) for (const item of steps) delete item.current;
+  return steps.length > 0 ? steps : undefined;
 }
 
 /** Шапка диалога над вариантами: абзацы до линейки рамки или двойной пустой строки.
@@ -361,8 +446,9 @@ function readHead(
   from: number,
   dialog: DialogSign,
   profile: AgentProfile,
-): { title: string; body: string } | null {
+): { title: string; body: string; steps?: ScreenStep[] } | null {
   const signs = profile.screen;
+  let steps: ScreenStep[] | undefined;
   const paragraphs: string[][] = [];
   let current: string[] = [];
   const close = (): void => {
@@ -387,6 +473,8 @@ function readHead(
     }
     seen = true;
     if (signs.chip.test(text.trim())) {
+      if (dialog.notCounter?.test(text.trim())) return null;
+      steps ??= stepsOf(rows[i]!, profile);
       close();
       continue;
     }
@@ -404,7 +492,7 @@ function readHead(
     .filter((_, index) => index !== at)
     .map((lines) => lines.join('\n'))
     .join('\n');
-  return { title, body };
+  return { title, body, ...(steps ? { steps } : {}) };
 }
 
 /** Строка ввода агента внизу экрана — или причина, по которой её там нет. */
@@ -566,6 +654,7 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
     ...(queued > 0 ? { queued } : {}),
     ...(model === undefined ? {} : { model }),
     ...backgroundOf(box.footer, profile),
+    ...(signs.pending?.test(box.footer) ? { pending: true } : {}),
   };
 }
 
