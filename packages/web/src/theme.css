@@ -6002,7 +6002,9 @@ main.th-feed--chat {
   .th-tabs::after,
   .th-tabs-current,
   .th-splitbar__title,
-  .th-spanel__title,
+  /* Только у открытого окна сессий: закрытое лежит поверх шапки невидимым (opacity 0),
+     и его заголовок накрывал бы областью перетаскивания верх кнопок под ним. */
+  .th-spanel.is-open .th-spanel__title,
   body:not(:has(.th-header, .th-termbar))::before {
     -webkit-app-region: drag;
     app-region: drag;
