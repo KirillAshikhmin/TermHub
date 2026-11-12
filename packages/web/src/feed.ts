@@ -347,6 +347,21 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   };
   fab.addEventListener('click', toBottom);
 
+  // В чате поле ввода лежит в потоке под перепиской и отнимает у неё высоту, пока растёт;
+  // scrollTop при этом на месте, и низ уезжает под край. Был у низа до смены высоты — идём
+  // за ним (и при возврате высоты после отправки); читающего выше не трогаем.
+  let seenHeight = -1;
+  const heightWatch =
+    chat && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          const prev = seenHeight;
+          seenHeight = listEl.clientHeight;
+          if (prev < 0 || prev === seenHeight) return;
+          if (listEl.scrollHeight - listEl.scrollTop - prev <= NEAR_BOTTOM) toBottom();
+        })
+      : null;
+  heightWatch?.observe(listEl);
+
   const showNotice = (text: string, reason?: string): void => {
     noticeEl.hidden = false;
     // В чате у пустой беседы свои слова: приглашение написать запрос и «агент не запущен».
@@ -1170,6 +1185,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       window.clearInterval(timer);
       window.clearTimeout(highlightTimer);
       window.clearTimeout(searchTimer);
+      heightWatch?.disconnect();
       sbar?.teardown();
       host.replaceChildren();
     },
