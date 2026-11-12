@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 207,
+  "rows": 59,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "anonymized": true,
+  "note": "Anonymized live capture: the bottom of the screen (work line, input line, user-configured status line, hints line) is byte for byte except for the directory name; the conversation above it is replaced with neutral text. Version is the installed binary at capture time."
+}

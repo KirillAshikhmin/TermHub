@@ -60,6 +60,8 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'agents-input': 'idle',
     'agents-question': 'question',
     'agents-permission': 'permission',
+    'idle-labeled': 'idle',
+    'idle-labeled-shell': 'idle',
   },
   codex: {
     idle: 'idle',
@@ -79,6 +81,9 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     slash: 'idle',
     'slash-filtered': 'idle',
     queued: 'working',
+    'statusline-idle': 'idle',
+    'statusline-working': 'working',
+    'statusline-working-wide': 'working',
   },
 };
 
@@ -619,6 +624,167 @@ describe('Claude Code с фоновыми агентами', () => {
       kind: 'unknown',
       why: 'content below footer',
     });
+  });
+});
+
+describe('Claude Code: подпись сессии в линейке рамки ввода', () => {
+  // Обезличенные живые снимки: верхняя линейка рамки кончается подписью «── job ─».
+  const claude = profileOf('claude');
+
+  it('рамка с подписью — рамка: ожидание ввода, режим из подвала', () => {
+    expect(read('claude', 'idle-labeled')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(read('claude', 'idle-labeled-shell')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+  });
+
+  it('текст в рамке с подписью и работа по подвалу', () => {
+    const lines = shot('claude', 'idle-labeled');
+    const at = lines.findLastIndex((l) => plain([l])[0] === '❯ ');
+    expect(at).toBeGreaterThan(0);
+    const typed = [...lines.slice(0, at), `${lines[at]!}hello draft text`, ...lines.slice(at + 1)];
+    expect(readScreen(typed, claude)).toEqual({ kind: 'idle', mode: 'auto', input: 'hello draft text' });
+    const last = lines.findLastIndex((l) => l.includes('auto mode on'));
+    const busy = [...lines.slice(0, last), `${lines[last]!} · esc to interrupt`];
+    expect(readScreen(busy, claude)).toMatchObject({ kind: 'working', mode: 'auto' });
+  });
+
+  it('линейка с подписью сама экран не узнаёт', () => {
+    const lines = shot('claude', 'idle-labeled');
+    const top = plain(lines).findLastIndex((l) => / job ─$/.test(l));
+    expect(top).toBeGreaterThan(0);
+    // Оборван сразу под подписанной линейкой и под строкой ввода.
+    expect(readScreen(lines.slice(0, top + 1), claude).kind).toBe('unknown');
+    expect(readScreen(lines.slice(0, top + 2), claude).kind).toBe('unknown');
+    // Подпись без закрывающей черты — не линейка.
+    const odd = [...lines];
+    odd[top] = '──────────────── job';
+    expect(readScreen(odd, claude)).toEqual({ kind: 'unknown', why: 'input frame malformed' });
+    expect(readScreen([...shot('claude', 'shell'), lines[top]!], claude).kind).toBe('unknown');
+  });
+});
+
+describe('Codex со строкой состояния пользователя', () => {
+  // Обезличенные живые снимки: под строкой ввода — строка состояния, собранная
+  // пользователем (/statusline), и под ней строка подсказок «← for agents · ? for shortcuts».
+  const codex = profileOf('codex');
+  const STATUS = /^\s{2}GPT-6-Astra max · /;
+
+  /** Тот же снимок с другой строкой состояния (`null` — без неё). */
+  function withStatus(name: string, status: string | null): string[] {
+    const lines = shot('codex', name);
+    const at = plain(lines).findIndex((l) => STATUS.test(l));
+    expect(at).toBeGreaterThan(0);
+    return [...lines.slice(0, at), ...(status === null ? [] : [status]), ...lines.slice(at + 1)];
+  }
+
+  it('ожидание ввода: модель и режим из строки состояния, заглушка — не текст', () => {
+    expect(read('codex', 'statusline-idle')).toEqual({
+      kind: 'idle',
+      mode: 'default',
+      input: '',
+      model: 'GPT-6-Astra',
+    });
+  });
+
+  it('работа: строка работы над вводом, время, модель', () => {
+    expect(read('codex', 'statusline-working')).toEqual({
+      kind: 'working',
+      status: 'Working',
+      elapsed: 3 * 3600 + 11 * 60 + 43,
+      mode: 'default',
+      input: '',
+      model: 'GPT-6-Astra',
+    });
+    expect(read('codex', 'statusline-working-wide')).toMatchObject({
+      kind: 'working',
+      elapsed: 3 * 3600 + 11 * 60 + 11,
+    });
+  });
+
+  it('слово Working в строке состояния — работа, даже когда строки работы на экране нет', () => {
+    const lines = shot('codex', 'statusline-working');
+    const at = plain(lines).findIndex((l) => /^• Working \(/.test(l));
+    expect(at).toBeGreaterThan(0);
+    const bare = [...lines.slice(0, at), '', '', ...lines.slice(at + 2)];
+    expect(bare).toHaveLength(lines.length);
+    expect(readScreen(bare, codex)).toEqual({
+      kind: 'working',
+      status: 'Working',
+      mode: 'default',
+      input: '',
+      model: 'GPT-6-Astra',
+    });
+  });
+
+  it('пункты в другом порядке и незнакомые пункты: модель и состояние находятся', () => {
+    const mixed = '  ~/work/project · some new thing 42 · GPT-6-Astra max · ✦ whatever · Ready';
+    expect(readScreen(withStatus('statusline-idle', mixed), codex)).toEqual({
+      kind: 'idle',
+      mode: 'default',
+      input: '',
+      model: 'GPT-6-Astra',
+    });
+    const busy = '  weekly 40% left · Working · 258K window · GPT-6.1 Terra high';
+    expect(readScreen(withStatus('statusline-idle', busy), codex)).toEqual({
+      kind: 'working',
+      status: 'Working',
+      mode: 'default',
+      input: '',
+      model: 'GPT-6.1 Terra',
+    });
+    // Модели в профиле ещё нет: имя узнаётся по уровню рассуждений за ним.
+    expect(
+      readScreen(withStatus('statusline-idle', '  ~/work/low · gpt-7-nova high · Ready'), codex),
+    ).toMatchObject({ kind: 'idle', mode: 'default', model: 'gpt-7-nova' });
+    // Слово Working внутри чужого пункта — не состояние.
+    const word = '  GPT-6-Astra max · ~/work/Working · Working tree clean';
+    expect(readScreen(withStatus('statusline-idle', word), codex).kind).toBe('idle');
+  });
+
+  it('в строке состояния нет ни модели, ни состояния — экран узнан, они не названы', () => {
+    for (const status of ['  ~/work/project · Context 50% left', '  ~/work/project', null]) {
+      expect(readScreen(withStatus('statusline-idle', status), codex)).toEqual({
+        kind: 'idle',
+        input: '',
+      });
+    }
+    // Каталог первым пунктом моделью не становится.
+    const dir = '  ~/work/project · 7.27M used';
+    expect(readScreen(withStatus('statusline-working', dir), codex)).not.toHaveProperty('model');
+  });
+
+  it('текст в строке ввода над строкой состояния', () => {
+    const lines = shot('codex', 'statusline-idle');
+    const at = plain(lines).findIndex((l) => l === '› Ask Codex to do anything');
+    expect(at).toBeGreaterThan(0);
+    const typed = [...lines.slice(0, at), '› Working', '  second line', ...lines.slice(at + 1)];
+    expect(readScreen(typed, codex)).toMatchObject({ kind: 'idle', input: 'Working\nsecond line' });
+  });
+
+  it('прежние отказы: подвал без строки ввода, подсказка меню, длинный хвост, обрыв', () => {
+    const lines = shot('codex', 'statusline-idle');
+    const flat = plain(lines);
+    const input = flat.findIndex((l) => l === '› Ask Codex to do anything');
+    const status = flat.findIndex((l) => STATUS.test(l));
+    // Строка ввода не отделена от подвала пустой строкой.
+    const glued = [...lines.slice(0, input + 1), ...lines.slice(status)];
+    expect(readScreen(glued, codex)).toEqual({ kind: 'unknown', why: 'no input frame' });
+    // Над подвалом нет строки ввода.
+    const lost = [...lines.slice(0, input), '', ...lines.slice(input + 1)];
+    expect(readScreen(lost, codex)).toEqual({ kind: 'unknown', why: 'no input frame' });
+    // В подвале подсказка меню.
+    const menu = '  enter select · esc back';
+    expect(readScreen(withStatus('statusline-idle', menu), codex)).toEqual({
+      kind: 'unknown',
+      why: 'footer not recognized',
+    });
+    // Под строкой ввода больше строк, чем бывает у подвала.
+    const tall = [...lines.slice(0, status), '  one · two', '  three · four', ...lines.slice(status)];
+    expect(readScreen(tall, codex).kind).toBe('unknown');
+    // Строка без отступа в подвале.
+    expect(readScreen(withStatus('statusline-idle', 'plain text · more'), codex).kind).toBe('unknown');
+    // Оборван над подвалом: на строке ввода и на пустой строке под ней.
+    expect(readScreen(lines.slice(0, input + 1), codex).kind).toBe('unknown');
+    expect(readScreen(lines.slice(0, status), codex).kind).toBe('unknown');
   });
 });
 

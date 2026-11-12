@@ -1,0 +1,12 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 207,
+  "rows": 59,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "anonymized": true,
+  "note": "Anonymized live capture: the bottom of the screen (hint line, input frame with a session label in its top rule, footer) is byte for byte; the conversation above it and the label text are replaced with neutral text of the same width."
+}

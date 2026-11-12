@@ -35,6 +35,8 @@ interface Box {
   last: number;
   /** Подвал под строкой ввода, одной строкой. */
   footer: string;
+  /** Пункты строки состояния из подвала (`statusLine` профиля). */
+  items: string[];
 }
 
 /** Сколько строк над вариантами может занимать шапка диалога (команда, правка). */
@@ -371,14 +373,22 @@ function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string
     return missing();
   }
 
-  const footer = rows[last]!.text;
-  if (!signs.footer?.test(footer) || signs.notFooter?.test(footer)) {
-    return rows.some((row) => signs.talk.test(row.text))
-      ? 'footer not recognized'
-      : 'no agent on screen';
+  const strange = (): string =>
+    rows.some((row) => signs.talk.test(row.text)) ? 'footer not recognized' : 'no agent on screen';
+  if (!signs.footer?.test(rows[last]!.text)) return strange();
+  // Подвал — до `footerLines` строк с отступом; над ним обязана быть пустая строка.
+  let head = last;
+  while (
+    last - head + 1 < (signs.footerLines ?? 1) &&
+    !blank(rows[head - 1]) &&
+    rows[head - 1]!.text.startsWith('  ')
+  ) {
+    head--;
   }
-  const end = lastFilled(rows, last - 1);
-  if (end < 0 || end === last - 1) return 'no input frame';
+  const block = rows.slice(head, last + 1).map((row) => row.text);
+  if (block.some((text) => signs.notFooter?.test(text))) return strange();
+  const end = lastFilled(rows, head - 1);
+  if (end < 0 || end === head - 1) return 'no input frame';
   let first = end;
   while (first >= 0 && !startsInput(rows[first]!.text, signs.prompt)) {
     const text = rows[first]!.text;
@@ -386,7 +396,17 @@ function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string
     first--;
   }
   if (first < 0) return 'no input frame';
-  return { top: first, first, last: end, footer };
+  const footer = block.join('  ');
+  return { top: first, first, last: end, footer, items: itemsOf(footer, profile) };
+}
+
+function itemsOf(footer: string, profile: AgentProfile): string[] {
+  const sep = profile.screen.statusLine?.sep;
+  if (!sep) return [];
+  return footer
+    .split(sep)
+    .map((item) => item.trim())
+    .filter((item) => item !== '');
 }
 
 /** После знака Claude ставит неразрывный пробел, Codex — обычный. */
@@ -409,7 +429,7 @@ function ruledBox(rows: Row[], bottom: number, last: number, profile: AgentProfi
     .slice(bottom + 1, last + 1)
     .map((row) => row.text.trim())
     .join(' ');
-  return { top, first: top + 1, last: bottom - 1, footer };
+  return { top, first: top + 1, last: bottom - 1, footer, items: itemsOf(footer, profile) };
 }
 
 function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
@@ -455,9 +475,14 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
     }
   }
 
+  // Состояние из строки состояния: строки работы над вводом может не быть на экране.
+  const state = signs.statusLine;
+  const busy = state ? box.items.find((item) => state.working.test(item)) : undefined;
+  const ready = state ? box.items.some((item) => state.idle.test(item)) : false;
+  status ??= busy;
   const working = status !== undefined || signs.working?.test(box.footer) === true;
-  const mode = modeOf(box.footer, profile);
-  const model = modelOf(box.footer, profile);
+  const model = modelOf(box.items, profile);
+  const mode = modeOf(box.footer, profile, model !== undefined || busy !== undefined || ready);
   return {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),
@@ -476,20 +501,27 @@ function secondsOf(text: string | undefined): number | undefined {
   return Number(found[1] ?? 0) * 3600 + Number(found[2] ?? 0) * 60 + Number(found[3]);
 }
 
-function modelOf(footer: string, profile: AgentProfile): string | undefined {
-  const found = profile.screen.model?.exec(footer);
-  if (!found) return undefined;
-  const words = found[1]!.trim().split(/\s+/u);
-  if (words.length > 1 && profile.efforts.includes(words[words.length - 1]!)) words.pop();
-  return words.join(' ');
+/** Модель среди пунктов строки состояния: имя из профиля, а у модели, которой в
+ *  профиле ещё нет, — одно слово с уровнем рассуждений за ним. Уровень отбрасывается. */
+function modelOf(items: string[], profile: AgentProfile): string | undefined {
+  let guess: string | undefined;
+  for (const item of items) {
+    const words = item.split(/\s+/u);
+    const effort = words.length > 1 && profile.efforts.includes(words[words.length - 1]!);
+    if (effort) words.pop();
+    const name = words.join(' ');
+    if (profile.models.some((model) => model.match.test(name))) return name;
+    if (effort && words.length === 1 && !/[\/~]/u.test(name)) guess ??= name;
+  }
+  return guess;
 }
 
 /** Режим из подвала. Режим без признака (обычный у Codex) называется, только когда
- *  подвал — действительно строка состояния, а не разовая подсказка на её месте. */
-function modeOf(footer: string, profile: AgentProfile): string | undefined {
+ *  подвал — действительно строка состояния (`stated`: в нём нашлись модель или
+ *  состояние), а не разовая подсказка на её месте. */
+function modeOf(footer: string, profile: AgentProfile, stated: boolean): string | undefined {
   const named = profile.modes.find((mode) => mode.sign?.test(footer));
   if (named) return named.id;
-  const silent = profile.modes.find((mode) => !mode.sign);
-  if (!silent || !profile.screen.model?.test(footer)) return undefined;
-  return silent.id;
+  if (!stated) return undefined;
+  return profile.modes.find((mode) => !mode.sign)?.id;
 }
