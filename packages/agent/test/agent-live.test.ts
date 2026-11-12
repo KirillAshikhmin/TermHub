@@ -313,6 +313,52 @@ describe('sessionAct — ключ идемпотентности запроса'
     expect(f.sent).toEqual(['paste:привет', 'paste:привет', '\r']);
   });
 
+  it('клавиша отправки ушла, а ответ — отказ (смена панели): повтор с тем же ключом клавиш не шлёт', async () => {
+    const f = fake('claude', 'idle', typed, { now: () => 1 });
+    const capture = f.src.capture!;
+    let moved = true;
+    f.src.capture = async (session) => {
+      const got = await capture(session);
+      return moved && f.sent.at(-1) === '\r' ? { ...got, pane: 'work:@1.%2' } : got;
+    };
+    const first = await act(f, { kind: 'prompt', text: 'привет', key: 'k-6' });
+    expect(first).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['paste:привет', '\r']);
+    moved = false;
+    expect(await act(f, { kind: 'prompt', text: 'привет', key: 'k-6' })).toEqual(first);
+    expect(f.sent).toEqual(['paste:привет', '\r']);
+  });
+
+  it('клавиша очереди ушла, а агент не у строки ввода — отказ; повтор с тем же ключом клавиш не шлёт', async () => {
+    let after: string | undefined = 'menu-model';
+    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? after : undefined), {
+      now: () => 1,
+    });
+    const first = await act(f, { kind: 'prompt', text: 'note one', key: 'k-7' });
+    expect(first).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['paste:note one', '\t']);
+    after = 'working';
+    f.src.capture = async () => ({ lines: shot('codex', 'working'), alt: false, cols: 100, rows: 32, pane: PANE, command: 'node' });
+    expect(await act(f, { kind: 'prompt', text: 'note one', key: 'k-7' })).toEqual(first);
+    expect(f.sent).toEqual(['paste:note one', '\t']);
+  });
+
+  it('клавиша отправки ушла, а опрос экрана после неё сорвался (lookup-failed): повтор клавиш не шлёт', async () => {
+    const f = fake('claude', 'idle', typed, { now: () => 1 });
+    const capture = f.src.capture!;
+    let broken = true;
+    f.src.capture = async (session) => {
+      if (broken && f.sent.at(-1) === '\r') throw new Error('tmux is gone');
+      return capture(session);
+    };
+    const first = await act(f, { kind: 'prompt', text: 'привет', key: 'k-8' });
+    expect(first).toMatchObject({ ok: false, reason: 'lookup-failed' });
+    expect(f.sent).toEqual(['paste:привет', '\r']);
+    broken = false;
+    expect(await act(f, { kind: 'prompt', text: 'привет', key: 'k-8' })).toEqual(first);
+    expect(f.sent).toEqual(['paste:привет', '\r']);
+  });
+
   it('два запроса с одним ключом разом — клавиши уходят один раз', async () => {
     const f = fake('claude', 'idle', typed, { now: () => 1 });
     f.src.sleep = () => new Promise((wake) => setTimeout(wake, 1));

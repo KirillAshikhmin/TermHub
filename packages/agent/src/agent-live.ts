@@ -118,15 +118,21 @@ export async function sessionLive(session: string, sources?: Partial<LiveSources
  *
  *  Запрос с ключом идемпотентности (`prompt.key`) доставляется один раз: повтор с тем же
  *  ключом и текстом в той же сессии в течение двух минут клавиш не шлёт и получает прежний
- *  ответ (идущий — тот же, которого ждёт первый). Помнится только успех: отказ значит, что
- *  запрос не отправлен, и повтор идёт заново, с обычной сверкой экрана. */
+ *  ответ (идущий — тот же, которого ждёт первый). Помнится всякий исход, при котором клавиша
+ *  отправки или очереди уже ушла в панель, — и успех, и отказ после неё (сменилась активная
+ *  панель, агент не у строки ввода, сорвался опрос экрана): агент запрос мог получить, и
+ *  повтор отправил бы его второй раз. Отказ до клавиши (сверка экрана не сошлась, `busy`,
+ *  вставка не подтвердилась) не помнится: запрос не отправлен, повтор идёт заново. */
 export function sessionAct(session: string, action: ChatAction, sources?: Partial<LiveSources>): Promise<ActResult> {
   const src = withDefaults(sources);
+  /** Клавиша отправки или очереди запроса ушла в панель (ставится до самой посылки). */
+  const sent = { submitted: false };
   const job = (): Promise<ActResult> =>
     sessionQueue(session, src.socketName, async () => {
       try {
         const ctx = await look(session, src);
         if (!ctx.ok) return ctx;
+        ctx.sent = sent;
         const result = await run(ctx, action);
         // Экран другой панели действие не подтверждает: успех по нему был бы догадкой.
         if (result.ok && ctx.moved) {
@@ -154,7 +160,7 @@ export function sessionAct(session: string, action: ChatAction, sources?: Partia
   delivered.set(id, entry);
   while (delivered.size > KEY_MAX) delivered.delete(delivered.keys().next().value!);
   void result.then((outcome) => {
-    if (!outcome.ok && delivered.get(id) === entry) delivered.delete(id);
+    if (!outcome.ok && !sent.submitted && delivered.get(id) === entry) delivered.delete(id);
   });
   return result;
 }
@@ -190,6 +196,8 @@ interface Ctx {
   lines: string[];
   /** Посреди действия активной оказалась другая панель: его исход не подтверждён. */
   moved: boolean;
+  /** Отметка «клавиша отправки запроса ушла» — её читает память ключей идемпотентности. */
+  sent?: { submitted: boolean };
 }
 
 /** Сессия → снимок экрана → агент панели → распознанный экран. */
@@ -384,6 +392,8 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
     working = fresh.kind === 'working';
   }
   const queue = working ? profile.keys.queue : undefined;
+  // Отметка ставится до посылки: сорвавшаяся посылка могла дойти до панели.
+  if (ctx.sent) ctx.sent.submitted = true;
   await press(ctx, queue ?? profile.keys.submit);
   if (queue === undefined) return done((await until(ctx, (s) => !atInput(s) || !s.input)).screen);
   // Клавиша очереди: успех — только узнанный экран со строкой ввода, и пустой. Иной экран
