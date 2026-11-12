@@ -1,0 +1,32 @@
+
+[2m•[0m [1mExplored[0m
+
+
+
+  file.
+
+[2m•[0m [1mExplored[0m
+
+
+[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250mprintf[38;2;205;214;244m [38;2;166;227;161m'%s'[38;2;205;214;244m [38;2;166;227;161m'hello'[38;2;205;214;244m [38;2;148;226;213m>[38;2;205;214;244m hello.txt[39m
+[2m  └ (no output)[0m
+
+[2m•[0m [1mExplored[0m
+[2m  └ [0m[38;2;99;168;248mRead[39m hello.txt
+
+[2m• [0mCreated [38;2;166;227;161mhello.txt[39m containing [38;2;166;227;161mhello[39m.
+
+[2m  Worked for 20s • 17:40[0m
+
+[1;7m› /model  [0;7mchoose what model and reasoning effort to use[1m
+[0m
+[1m[38;2;255;178;66m›[0m /mo
+
+  [38;2;246;226;183mGPT-6-Astra max[39m · [38;2;171;223;167m/home/user/probe
+
+
+
+
+
+
+

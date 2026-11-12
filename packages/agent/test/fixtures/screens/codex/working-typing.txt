@@ -1,0 +1,32 @@
+[38;5;2m✔ [39mYou [1mapproved[0m codex to run [2mprintf 'hello\n' > hello.txt[0;1m this time[0m
+
+[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250mprintf[38;2;205;214;244m [38;2;166;227;161m'hello\n'[38;2;205;214;244m [38;2;148;226;213m>[38;2;205;214;244m hello.txt[39m
+[2m  └ (no output)[0m
+
+[2m• [0mCreated [38;2;166;227;161mhello.txt[39m containing [38;2;166;227;161mhello[39m.
+
+[2m  Worked for 32s • 17:42[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mWrite a 500-word story about a lighthouse.
+  queued message one
+
+
+[2m[49m• [0mModel interrupted to submit steer instructions.
+
+[48;5;8m
+[1;2m› [0m[48;5;8mqueued message two
+
+
+[49m■ Conversation interrupted - use /feedback if something went wrong
+
+[48;5;8m
+[1;2m› [0m[48;5;8my1
+
+[49m
+Working [2m(0s • [0;1mesc[0;2m to interrupt)[0m
+
+
+[1m[38;2;255;178;66m›[0m y2
+
+  [1mtab[0m to queue message                                                            97% context left

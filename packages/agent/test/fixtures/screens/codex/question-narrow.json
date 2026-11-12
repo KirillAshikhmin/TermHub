@@ -1,0 +1,9 @@
+{
+  "agent": "codex",
+  "version": "0.167.0",
+  "cols": 56,
+  "rows": 32,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c"
+}

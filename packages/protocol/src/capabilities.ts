@@ -8,11 +8,15 @@ export const CAP_FEED = 'feed';
 /** Расход сессии (токены, время) из транскрипта: флаг `usage` в запросе ленты. */
 export const CAP_USAGE = 'usage';
 
+/** Чат — нативный интерфейс к агенту в панели: кадры `Live`/`Act`/`Commands` и их
+ *  маршруты LAN. Без этого имени веб ничего из них не шлёт. */
+export const CAP_CHAT = 'chat';
+
 /** Что умеет агент этой версии. */
-export const AGENT_CAPS: readonly string[] = [CAP_FEED, CAP_USAGE];
+export const AGENT_CAPS: readonly string[] = [CAP_FEED, CAP_USAGE, CAP_CHAT];
 
 /** Что понимает клиент (PWA) этой версии. */
-export const CLIENT_CAPS: readonly string[] = [CAP_FEED, CAP_USAGE];
+export const CLIENT_CAPS: readonly string[] = [CAP_FEED, CAP_USAGE, CAP_CHAT];
 
 /** Список возможностей из чужого JSON: оставляет только строки и схлопывает дубли.
  *  Всё непонятное отбрасывается молча — незнакомое имя это не ошибка, а просто

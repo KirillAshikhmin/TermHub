@@ -28,6 +28,10 @@
       "types": "./dist/rtcsock.d.ts",
       "default": "./dist/rtcsock.js"
     },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "default": "./dist/chat.js"
+    },
     "./session-title": {
       "types": "./dist/session-title.d.ts",
       "default": "./dist/session-title.js"

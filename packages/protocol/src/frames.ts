@@ -60,6 +60,18 @@ export enum FrameType {
    *  `GET /api/feed`. Кадр только читает: ни ввода в сессию, ни адресации файлом. */
   Feed = 46,
   FeedResult = 47,
+  /** Чат: живое состояние экрана агента в панели сессии. Запрос `{id, session}`,
+   *  ответ `{id, ...LiveResult}` (формы — `@termhub/protocol/chat`). Только чтение. */
+  Live = 48,
+  LiveResult = 49,
+  /** Чат: действие человека — запрос, ответ на вопрос, остановка, режим, модель.
+   *  Запрос `{id, session, action}`, ответ `{id, ...ActResult}`. Требует права ввода. */
+  Act = 50,
+  ActResult = 51,
+  /** Чат: команды агента для подсказок по «/». Запрос `{id, session}`,
+   *  ответ `{id, ...CommandsResult}`. */
+  Commands = 52,
+  CommandsResult = 53,
 }
 
 /** Каким способом агент подключён к tmux-сессии: control mode (`tmux -CC`) или

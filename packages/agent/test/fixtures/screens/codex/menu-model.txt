@@ -1,0 +1,32 @@
+
+
+
+  file.
+
+[2m•[0m [1mExplored[0m
+
+
+[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250mprintf[38;2;205;214;244m [38;2;166;227;161m'%s'[38;2;205;214;244m [38;2;166;227;161m'hello'[38;2;205;214;244m [38;2;148;226;213m>[38;2;205;214;244m hello.txt[39m
+[2m  └ (no output)[0m
+
+[2m•[0m [1mExplored[0m
+[2m  └ [0m[38;2;99;168;248mRead[39m hello.txt
+
+[2m• [0mCreated [38;2;166;227;161mhello.txt[39m containing [38;2;166;227;161mhello[39m.
+
+[2m  Worked for 20s • 17:40[0m
+
+
+  [1mSelect Model and Effort
+[0m
+
+  1. GPT-6.1-Sol            [2mLatest workhorse model for coding and everyday work.[0m
+[1;7m› 2. GPT-6-Astra (current)  [0;7mFrontier intelligence for the most demanding work.[1m
+[0m  3. GPT-6.1 Terra          [2mGPT-6.1 Terra Codex model.[0m
+  4. GPT-6-Sol              [2mPrevious generation workhorse model.[0m
+  5. GPT-6-Luna             [2mFast and affordable model for easier tasks.[0m
+  6. GPT-5.6-Sol            [2mOlder generation workhorse model.[0m
+  7. GPT-5.6-Terra          [2mOlder balanced model for straightforward work.[0m
+  8. GPT-5.6-Luna           [2mOlder fast and efficient model.[0m
+
+  [1menter[0;2m select · [0;1mesc[0;2m back
