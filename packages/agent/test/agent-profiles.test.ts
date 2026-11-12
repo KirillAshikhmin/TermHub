@@ -84,6 +84,9 @@ describe('профиль Codex', () => {
     // message»), Enter отправляет сразу в идущий ход; Ctrl+U стирает строку ввода и
     // работу не трогает (Ctrl+C там — прерывание).
     expect(profile.keys.queue).toBe('\t');
+    // Обычный текст работающему уходит Enter — сразу в идущий ход (выбор владельца 13.11.2026).
+    expect(profile.keys.steer).toBe('\r');
+    expect(profileOf('claude').keys.steer).toBeUndefined();
     expect(profile.keys.clearBusy).toBe('\x15');
     // У Claude отправка работающему — та же клавиша; Ctrl+U стирает его строку так же
     // (замер таска 25 на Claude Code 2.1.322: работа не тронута).

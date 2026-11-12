@@ -162,7 +162,8 @@ export interface ChatFailure {
 
 export type LiveResult = LiveState | ChatFailure;
 
-export type ActResult = { ok: true; screen: ScreenState; taken?: string } | ChatFailure;
+/** `steered` — запрос работающему агенту ушёл сразу в идущий ход, мимо очереди. */
+export type ActResult = { ok: true; screen: ScreenState; taken?: string; steered?: boolean } | ChatFailure;
 
 export interface ChatCommand {
   /** Имя без ведущего «/». */

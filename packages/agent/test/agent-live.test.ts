@@ -392,18 +392,18 @@ describe('sessionAct — ключ идемпотентности запроса'
     expect(f.sent).toEqual(['paste:привет', '\r']);
   });
 
-  it('клавиша очереди ушла, а агент не у строки ввода — отказ; повтор с тем же ключом клавиш не шлёт', async () => {
+  it('клавиша ушла работающему, а агент не у строки ввода — отказ; повтор с тем же ключом клавиш не шлёт', async () => {
     let after: string | undefined = 'menu-model';
-    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? after : undefined), {
+    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? after : undefined), {
       now: () => 1,
     });
     const first = await act(f, { kind: 'prompt', text: 'note one', key: 'k-7' });
     expect(first).toMatchObject({ ok: false, reason: 'stale' });
-    expect(f.sent).toEqual(['paste:note one', '\t']);
+    expect(f.sent).toEqual(['paste:note one', '\r']);
     after = 'working';
     f.src.capture = async () => ({ lines: shot('codex', 'working'), alt: false, cols: 100, rows: 32, pane: PANE, command: 'node' });
     expect(await act(f, { kind: 'prompt', text: 'note one', key: 'k-7' })).toEqual(first);
-    expect(f.sent).toEqual(['paste:note one', '\t']);
+    expect(f.sent).toEqual(['paste:note one', '\r']);
   });
 
   it('клавиша отправки ушла, а опрос экрана после неё сорвался (lookup-failed): повтор клавиш не шлёт', async () => {
@@ -437,26 +437,29 @@ describe('sessionAct — ключ идемпотентности запроса'
 // Замер таска 19 на Codex 0.167.2: работающему Codex набранное ставит в очередь Tab
 // (Enter отправил бы сразу в идущий ход); Ctrl+U стирает строку, не прерывая работу.
 describe('sessionAct — запрос работающему Codex', () => {
-  it('со строкой состояния пользователя: вставка узнана под подвалом «tab to queue message», в очередь ставит Tab', async () => {
+  it('со строкой состояния пользователя: вставка узнана под подвалом «tab to queue message», работающему текст уходит Enter', async () => {
     const f = fake('codex', 'statusline-working', (sent) =>
-      sent.startsWith('paste:') ? 'queue-hint-statusline' : sent === '\t' ? 'queued-followup' : undefined,
+      sent.startsWith('paste:') ? 'queue-hint-statusline' : sent === '\r' ? 'queued-followup' : undefined,
     );
     const result = await act(f, { kind: 'prompt', text: 'тест' });
-    expect(f.sent).toEqual(['paste:тест', '\t']);
+    expect(f.sent).toEqual(['paste:тест', '\r']);
     expect(screenOf(result)).toMatchObject({ kind: 'working', input: '', queued: 1 });
   });
 
   it('без строки состояния и при «Waiting for background terminal» — так же', async () => {
     const plain = fake('codex', 'working', (sent) =>
-      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? 'queued-followup' : undefined,
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? 'queued-followup' : undefined,
     );
-    expect(screenOf(await act(plain, { kind: 'prompt', text: 'note one' }))).toMatchObject({ kind: 'working', queued: 1 });
-    expect(plain.sent).toEqual(['paste:note one', '\t']);
+    const res = await act(plain, { kind: 'prompt', text: 'note one' });
+    // Ответ называет, что запрос ушёл в идущий ход, а не в очередь.
+    expect(res).toMatchObject({ ok: true, steered: true });
+    expect(screenOf(res)).toMatchObject({ kind: 'working', queued: 1 });
+    expect(plain.sent).toEqual(['paste:note one', '\r']);
     const waiting = fake('codex', 'waiting-terminal', (sent) =>
-      sent.startsWith('paste:') ? 'waiting-terminal-typed' : sent === '\t' ? 'queued-followup-two' : undefined,
+      sent.startsWith('paste:') ? 'waiting-terminal-typed' : sent === '\r' ? 'queued-followup-two' : undefined,
     );
     expect(screenOf(await act(waiting, { kind: 'prompt', text: 'note four' }))).toMatchObject({ queued: 2, input: '' });
-    expect(waiting.sent).toEqual(['paste:note four', '\t']);
+    expect(waiting.sent).toEqual(['paste:note four', '\r']);
   });
 
   it('ожидающему Codex запрос уходит прежней клавишей отправки', async () => {
@@ -471,14 +474,14 @@ describe('sessionAct — запрос работающему Codex', () => {
     expect(f.sent).toEqual(['paste:hello draft text', '\r']);
   });
 
-  it('Tab запрос не принял: строка стирается Ctrl+U, работа не тронута, отказ это называет', async () => {
+  it('Enter запрос не принял: строка стирается Ctrl+U, работа не тронута, отказ это называет', async () => {
     const f = fake('codex', 'working', (sent) =>
       sent.startsWith('paste:') ? 'queue-hint' : sent === '\x15' ? 'working' : undefined,
     );
     const result = await act(f, { kind: 'prompt', text: 'note one' });
     expect(result).toMatchObject({ ok: false, reason: 'stale' });
     expect(!result.ok && result.detail).toMatch(/removed from the agent input line/);
-    expect(f.sent).toEqual(['paste:note one', '\t', '\x15']);
+    expect(f.sent).toEqual(['paste:note one', '\r', '\x15']);
   });
 
   it('многострочный текст стирается построчно: Ctrl+U жмётся, пока строка не опустеет', async () => {
@@ -493,7 +496,7 @@ describe('sessionAct — запрос работающему Codex', () => {
     const result = await act(f, { kind: 'prompt', text: 'line one\nline two\nline three' });
     expect(result).toMatchObject({ ok: false, reason: 'stale' });
     expect(!result.ok && result.detail).toMatch(/removed from the agent input line/);
-    expect(f.sent.slice(0, 2)).toEqual(['paste:line one\nline two\nline three', '\t']);
+    expect(f.sent.slice(0, 2)).toEqual(['paste:line one\nline two\nline three', '\r']);
     expect(f.sent.slice(2)).toEqual(['\x15', '\x15', '\x15', '\x15', '\x15']);
   });
 
@@ -503,7 +506,7 @@ describe('sessionAct — запрос работающему Codex', () => {
     expect(result).toMatchObject({ ok: false, reason: 'stale' });
     expect(!result.ok && result.detail).toMatch(/left in the agent input line/);
     const erases = f.sent.slice(2);
-    expect(f.sent.slice(0, 2)).toEqual(['paste:note one', '\t']);
+    expect(f.sent.slice(0, 2)).toEqual(['paste:note one', '\r']);
     expect(erases.length).toBeGreaterThan(0);
     expect(erases.length).toBeLessThanOrEqual(8);
     expect(erases.every((key) => key === '\x15')).toBe(true);
@@ -517,24 +520,24 @@ describe('sessionAct — запрос работающему Codex', () => {
     expect(f.sent).toEqual(['paste:note one']);
   });
 
-  it('после Tab экран не узнан — стирание вслепую не идёт', async () => {
+  it('после Enter экран не узнан — стирание вслепую не идёт', async () => {
     const f = fake('codex', 'working', (sent) =>
-      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? 'menu-model' : undefined,
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? 'menu-model' : undefined,
     );
     const result = await act(f, { kind: 'prompt', text: 'note one' });
-    expect(f.sent).toEqual(['paste:note one', '\t']);
+    expect(f.sent).toEqual(['paste:note one', '\r']);
     // Успех после клавиши очереди — только строка ввода, и пустая: иной экран не доказывает,
     // что сообщение встало в очередь.
     expect(result).toMatchObject({ ok: false, reason: 'stale' });
     expect(!result.ok && result.detail).toMatch(/is not at its input line/);
   });
 
-  it('после Tab неузнанный экран — тоже отказ, а не успех', async () => {
+  it('после Enter неузнанный экран — тоже отказ, а не успех', async () => {
     const f = fake('codex', 'working', (sent) =>
-      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? ['$ ls', 'README.md'] : undefined,
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? ['$ ls', 'README.md'] : undefined,
     );
     const result = await act(f, { kind: 'prompt', text: 'note one' });
-    expect(f.sent).toEqual(['paste:note one', '\t']);
+    expect(f.sent).toEqual(['paste:note one', '\r']);
     expect(result).toMatchObject({ ok: false, reason: 'stale' });
   });
 
@@ -565,10 +568,10 @@ describe('sessionAct — запрос работающему Codex', () => {
     expect(f.sent).toEqual([]);
     // «@» в середине текста списка не открывает — запрос идёт в очередь.
     const mid = fake('codex', 'working', (sent) =>
-      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? 'queued-followup' : undefined,
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? 'queued-followup' : undefined,
     );
     expect(screenOf(await act(mid, { kind: 'prompt', text: 'see @README.md first' })).queued).toBe(1);
-    expect(mid.sent).toEqual(['paste:see @README.md first', '\t']);
+    expect(mid.sent).toEqual(['paste:see @README.md first', '\r']);
   });
 
   it('список упоминаний всё же открылся над строкой — ни Tab, ни Enter: строка стирается Ctrl+U, отказ', async () => {
@@ -1566,12 +1569,12 @@ describe('запрос нумерованным списком доходит д
     return [...lines.slice(0, at), `${head}1. первое`, '  2. второе', '  3. третье', ...lines.slice(at + 1)];
   };
 
-  it('ждущему Codex — Enter, работающему — Tab', async () => {
+  it('ждущему и работающему Codex — Enter', async () => {
     const idle = fake('codex', 'idle', (sent) => (sent.startsWith('paste:') ? typed('input', 'hello draft text') : sent === '\r' ? 'working' : undefined));
     expect(await act(idle, { kind: 'prompt', text: LIST })).toMatchObject({ ok: true });
     expect(idle.sent).toEqual([`paste:${LIST}`, '\r']);
-    const busy = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? typed('queue-hint', 'note one') : sent === '\t' ? 'queued-followup' : undefined));
+    const busy = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? typed('queue-hint', 'note one') : sent === '\r' ? 'queued-followup' : undefined));
     expect(await act(busy, { kind: 'prompt', text: LIST })).toMatchObject({ ok: true });
-    expect(busy.sent).toEqual([`paste:${LIST}`, '\t']);
+    expect(busy.sent).toEqual([`paste:${LIST}`, '\r']);
   });
 });

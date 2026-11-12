@@ -78,7 +78,7 @@ export interface FeedHandle {
   /** Место в строке шапки переписки под состояние агента с экрана (слово состояния, время,
    *  «Стоп») — его наполняет живая часть чата. В ленте без чата не в разметке. */
   stateSlot: HTMLElement;
-  /** Место в ряду кнопок шапки сразу после поиска — под «Стоп» живой части. */
+  /** Место в конце ряда кнопок шапки — под «Стоп» живой части. */
   stopSlot: HTMLElement;
   /** Состояние агента показано в `stateSlot`: своя подпись «Агент работает» тогда лишняя. */
   setStateShown(on: boolean): void;
@@ -279,7 +279,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   if (chat) {
     const tools = document.createElement('span');
     tools.className = 'th-feed__tools';
-    tools.append(searchBtn, stopSlot, thinkingBtn, actionsBtn);
+    tools.append(searchBtn, thinkingBtn, actionsBtn, stopSlot);
     head.append(agentEl, stateSlot, liveEl, usageEl, tools);
     paintButtons();
   } else head.append(agentEl, liveEl, usageEl, toggleWrap, actionsWrap);

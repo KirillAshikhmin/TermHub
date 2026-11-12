@@ -307,6 +307,16 @@ describe('отправка', () => {
     expect(fx.locals[0]!.state).toBe('queued');
   });
 
+  it('агент работает и принял запрос сразу в идущий ход — «отправлено», а не «в очереди»', async () => {
+    fx = mount();
+    fx.screen.value = { kind: 'working' };
+    fx.nextAct.value = { ok: true, screen: { kind: 'working' }, steered: true };
+    type(fx, 'уточнение');
+    key(fx, 'Enter');
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ state: 'sent', delivered: true });
+  });
+
   it('многострочный запрос уходит одним действием', async () => {
     fx = mount();
     type(fx, 'a\nb\n\nc');

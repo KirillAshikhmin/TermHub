@@ -441,7 +441,10 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
     if (!atInput(fresh) || fresh.input !== typed.screen.input) return fail('stale', CHANGED_AFTER_PASTE);
     working = fresh.kind === 'working';
   }
-  const queue = working ? profile.keys.queue : undefined;
+  // Работающему: обычный текст — клавишей уточнения (сразу в идущий ход), если она у
+  // профиля есть; слэш-команда и агент без такой клавиши — клавишей очереди.
+  const steer = working && !text.startsWith('/') ? profile.keys.steer : undefined;
+  const queue = steer ?? (working ? profile.keys.queue : undefined);
   // Отметка ставится до посылки: сорвавшаяся посылка могла дойти до панели.
   if (ctx.sent) ctx.sent.submitted = true;
   await press(ctx, queue ?? profile.keys.submit);
@@ -449,7 +452,7 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   // Клавиша очереди: успех — только узнанный экран со строкой ввода, и пустой. Иной экран
   // не доказывает, что сообщение встало в очередь.
   const sent = await until(ctx, (s) => atInput(s) && !s.input);
-  if (sent.met) return done(sent.screen);
+  if (sent.met) return steer === undefined ? done(sent.screen) : { ok: true, screen: sent.screen, steered: true };
   if (!atInput(sent.screen)) {
     return fail(
       'stale',
@@ -460,7 +463,7 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   const swept = await sweepInput(ctx, sent.screen);
   return fail(
     'stale',
-    `the agent did not queue the message; the pasted text ${swept ? 'was removed from' : 'is left in'} the agent input line`,
+    `the agent did not take the message; the pasted text ${swept ? 'was removed from' : 'is left in'} the agent input line`,
   );
 }
 

@@ -302,7 +302,7 @@ describe('состояние агента в строке шапки переп�
     await open();
     const stop = q<HTMLButtonElement>('.th-feed__head .th-live__stop')!;
     expect(stop.hidden).toBe(false);
-    // Кнопка-иконка в ряду кнопок шапки, сразу после поиска; рядом со словом состояния её нет.
+    // Кнопка-иконка в ряду кнопок шапки, в конце ряда; рядом со словом состояния её нет.
     expect(stop.closest('.th-feed__tools')).not.toBeNull();
     expect(q('.th-live__bar .th-live__stop')).toBeNull();
     expect(stop.classList.contains('th-iconbtn')).toBe(true);
@@ -310,7 +310,7 @@ describe('состояние агента в строке шапки переп�
     expect(stop.title).toBe(t('chat.live.stop'));
     expect(stop.textContent).toBe('');
     const tools = [...q('.th-feed__tools')!.querySelectorAll<HTMLElement>('button')];
-    expect(tools.map((b) => b.dataset.toggle ?? 'stop')).toEqual(['search', 'stop', 'thinking', 'actions']);
+    expect(tools.map((b) => b.dataset.toggle ?? 'stop')).toEqual(['search', 'thinking', 'actions', 'stop']);
     stop.click();
     await flush();
     expect(acts).toEqual([{ kind: 'interrupt' }]);

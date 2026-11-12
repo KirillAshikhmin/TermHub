@@ -570,9 +570,11 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     // «Отправляется» живёт до ответа на act: принял — «отправлено» (у работающего агента —
     // «в очереди»). Слэш-команда может открыть меню и в переписку не попасть вовсе —
     // она становится строкой «команда отправлена» и записи транскрипта не ждёт.
-    const delivered = (): void => {
-      msg.set(COMMAND_RE.test(text) ? 'command' : state === 'queued' ? 'queued' : 'sent', { delivered: true });
-      if (state === 'queued' && !COMMAND_RE.test(text)) {
+    // `steered` — агент принял запрос сразу в идущий ход: в очереди его нет и не будет.
+    const delivered = (steered = false): void => {
+      const queued = state === 'queued' && !steered;
+      msg.set(COMMAND_RE.test(text) ? 'command' : queued ? 'queued' : 'sent', { delivered: true });
+      if (queued && !COMMAND_RE.test(text)) {
         inQueue.push({ msg, text, shown: '' });
         syncQueue();
       }
@@ -600,7 +602,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
         return;
       }
       lost = false;
-      if (res.ok) return delivered();
+      if (res.ok) return delivered(res.steered === true);
       if (res.reason === 'stale' && !over) {
         if (!(live.state()?.screen.input ?? '')) await live.refresh().catch(() => {});
         if (live.state()?.screen.input) {
