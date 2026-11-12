@@ -110,6 +110,16 @@ export interface FeedEntry {
   /** У действия есть подробности (команда и вывод, diff): их тянут отдельным запросом
    *  `feed` с `detail=<cursor>`. Только у `kind: 'tool'`; у старого агента поля нет. */
   detail?: true;
+  /** Чем кончилось действие — только у `tool`; поля нет у старого агента и когда результат
+   *  остался за краем окна страницы. */
+  result?: ToolResult;
+}
+
+/** Исход действия (форма провода агента). `exit` — код выхода, только ненулевой и только
+ *  когда транскрипт его называет; `stopped` — прервано человеком. */
+export interface ToolResult {
+  state: 'done' | 'running' | 'failed' | 'stopped';
+  exit?: number;
 }
 
 /** Почему ленты нет. Первые пять — слова самой ленты; `forbidden` приходит не от неё,
@@ -153,7 +163,9 @@ export type FeedResult = FeedPage | FeedFailure;
 
 /** Подробности действия (`feed` с `detail`): тело `ToolDetail` с `ok:true` либо отказ
  *  ленты. Форма провода — `@termhub/protocol/chat`. */
-export type DetailResult = ({ ok: true } & ToolDetail) | FeedFailure;
+/** Исход в подробностях называется только у ошибки и прерывания; успех — отсутствие
+ *  поля и `pending`. */
+export type DetailResult = ({ ok: true } & ToolDetail & { result?: ToolResult }) | FeedFailure;
 
 /** Курсоры взаимоисключающие; при нескольких сразу агент берёт `around`, затем
  *  `before`, затем `after`. Лимит по умолчанию 200, максимум 1000. */

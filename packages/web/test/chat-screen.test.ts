@@ -168,6 +168,24 @@ describe('оболочка чата', () => {
     chat.teardown();
   });
 
+  it('строка действия: метка исхода и подсветка команды оболочки; без исхода метки нет, путь остаётся ссылкой', async () => {
+    const failed: FeedEntry = { ...TOOL, result: { state: 'failed', exit: 1 } };
+    const { transport } = fixture(() => page({ entries: [failed, { ...PLAIN_TOOL, tool: 'Read' }] }));
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    const rows = host.querySelectorAll<HTMLElement>('.th-feed__entry--tool');
+    const mark = rows[0]!.querySelector<HTMLElement>('.th-tool__mark')!;
+    expect(mark.classList.contains('is-failed')).toBe(true);
+    expect(mark.textContent).toBe('код 1');
+    expect(rows[1]!.querySelector('.th-tool__mark')).toBeNull();
+    const what = rows[0]!.querySelector('.th-feed__tooltext')!;
+    expect(what.querySelector('.th-sh-cmd, .hljs-built_in')!.textContent).toBe('npm');
+    expect(what.textContent).toBe('npm test /root/a/run.sh');
+    expect(what.querySelector('a.th-path')!.textContent).toBe('/root/a/run.sh');
+    expect(rows[1]!.querySelector('.th-feed__tooltext .th-sh-cmd')).toBeNull(); // Read — не оболочка
+    chat.teardown();
+  });
+
   it('беседы ещё нет: приглашение написать запрос, а не ошибка', async () => {
     const { transport } = fixture(() => ({ ok: false, reason: 'no-transcript', detail: '' }));
     const chat = mountChat(host, 'work', transport);

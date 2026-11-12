@@ -4,6 +4,7 @@
 // пока действие не закончено: незавершённое перезапрашивается при каждом раскрытии.
 // Всё, что пришло из чужого транскрипта, рисуется текстом — не разметкой.
 
+import { ansiNodes, highlightShell, isShellTool, paintMark } from './chat-color';
 import { t } from './i18n';
 import type { DetailResult, FeedEntry } from './transport';
 
@@ -37,13 +38,15 @@ export function renderDiff(detail: Pick<Detail, 'diff'>): HTMLElement {
   return root;
 }
 
-function renderDetail(detail: Detail): HTMLElement[] {
+function renderDetail(detail: Detail, shell: boolean): HTMLElement[] {
   const out: HTMLElement[] = [];
   if (detail.input) {
     out.push(div('th-tool__label', t('chat.tool.input')));
     const pre = document.createElement('pre');
     pre.className = 'th-tool__input';
     pre.textContent = detail.input;
+    // Команда оболочки — подсветкой синтаксиса; сбой подсветки оставляет простой текст.
+    if (shell) void highlightShell(pre, detail.input);
     out.push(pre);
   }
   if (detail.diff && detail.diff.length > 0) out.push(renderDiff(detail));
@@ -51,7 +54,8 @@ function renderDetail(detail: Detail): HTMLElement[] {
     out.push(div('th-tool__label', t('chat.tool.output')));
     const pre = document.createElement('pre');
     pre.className = 'th-tool__output';
-    pre.textContent = detail.output;
+    // Цвета ANSI — узлами; нет последовательностей — тот же текстовый узел, что был.
+    pre.append(ansiNodes(detail.output));
     out.push(pre);
   }
   if (detail.truncated) out.push(div('th-tool__truncated', t('chat.tool.truncated')));
@@ -73,7 +77,7 @@ export function mountToolDetail(row: HTMLElement, entry: FeedEntry, load: () => 
   panel.hidden = true;
   row.classList.add('is-expandable');
   row.append(head, panel);
-  void entry; // запись нужна вызывающему для курсора; раскрытию достаточно `load`
+  const shell = isShellTool(entry.tool);
 
   let open = false;
   let loaded: Detail | null = null;
@@ -112,7 +116,10 @@ export function mountToolDetail(row: HTMLElement, entry: FeedEntry, load: () => 
     }
     // Идущее действие не запоминаем: к следующему раскрытию оно могло закончиться.
     loaded = res.pending ? null : res;
-    panel.replaceChildren(...renderDetail(res));
+    // Метка строки догоняет факт: на странице действие могло быть ещё «выполняется».
+    const mark = head.querySelector<HTMLElement>('.th-tool__mark');
+    if (mark) paintMark(mark, res.pending ? { state: 'running' } : (res.result ?? { state: 'done' }));
+    panel.replaceChildren(...renderDetail(res, shell));
   };
 
   const set = (next: boolean): void => {

@@ -15,6 +15,7 @@
 // Транспорт (LAN/relay) экрану не виден: он зовёт transport.feed() и читает значение.
 
 import { renderChatMarkdown, linkifyPaths, type PathLinker } from './chat-render';
+import { createMark, highlightShell, isShellTool } from './chat-color';
 import { mountToolDetail } from './chat-tool';
 import { openCreateModal } from './dashboard';
 import { formatDate } from './format';
@@ -439,6 +440,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
         line.className = 'th-feed__toolline';
         box.append(desc, line);
       }
+      if (chat && entry.result) line.append(createMark(entry.result));
       if (entry.tool) {
         const name = document.createElement('span');
         name.className = 'th-feed__toolname';
@@ -454,6 +456,11 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       line.append(what);
       if (chat) {
         linkifyPaths(what, chat.linker);
+        // Команда оболочки подсвечивается по синтаксису; подсветка заменяет узлы, поэтому
+        // ссылки на пути ставятся ещё раз, когда она готова.
+        if (isShellTool(entry.tool) && what.textContent) {
+          void highlightShell(what, what.textContent).then(() => linkifyPaths(what, chat.linker));
+        }
         // Раскрытие — только у действий, у которых агент назвал подробности.
         if (entry.detail && entry.cursor) {
           const cursor = entry.cursor;

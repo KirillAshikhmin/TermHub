@@ -24,7 +24,7 @@ import { dataFrame, decodeFrame, FrameType, parseError, parseTerminalState, resi
 export type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileStat, ShareInfo };
 export type { DetailResult } from './api';
 export type { ActResult, ChatAction, ChatCommand, CommandsResult, LiveResult, LiveState, ScreenState, ToolDetail } from '@termhub/protocol/chat';
-export type { FeedEntry, FeedFailure, FeedFailureReason, FeedOptions, FeedPage, FeedResult } from './api';
+export type { FeedEntry, ToolResult, FeedFailure, FeedFailureReason, FeedOptions, FeedPage, FeedResult } from './api';
 export type { FileContent, FileEntry, TerminalMode, TerminalState };
 
 /** Состояние соединения одного терминала — управляет индикатором/баннером. */

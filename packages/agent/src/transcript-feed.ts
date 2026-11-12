@@ -73,6 +73,19 @@ export interface FeedEntry {
   /** У действия есть подробности (команда с выводом, diff правки): их отдаёт `readDetail`
    *  по курсору записи. Только у `tool` из файлов Claude и Codex. */
   detail?: true;
+  /** Чем кончилось действие — только у `tool` из файлов Claude и Codex. Ставит страница по
+   *  результату вызова, лежащему в том же окне; результата в окне нет и файл дочитан до
+   *  конца — `running`; результата нет, а файл дальше — поля нет (неизвестно). */
+  result?: ToolResult;
+}
+
+/** Исход действия. `exit` — код выхода команды, только когда транскрипт его назвал и он
+ *  не нулевой: у Claude это строка «Exit code N» ошибочного результата Bash, у Codex —
+ *  «Exit code: N» / «Process exited with code N» в начале вывода или `metadata.exit_code`
+ *  старой обёртки. `stopped` — прервано человеком (`interrupted` в сводке Claude). */
+export interface ToolResult {
+  state: 'done' | 'running' | 'failed' | 'stopped';
+  exit?: number;
 }
 
 /** Страница ленты. Поля `complete` и `live` сюда не входят: их отдаёт определитель
@@ -227,6 +240,8 @@ interface Row {
   end: number;
   entries: FeedEntry[];
   broken: boolean;
+  /** Результат вызова, если строка — вывод инструмента. */
+  result?: { id: string; mark: ToolResult };
 }
 
 /** Кусок ленты: строки окна плюс то, что окно успело увидеть о краях файла. */
@@ -366,7 +381,7 @@ function linesOf(
     const end = from + nl + 1;
     if (!(first && dropFirst)) {
       const parsed = classify(buf.toString('utf8', pos, nl), agent, start);
-      rows.push({ start, end, entries: parsed.entries, broken: parsed.broken });
+      rows.push({ start, end, entries: parsed.entries, broken: parsed.broken, result: parsed.result });
     }
     first = false;
     lastEnd = end;
@@ -421,6 +436,7 @@ function assemble(
     entries.push(...row.entries);
   }
   fillTimes(entries);
+  markResults(rows, entries, slice.atEnd);
   // Страница без записей всё равно двигает курсор: назад — к началу просмотренного куска,
   // вперёд — за последнюю просмотренную строку. Иначе клиент, упёршийся в строку длиннее
   // окна, листал бы одно и то же место, а записи по ту сторону остались бы недостижимы.
@@ -434,6 +450,20 @@ function assemble(
     eof: slice.atEnd && lastIdx >= rows.length - 1,
     skipped,
   };
+}
+
+/** Исход действий страницы по результатам окна. Результат ищется по всем строкам куска,
+ *  не только по попавшим на страницу: вызов у края страницы обычно кончается чуть дальше. */
+function markResults(rows: Row[], entries: FeedEntry[], atEnd: boolean): void {
+  const marks = new Map<string, ToolResult>();
+  for (const row of rows) if (row.result) marks.set(row.result.id, row.result.mark);
+  for (const entry of entries) {
+    const id = callIds.get(entry);
+    if (!id) continue;
+    const mark = marks.get(id);
+    if (mark) entry.result = mark;
+    else if (atEnd) entry.result = { state: 'running' };
+  }
 }
 
 /** Метки времени: нет у записи — берётся от предыдущей записи окна, а для первых в окне —
@@ -457,6 +487,8 @@ function fillTimes(entries: FeedEntry[]): void {
 interface Parsed {
   entries: FeedEntry[];
   broken: boolean;
+  /** Результат вызова, если строка — вывод инструмента. */
+  result?: { id: string; mark: ToolResult };
 }
 
 /** Общее у всех записей строки: идентификатор, метка и ветка. */
@@ -478,10 +510,67 @@ function classify(line: string, agent: FileAgent, offset: number): Parsed {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
     return { entries: [], broken: true };
   const rec = raw as Record<string, unknown>;
+  const result = resultOf(rec, agent);
   return {
     entries: agent === 'claude' ? fromClaude(rec, offset) : fromCodex(rec, offset),
     broken: false,
+    ...(result ? { result } : {}),
   };
+}
+
+/** Идентификатор вызова записи `tool` — служебный, наружу не едет: им страница сопоставляет
+ *  запись с результатом из своего окна. */
+const callIds = new WeakMap<FeedEntry, string>();
+
+/** Исход из строки-результата: Claude — `tool_result` (`is_error`, `interrupted` сводки),
+ *  Codex — `*_call_output`. Не результат — `null`. */
+function resultOf(rec: Record<string, unknown>, agent: FileAgent): { id: string; mark: ToolResult } | null {
+  if (agent === 'claude') {
+    if (rec.type !== 'user') return null;
+    const content = (rec.message as Record<string, unknown> | undefined)?.content;
+    if (!Array.isArray(content)) return null;
+    for (const item of content) {
+      if (item === null || typeof item !== 'object') continue;
+      const block = item as Record<string, unknown>;
+      if (block.type !== 'tool_result' || !str(block.tool_use_id)) continue;
+      const meta = rec.toolUseResult as Record<string, unknown> | undefined;
+      const stopped = meta !== null && typeof meta === 'object' && meta.interrupted === true;
+      return { id: str(block.tool_use_id), mark: claudeMark(block, stopped) };
+    }
+    return null;
+  }
+  const payload = rec.payload as Record<string, unknown> | undefined;
+  if (rec.type !== 'response_item' || !payload) return null;
+  if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') return null;
+  if (!str(payload.call_id)) return null;
+  return { id: str(payload.call_id), mark: codexMark(resultText(payload.output)) };
+}
+
+function claudeMark(block: Record<string, unknown>, stopped: boolean): ToolResult {
+  if (stopped) return { state: 'stopped' };
+  if (block.is_error !== true) return { state: 'done' };
+  const code = /^Exit code (\d+)/.exec(resultText(block.content));
+  const exit = code ? Number(code[1]) : 0;
+  return exit > 0 ? { state: 'failed', exit } : { state: 'failed' };
+}
+
+function codexMark(output: string): ToolResult {
+  let text = output;
+  let code: number | null = null;
+  if (text.startsWith('{')) {
+    // Старая обёртка: `{"output": "...", "metadata": {"exit_code": N}}`.
+    const wrapped = recordOf(text);
+    const meta = wrapped?.metadata as Record<string, unknown> | undefined;
+    if (typeof meta?.exit_code === 'number') code = meta.exit_code;
+    if (wrapped && typeof wrapped.output === 'string') text = wrapped.output;
+  }
+  if (code === null) {
+    const head = /^(?:Exit code: |[\s\S]{0,200}?\nProcess exited with code )(\d+)/.exec(text);
+    if (head) code = Number(head[1]);
+  }
+  if (code === null && /^[\s\S]{0,200}?\nProcess running with session ID/.test(text)) return { state: 'running' };
+  if (code !== null && code > 0) return { state: 'failed', exit: code };
+  return { state: 'done' };
 }
 
 // --- вставки среды ---------------------------------------------------------------------
@@ -576,7 +665,7 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     if (block.type === 'text' && text.trim()) out.push(make(base, out.length, 'agent', text));
     else if (block.type === 'thinking' && thinking) out.push(make(base, out.length, 'thinking', thinking));
     else if (block.type === 'tool_use' && str(block.name))
-      out.push(withDetail(tool(base, out.length, str(block.name), argOf(block.input), descOf(block.input))));
+      out.push(callId(withDetail(tool(base, out.length, str(block.name), argOf(block.input), descOf(block.input))), block.id));
   }
   return out;
 }
@@ -694,9 +783,14 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     const name = str(payload.name);
     if (!name) return [];
     const args = payload.type === 'function_call' ? payload.arguments : payload.input;
-    return [withDetail(tool(base, 0, name, codexArg(args)))];
+    return [callId(withDetail(tool(base, 0, name, codexArg(args))), payload.call_id)];
   }
   return [];
+}
+
+function callId(entry: FeedEntry, id: unknown): FeedEntry {
+  if (typeof id === 'string' && id) callIds.set(entry, id);
+  return entry;
 }
 
 /** Подробности у действия есть всегда: вызов несёт ввод, а вывод ищется по требованию. */
@@ -1014,7 +1108,7 @@ function codexSummary(payload: Record<string, unknown>): string {
 // --- подробности действия ------------------------------------------------------------------
 
 /** Ответ на запрос подробностей: тело `ToolDetail` либо отказ ленты теми же причинами. */
-export type DetailResult = ({ ok: true } & ToolDetail) | FeedFailure;
+export type DetailResult = ({ ok: true } & ToolDetail & { result?: ToolResult }) | FeedFailure;
 
 /** Как далеко от вызова ищется его результат. Результат идёт следом, но между ними бывают
  *  записи параллельных вызовов и реплики; дальше этого предела вызов считается ещё идущим. */
@@ -1037,6 +1131,7 @@ interface Outcome {
   output: string;
   /** Claude: сводка правки (`toolUseResult`) — из неё берётся diff. */
   meta?: Record<string, unknown>;
+  mark: ToolResult;
 }
 
 /** Подробности действия по курсору записи `tool` страницы ленты: команда с выводом либо
@@ -1180,7 +1275,7 @@ function claudeOutcome(text: string, id: string): Outcome | null {
     let output = resultText(block.content);
     // Вывод, который агент не положил в блок, но записал в сводку (Bash).
     if (!output && meta) output = [str(meta.stdout), str(meta.stderr)].filter(Boolean).join('\n');
-    return { output, ...(meta ? { meta } : {}) };
+    return { output, mark: claudeMark(block, meta?.interrupted === true), ...(meta ? { meta } : {}) };
   }
   return null;
 }
@@ -1197,7 +1292,7 @@ function codexOutcome(text: string, id: string): Outcome | null {
     const wrapped = recordOf(output);
     if (wrapped && typeof wrapped.output === 'string') output = wrapped.output;
   }
-  return { output };
+  return { output, mark: codexMark(resultText(payload.output)) };
 }
 
 /** Текст результата: строка либо список блоков, из которых берутся текстовые. */
@@ -1218,14 +1313,14 @@ function resultText(content: unknown): string {
 
 /** Подробности из вызова и его результата. Правка с diff отдаёт только diff: ввод и вывод
  *  при ней — то же самое другими словами. */
-function detailOf(agent: FileAgent, call: Call, outcome: Outcome | null): ToolDetail {
+function detailOf(agent: FileAgent, call: Call, outcome: Outcome | null): ToolDetail & { result?: ToolResult } {
   const clipped = { truncated: false };
   const cap = (text: string): string => {
     const cut = clip(text);
     if (cut.truncated) clipped.truncated = true;
     return cut.text;
   };
-  const out: ToolDetail = {};
+  const out: ToolDetail & { result?: ToolResult } = {};
   const diff = agent === 'claude' ? claudeDiff(outcome?.meta) : patchDiff(call.input);
   if (diff.length > 0) {
     out.diff = capDiff(diff, clipped);
@@ -1237,6 +1332,8 @@ function detailOf(agent: FileAgent, call: Call, outcome: Outcome | null): ToolDe
     if (outcome?.output) out.output = cap(outcome.output);
   }
   if (!outcome) out.pending = true;
+  // Успех — отсутствие поля и `pending`; называются только неудача и прерывание.
+  else if (outcome.mark.state === 'failed' || outcome.mark.state === 'stopped') out.result = outcome.mark;
   if (clipped.truncated) out.truncated = true;
   return out;
 }

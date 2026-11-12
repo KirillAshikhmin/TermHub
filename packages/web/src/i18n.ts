@@ -573,6 +573,13 @@ const ru: Dict = {
       input: 'Команда',
       output: 'Вывод',
       gone: 'Подробностей больше нет',
+      exit: 'код {code}',
+      state: {
+        done: 'Выполнено',
+        running: 'Выполняется',
+        failed: 'Завершилось с ошибкой',
+        stopped: 'Прервано',
+      },
     },
     typed: {
       label: 'В терминале набрано:',
@@ -1260,6 +1267,13 @@ const en: Dict = {
       input: 'Command',
       output: 'Output',
       gone: 'The details are gone',
+      exit: 'exit {code}',
+      state: {
+        done: 'Done',
+        running: 'Running',
+        failed: 'Failed',
+        stopped: 'Interrupted',
+      },
     },
     typed: {
       label: 'Typed in the terminal:',

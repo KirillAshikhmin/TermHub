@@ -28,6 +28,31 @@
   --summary-tint: rgba(179, 146, 240, 0.12);
   --danger: #f0665b;
   --danger-tint: rgba(240, 102, 91, 0.14);
+  /* Краски чата (G30): подсветка команды, исход действия, выделения в ответе и цвета ANSI.
+     Контраст каждой с --bg, --bg-elev, --bg-elev-2 и --bg-hover не ниже 4.5 в обеих
+     темах — проверяет chat-color-contrast.test.ts по значениям из этого файла. */
+  --syn-cmd: #7ee787;
+  --syn-flag: #d2a8ff;
+  --syn-string: #a5d6ff;
+  --syn-op: #ffa657;
+  --syn-var: #ff9bce;
+  --st-ok: #3fb950;
+  --st-run: #e3b341;
+  --st-fail: #ff7b72;
+  --st-stop: #9aa5b1;
+  --md-strong: #f2cc60;
+  --md-em: #d2a8ff;
+  --md-quote: #8fb8ff;
+  --md-code: #ffa657;
+  --md-link: #6cb6ff;
+  --ansi-0: #9aa5b1;
+  --ansi-1: #ff7b72;
+  --ansi-2: #7ee787;
+  --ansi-3: #e3b341;
+  --ansi-4: #79c0ff;
+  --ansi-5: #d2a8ff;
+  --ansi-6: #56d4dd;
+  --ansi-7: #e6edf3;
 
   --r-sm: 8px;
   --r: 12px;
@@ -72,6 +97,28 @@
     --summary-tint: rgba(130, 80, 223, 0.08);
     --danger: #d1382e;
     --danger-tint: rgba(209, 56, 46, 0.1);
+    --syn-cmd: #116329;
+    --syn-flag: #6639ba;
+    --syn-string: #0a3069;
+    --syn-op: #953800;
+    --syn-var: #a0185a;
+    --st-ok: #146c2e;
+    --st-run: #7d4e00;
+    --st-fail: #b32119;
+    --st-stop: #57606a;
+    --md-strong: #7d4e00;
+    --md-em: #6639ba;
+    --md-quote: #0b5cad;
+    --md-code: #953800;
+    --md-link: #0550ae;
+    --ansi-0: #57606a;
+    --ansi-1: #b32119;
+    --ansi-2: #116329;
+    --ansi-3: #7d4e00;
+    --ansi-4: #0550ae;
+    --ansi-5: #6639ba;
+    --ansi-6: #0a6a7a;
+    --ansi-7: #424a53;
     --shadow: 0 1px 2px rgba(140, 149, 159, 0.2), 0 12px 28px rgba(140, 149, 159, 0.18);
     --shadow-sm: 0 1px 2px rgba(140, 149, 159, 0.25);
   }
@@ -101,6 +148,28 @@
   --summary-tint: rgba(130, 80, 223, 0.08);
   --danger: #d1382e;
   --danger-tint: rgba(209, 56, 46, 0.1);
+  --syn-cmd: #116329;
+  --syn-flag: #6639ba;
+  --syn-string: #0a3069;
+  --syn-op: #953800;
+  --syn-var: #a0185a;
+  --st-ok: #146c2e;
+  --st-run: #7d4e00;
+  --st-fail: #b32119;
+  --st-stop: #57606a;
+  --md-strong: #7d4e00;
+  --md-em: #6639ba;
+  --md-quote: #0b5cad;
+  --md-code: #953800;
+  --md-link: #0550ae;
+  --ansi-0: #57606a;
+  --ansi-1: #b32119;
+  --ansi-2: #116329;
+  --ansi-3: #7d4e00;
+  --ansi-4: #0550ae;
+  --ansi-5: #6639ba;
+  --ansi-6: #0a6a7a;
+  --ansi-7: #424a53;
   --shadow: 0 1px 2px rgba(140, 149, 159, 0.2), 0 12px 28px rgba(140, 149, 159, 0.18);
   --shadow-sm: 0 1px 2px rgba(140, 149, 159, 0.25);
 }
@@ -5252,6 +5321,103 @@ main.th-feed--chat {
   width: 1.4em;
   text-align: center;
   user-select: none;
+}
+/* Цвет в чате (G30): исход действия, подсветка команды оболочки, ANSI в выводе. Все
+   краски — переменные темы. */
+.th-tool__mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--st-stop);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+.th-tool__mark::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.th-tool__mark.is-done {
+  color: var(--st-ok);
+}
+.th-tool__mark.is-running {
+  color: var(--st-run);
+}
+.th-tool__mark.is-failed {
+  color: var(--st-fail);
+}
+.th-tool__mark.is-stopped {
+  color: var(--st-stop);
+}
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-built_in,
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-keyword,
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-literal,
+.th-sh-cmd {
+  color: var(--syn-cmd);
+}
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-string {
+  color: var(--syn-string);
+}
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-variable,
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-number {
+  color: var(--syn-var);
+}
+:is(.th-feed__tooltext, .th-tool__input).hljs .hljs-comment {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.th-sh-flag {
+  color: var(--syn-flag);
+}
+.th-sh-op {
+  color: var(--syn-op);
+}
+.th-ansi-0 {
+  color: var(--ansi-0);
+}
+.th-ansi-1 {
+  color: var(--ansi-1);
+}
+.th-ansi-2 {
+  color: var(--ansi-2);
+}
+.th-ansi-3 {
+  color: var(--ansi-3);
+}
+.th-ansi-4 {
+  color: var(--ansi-4);
+}
+.th-ansi-5 {
+  color: var(--ansi-5);
+}
+.th-ansi-6 {
+  color: var(--ansi-6);
+}
+.th-ansi-7 {
+  color: var(--ansi-7);
+}
+.th-ansi-bold {
+  font-weight: 650;
+}
+/* Текст ответа агента: выделение, цитата, встроенный код и ссылки — своими красками. */
+.th-feed--chat .th-feed__md strong {
+  color: var(--md-strong);
+}
+.th-feed--chat .th-feed__md em {
+  color: var(--md-em);
+}
+.th-feed--chat .th-feed__md blockquote {
+  color: var(--md-quote);
+  border-left-color: var(--md-quote);
+}
+.th-feed--chat .th-feed__md .th-md__inlinecode {
+  color: var(--md-code);
+}
+.th-feed--chat .th-feed__md .th-md__link {
+  color: var(--md-link);
 }
 .th-diff__line.is-add {
   background: rgba(56, 211, 168, 0.16);
