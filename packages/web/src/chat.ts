@@ -9,6 +9,7 @@
 // Переписка занимает всё свободное место и прокручивается сама; остальное — по высоте
 // содержимого, поле ввода всегда у нижнего края.
 
+import { mountComposer, type ComposerHandle } from './chat-composer';
 import { mountLive, type LiveHandle } from './chat-live';
 import { mountFeed, type FeedHandle } from './feed';
 import { createPathLinker } from './chat-render';
@@ -28,7 +29,7 @@ export interface ChatSlots {
   question: HTMLElement;
   /** Окошко живого терминала для неузнанного экрана (`chat-live.ts`, `chat-term.ts`). */
   terminal: HTMLElement;
-  /** Поле ввода (таск 06). Ряд управления (режим, модель, контекст) встаёт перед ним. */
+  /** Поле ввода (`chat-composer.ts`). Ряд управления (режим, модель, контекст) встаёт перед ним. */
   composer: HTMLElement;
 }
 
@@ -40,6 +41,8 @@ export interface ChatHandle extends FeedHandle {
   /** Состояние агента с экрана панели: `state()`, `act(action)`, `subscribe(fn)`. Поле
    *  ввода узнаёт по нему, что агент делает, и шлёт действия через него же. */
   live: LiveHandle;
+  /** Поле ввода; null — у зрителя без права `write` его нет. */
+  composer: ComposerHandle | null;
   /** Связь с агентом сейчас потеряна (переписка на экране остаётся). */
   offline(): boolean;
 }
@@ -125,14 +128,20 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     if (changed) feed.refresh();
   });
 
+  // Поле ввода — тем, у кого есть право ввода; зрителю места под него нет вовсе.
+  const readOnly = !!transport.clientScope && !transport.clientScope.write;
+  const composer: ComposerHandle | null = readOnly ? null : mountComposer(slots.composer, session, { transport, live, thread: feed });
+
   return {
     ...feed,
     el: root,
     feed,
     slots,
     live,
+    composer,
     offline: () => isOffline,
     teardown: () => {
+      composer?.teardown();
       live.teardown();
       feed.teardown();
       sbar.teardown();

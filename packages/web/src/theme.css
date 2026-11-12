@@ -4809,3 +4809,244 @@ main.th-feed--chat {
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
+
+/* ── Поле ввода чата ───────────────────────────────────────────────── */
+/* --th-kb: запас под экранную клавиатуру (ставит chat-composer из visualViewport). */
+.th-chat {
+  padding-bottom: var(--th-kb, 0px);
+}
+.th-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+.th-composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.th-composer__field {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 40vh;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  /* 16px — иначе iOS приближает страницу при фокусе. */
+  font-size: 16px;
+  line-height: 1.4;
+}
+.th-composer__field:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.th-composer__btn,
+.th-composer__send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.th-composer__send {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.th-composer__send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.th-composer__file {
+  display: none;
+}
+.th-composer__atts {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.th-composer__atts[hidden],
+.th-composer__suggest[hidden],
+.th-composer__drop[hidden] {
+  display: none;
+}
+.th-att {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  min-height: 44px;
+  padding: 4px 30px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-elev-2);
+  font-size: 0.8rem;
+}
+.th-att__img {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+}
+.th-att__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-att__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 0 0 var(--r) var(--r);
+  background: var(--border);
+}
+.th-att__progress::after {
+  content: '';
+  display: block;
+  width: 35%;
+  height: 100%;
+  background: var(--accent);
+  animation: th-att-run 1s linear infinite;
+}
+@keyframes th-att-run {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.th-att__remove {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.th-composer__suggest {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 100%;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  z-index: 5;
+}
+.th-composer__opt {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+.th-composer__opt.is-selected {
+  background: var(--accent-tint);
+}
+.th-composer__opt-name {
+  flex: none;
+  font-family: var(--mono, monospace);
+  font-size: 0.85rem;
+}
+.th-composer__opt-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+.th-composer__opt-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+.th-composer__drop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--r-lg);
+  background: var(--accent-tint);
+  pointer-events: none;
+}
+/* Локальная запись переписки: отправляется / в очереди / не отправлено. */
+.th-feed--chat .th-feed__entry--local {
+  opacity: 0.85;
+}
+.th-feed__local {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.th-feed__entry--local[data-state='failed'] .th-feed__local {
+  color: var(--danger);
+}
+.th-feed__local-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.th-feed__local-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 860px;
+  margin: 14px auto 0;
+  width: 100%;
+}
+.th-feed__local-list:empty {
+  display: none;
+}

@@ -46,12 +46,12 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('чат: живая часть в оболочке', () => {
-  it('полоса состояния — в слоте status, ряд управления — перед пустым полем ввода; смена состояния просит приращение', async () => {
+  it('полоса состояния — в слоте status, ряд управления — перед полем ввода; смена состояния просит приращение', async () => {
     current = state('idle');
     const chat = mountChat(host, 'work', transport);
     await vi.advanceTimersByTimeAsync(10);
     expect(chat.slots.status.querySelector('.th-live__state')).not.toBeNull();
-    expect(chat.slots.composer.childElementCount).toBe(0);
+    expect(chat.slots.composer.querySelector('.th-composer')).not.toBeNull();
     expect(chat.slots.composer.previousElementSibling!.classList.contains('th-live__controls')).toBe(true);
     expect(chat.live.state()!.screen.kind).toBe('idle');
 

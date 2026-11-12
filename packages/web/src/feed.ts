@@ -67,7 +67,22 @@ export interface FeedHandle {
   jumpTo(cursor: string): Promise<void>;
   /** Запросить приращение сейчас, не дожидаясь опроса (чат зовёт на смену состояния агента). */
   refresh(): void;
+  /** Отправленное сообщение, которого в транскрипте ещё нет: стоит в конце переписки
+   *  с пометкой и исчезает, когда агент запишет реплику с тем же текстом (поле ввода чата). */
+  addLocal(text: string, state?: LocalState): LocalMessage;
   teardown(): void;
+}
+
+export type LocalState = 'sending' | 'queued' | 'failed';
+export interface LocalAction {
+  label: string;
+  run(): void;
+}
+export interface LocalMessage {
+  /** Сменить пометку. `delivered` — агент принял запрос, ждём записи транскрипта.
+   *  После `remove` не делает ничего. */
+  set(state: LocalState, opts?: { note?: string; actions?: LocalAction[]; delivered?: boolean }): void;
+  remove(): void;
 }
 
 /** Находка поиска: запись, к которой переносят ленту, и строка вокруг совпадения. */
@@ -225,7 +240,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   const skippedEl = document.createElement('div');
   skippedEl.className = 'th-feed__skipped';
   skippedEl.hidden = true;
-  listEl.append(edgeEl, itemsEl, tailEl, noticeEl, skippedEl);
+  // Локальные записи (отправленное, но ещё не записанное агентом) — сразу за перепиской.
+  const localEl = document.createElement('div');
+  localEl.className = 'th-feed__local-list';
+  listEl.append(edgeEl, itemsEl, localEl, tailEl, noticeEl, skippedEl);
 
   // Кнопка «вниз»: уйдя листать историю, вернуться к концу беседы больше нечем.
   // У конца её нет — там она только закрывала бы последнюю запись.
@@ -468,6 +486,77 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     skipped = 0;
   };
 
+  // ── Локальные записи: отправлено, но транскрипта ещё нет ─────────────
+  interface LocalRec {
+    key: string;
+    state: LocalState;
+    delivered: boolean;
+    el: HTMLElement;
+  }
+  const locals: LocalRec[] = [];
+  const sameText = (text: string): string => text.replace(/\s+/g, ' ').trim();
+  const dropLocal = (rec: LocalRec): void => {
+    const i = locals.indexOf(rec);
+    if (i >= 0) locals.splice(i, 1);
+    rec.el.remove();
+  };
+  /** Пришла реплика человека: снимаем локальную запись с тем же текстом. Агент мог
+   *  записать реплику иначе (вложение стало «[Image #1]») — тогда уходит старейшая из
+   *  принятых агентом: транскрипт пишется в порядке отправки. Ошибочные не снимаются. */
+  const settleLocal = (text: string): void => {
+    const key = sameText(text);
+    const exact = locals.find((l) => l.state !== 'failed' && l.key === key);
+    const rec = exact ?? locals.find((l) => l.state !== 'failed' && l.delivered);
+    if (rec) dropLocal(rec);
+  };
+  const addLocal = (text: string, state: LocalState = 'sending'): LocalMessage => {
+    const box = document.createElement('div');
+    box.className = 'th-feed__entry th-feed__entry--human th-feed__entry--local';
+    const body = document.createElement('div');
+    body.className = 'th-feed__text';
+    body.textContent = text;
+    const status = document.createElement('div');
+    status.className = 'th-feed__local';
+    status.setAttribute('role', 'status');
+    box.append(body, status);
+    const rec: LocalRec = { key: sameText(text), state, delivered: false, el: box };
+    const paint = (note?: string, actions: LocalAction[] = []): void => {
+      box.dataset.state = rec.state;
+      const label = document.createElement('span');
+      label.className = 'th-feed__local-state';
+      label.textContent = t(`chat.local.${rec.state}`);
+      status.replaceChildren(label);
+      if (note) {
+        const n = document.createElement('span');
+        n.className = 'th-feed__local-note';
+        n.textContent = note;
+        status.append(n);
+      }
+      for (const action of actions) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'th-feed__local-btn';
+        b.textContent = action.label;
+        b.addEventListener('click', () => action.run());
+        status.append(b);
+      }
+    };
+    paint();
+    locals.push(rec);
+    const stick = nearBottom();
+    localEl.append(box);
+    if (stick || locals.length === 1) toBottom();
+    return {
+      set: (next, opts = {}) => {
+        if (!locals.includes(rec)) return;
+        rec.state = next;
+        if (opts.delivered !== undefined) rec.delivered = opts.delivered;
+        paint(opts.note, opts.actions);
+      },
+      remove: () => dropLocal(rec),
+    };
+  };
+
   /** Вклеивает страницу в окно и возвращает, сколько записей действительно прибавилось
    *  (склейка беседы приезжает одной и той же записью в обеих соседних страницах). */
   const applyPage = (pageData: FeedPage, where: 'prepend' | 'append'): number => {
@@ -489,6 +578,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     }
     const fresh = pageData.entries.filter((e) => !seen.has(e.id));
     for (const e of fresh) seen.add(e.id);
+    if (where === 'append') for (const e of fresh) if (e.kind === 'human') settleLocal(e.text);
     if (fresh.length > 0) {
       const frag = document.createDocumentFragment();
       if (where === 'prepend') {
@@ -921,6 +1011,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     loadOlder,
     jumpTo,
     refresh: () => void loadNewer(),
+    addLocal,
     teardown: () => {
       disposed = true;
       window.clearInterval(usageTimer);
