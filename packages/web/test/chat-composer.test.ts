@@ -178,9 +178,48 @@ describe('отправка', () => {
     await flush();
     expect(fx.acts).toEqual([{ kind: 'prompt', text: 'сделай тесты' }]);
     expect(fx.locals).toHaveLength(1);
-    expect(fx.locals[0]).toMatchObject({ text: 'сделай тесты', state: 'sending', delivered: true });
+    // «Отправляется» живёт только до ответа на act: агент принял — «отправлено».
+    expect(fx.locals[0]).toMatchObject({ text: 'сделай тесты', state: 'sent', delivered: true });
     expect(fx.field.value).toBe('');
     expect(fx.refreshes.n).toBeGreaterThan(0);
+  });
+
+  it('пока act не ответил — «отправляется»; у работающего агента после ответа — «в очереди»', async () => {
+    fx = mount();
+    let release!: (r: ActResult) => void;
+    fx.nextAct.value = new Promise<ActResult>((res) => (release = res));
+    type(fx, 'первое');
+    key(fx, 'Enter');
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ state: 'sending', delivered: false });
+    release({ ok: true, screen: IDLE });
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ state: 'sent', delivered: true });
+    fx.nextAct.value = { ok: true, screen: IDLE };
+    fx.screen.value = { ...IDLE, kind: 'working' };
+    type(fx, 'второе');
+    key(fx, 'Enter');
+    await flush();
+    expect(fx.locals[1]).toMatchObject({ text: 'второе', state: 'queued', delivered: true });
+  });
+
+  it('слэш-команда после успеха — строка «команда отправлена», а путь с ведущим слэшем — обычное сообщение', async () => {
+    fx = mount();
+    await flush();
+    type(fx, '/usage');
+    key(fx, 'Enter');
+    await flush();
+    type(fx, '/usage');
+    key(fx, 'Enter');
+    await flush();
+    type(fx, '/root/a/file.ts посмотри');
+    key(fx, 'Enter');
+    await flush();
+    expect(fx.locals.map((l) => [l.text, l.state, l.delivered])).toEqual([
+      ['/usage', 'command', true],
+      ['/usage', 'command', true],
+      ['/root/a/file.ts посмотри', 'sent', true],
+    ]);
   });
 
   it('Shift+Enter переноса не отправляет; пустое поле не отправляется, кнопка неактивна', async () => {
@@ -267,7 +306,7 @@ describe('отказы', () => {
     await flush();
     expect(fx.acts).toHaveLength(3);
     expect(fx.acts[2]).toEqual({ kind: 'prompt', text: 'не дойдёт' });
-    expect(rec.state).toBe('sending');
+    expect(rec.state).toBe('sent');
   });
 
   it('«Вернуть в поле» возвращает текст и снимает запись; набранное за это время идёт следом', async () => {
@@ -312,7 +351,7 @@ describe('отказы', () => {
     expect(fx.live.refresh).toHaveBeenCalledTimes(1);
     expect(fx.transport.feed).toHaveBeenCalledTimes(1);
     expect(fx.acts).toHaveLength(1);
-    expect(rec.state).toBe('sending');
+    expect(rec.state).toBe('sent');
     expect(rec.delivered).toBe(true);
     expect(rec.actions).toHaveLength(0);
     expect(fx.refreshes.n).toBeGreaterThan(0);
@@ -379,7 +418,7 @@ describe('отказы', () => {
     rec.actions[1]!.run();
     await flush();
     expect(fx.acts.at(-1)).toEqual({ kind: 'prompt', text: 'мой запрос', over: true });
-    expect(rec.state).toBe('sending');
+    expect(rec.state).toBe('sent');
   });
 
   it('«забрать»: текст агента приходит в поле перед моим, запись снимается', async () => {

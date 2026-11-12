@@ -115,4 +115,50 @@ describe('локальные записи переписки', () => {
     expect(locals()).toHaveLength(0);
     chat.teardown();
   });
+
+  it('«отправлено» — пометка без ожидания; запись транскрипта её заменяет', async () => {
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    const msg = chat.addLocal('сделай тесты');
+    msg.set('sent', { delivered: true });
+    expect(locals()[0]!.dataset.state).toBe('sent');
+    expect(locals()[0]!.querySelector('.th-feed__local-state')!.textContent).toBe(t('chat.local.sent'));
+    answer = () => page([human('s', 'сделай тесты')]);
+    chat.refresh();
+    await flush();
+    expect(locals()).toHaveLength(0);
+    chat.teardown();
+  });
+
+  it('команда — приглушённая строка «команда отправлена: /имя», чужая реплика её не снимает', async () => {
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    const msg = chat.addLocal('/usage');
+    msg.set('command', { delivered: true });
+    const row = locals()[0]!;
+    expect(row.dataset.state).toBe('command');
+    expect(row.classList.contains('is-command')).toBe(true);
+    expect(row.textContent).toBe(t('chat.local.command', { name: '/usage' }));
+    expect(row.textContent).toBe('команда отправлена: /usage');
+    // Реплика, записанная иначе, по порядку снимает сообщения, но не строки команд.
+    answer = () => page([human('n', 'совсем другое')]);
+    chat.refresh();
+    await flush();
+    expect(locals().map((e) => e.dataset.state)).toEqual(['command']);
+    chat.teardown();
+  });
+
+  it('две одинаковые команды подряд — одна строка; запись команды в транскрипте заменяет её', async () => {
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    chat.addLocal('/model').set('command', { delivered: true });
+    chat.addLocal('/model').set('command', { delivered: true });
+    chat.addLocal('/usage').set('command', { delivered: true });
+    expect(locals().map((e) => e.textContent)).toEqual(['команда отправлена: /model', 'команда отправлена: /usage']);
+    answer = () => page([human('m', '/model')]);
+    chat.refresh();
+    await flush();
+    expect(locals().map((e) => e.textContent)).toEqual(['команда отправлена: /usage']);
+    chat.teardown();
+  });
 });

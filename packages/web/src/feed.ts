@@ -88,7 +88,10 @@ export interface FeedHandle {
   teardown(): void;
 }
 
-export type LocalState = 'sending' | 'queued' | 'failed';
+/** `sending` — до ответа агента TermHub на отправку; `sent` и `queued` — агент принял
+ *  (у работающего — в очередь); `command` — принята слэш-команда: строка «команда
+ *  отправлена: /имя», записи транскрипта она не ждёт (агент её может не писать вовсе). */
+export type LocalState = 'sending' | 'sent' | 'queued' | 'failed' | 'command';
 export interface LocalAction {
   label: string;
   run(): void;
@@ -427,8 +430,13 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     box.dataset.kind = entry.kind;
     if (entry.cursor) box.dataset.cursor = entry.cursor;
 
+    if (chat && entry.kind === 'tool' && entry.questions?.length) return renderQuestion(box, entry, chat.linker);
+
     if (entry.kind === 'tool') {
-      box.hidden = !showActions;
+      // Вопрос агента — не действие: кнопка «действия» его не прячет. Без чата он едет
+      // прежней строкой, текст вопроса целиком лежит в самой записи.
+      if (entry.questions?.length) box.dataset.kind = 'question';
+      else box.hidden = !showActions;
       // Подряд идущие вызовы читаются одним столбиком — соседа помечаем, чтобы CSS
       // убрал зазор между ними.
       if (prev?.kind === 'tool') box.classList.add('is-cont');
@@ -547,6 +555,76 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     return box;
   };
 
+  /** Вопрос, который агент задал: значок, текст с оформлением, варианты с пояснениями и
+   *  данный ответ — выбранный вариант выделен, свой текст стоит строкой «ответ: …». Это
+   *  запись переписки, а не карточка над полем ввода: ответить из неё нельзя. */
+  const renderQuestion = (box: HTMLElement, entry: FeedEntry, linker: PathLinker): HTMLElement => {
+    box.className = 'th-feed__entry th-feed__entry--question';
+    box.dataset.kind = 'question';
+    if (entry.at) box.title = formatDate(entry.at);
+    for (const q of entry.questions ?? []) {
+      const item = document.createElement('div');
+      item.className = 'th-q';
+      const mark = document.createElement('span');
+      mark.className = 'th-q__mark';
+      mark.setAttribute('aria-label', t('feed.question.label'));
+      mark.textContent = '?';
+      const body = document.createElement('div');
+      body.className = 'th-q__body';
+      if (q.header) {
+        const header = document.createElement('div');
+        header.className = 'th-q__header';
+        header.textContent = q.header;
+        body.append(header);
+      }
+      const text = document.createElement('div');
+      text.className = 'th-q__text th-feed__md';
+      text.append(renderChatMarkdown(q.text, linker));
+      body.append(text);
+      const given = q.answer ?? [];
+      const labels = new Set((q.options ?? []).map((o) => o.label));
+      if (q.options?.length) {
+        const list = document.createElement('ul');
+        list.className = 'th-q__options';
+        for (const o of q.options) {
+          const li = document.createElement('li');
+          li.className = 'th-q__option';
+          if (given.includes(o.label)) {
+            li.classList.add('is-chosen');
+            li.setAttribute('aria-label', t('feed.question.chosen', { text: o.label }));
+          }
+          const label = document.createElement('span');
+          label.className = 'th-q__label';
+          label.textContent = o.label;
+          li.append(label);
+          if (o.hint) {
+            const hint = document.createElement('span');
+            hint.className = 'th-q__hint';
+            hint.textContent = o.hint;
+            li.append(hint);
+          }
+          list.append(li);
+        }
+        body.append(list);
+      }
+      for (const own of given.filter((a) => !labels.has(a))) {
+        const line = document.createElement('div');
+        line.className = 'th-q__answer';
+        line.textContent = t('feed.question.answer', { text: own });
+        body.append(line);
+      }
+      item.append(mark, body);
+      box.append(item);
+    }
+    if (entry.truncated) {
+      const cut = document.createElement('div');
+      cut.className = 'th-feed__cut';
+      cut.textContent = t('feed.truncated');
+      box.append(cut);
+    }
+    return box;
+  };
+
   /** Событие фонового агента: запуск, завершение (с длительностью, если агент её дал) или
    *  пришедшее от него сообщение — оно свёрнуто в строку и раскрывается по нажатию. */
   const renderAgentEvent = (box: HTMLElement, entry: FeedEntry): HTMLElement => {
@@ -650,7 +728,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   const settleLocal = (text: string): void => {
     const key = sameText(text);
     const exact = locals.find((l) => l.state !== 'failed' && l.key === key);
-    const rec = exact ?? locals.find((l) => l.state !== 'failed' && l.delivered);
+    // Строку команды снимает только её собственная запись: команда-меню в транскрипт не
+    // пишется, и по порядку отправки её снимать нельзя — ушло бы чужое сообщение.
+    const rec = exact ?? locals.find((l) => l.state !== 'failed' && l.state !== 'command' && l.delivered);
     if (rec) dropLocal(rec);
   };
   const addLocal = (text: string, state: LocalState = 'sending'): LocalMessage => {
@@ -666,9 +746,16 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     const rec: LocalRec = { key: sameText(text), state, delivered: false, el: box };
     const paint = (note?: string, actions: LocalAction[] = []): void => {
       box.dataset.state = rec.state;
+      const command = rec.state === 'command';
+      box.classList.toggle('is-command', command);
+      // Строка команды — без плашки сообщения: имя команды стоит в самой пометке.
+      if (command) body.remove();
+      else if (body.parentNode !== box) box.prepend(body);
       const label = document.createElement('span');
       label.className = 'th-feed__local-state';
-      label.textContent = t(`chat.local.${rec.state}`);
+      label.textContent = command
+        ? t('chat.local.command', { name: text.trim().split(/\s/)[0] ?? '' })
+        : t(`chat.local.${rec.state}`);
       status.replaceChildren(label);
       if (note) {
         const n = document.createElement('span');
@@ -696,6 +783,8 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
         if (!locals.includes(rec)) return;
         rec.state = next;
         if (opts.delivered !== undefined) rec.delivered = opts.delivered;
+        // Та же команда ещё раз — одна строка, а не столбик одинаковых.
+        if (next === 'command') for (const twin of locals.filter((l) => l !== rec && l.state === 'command' && l.key === rec.key)) dropLocal(twin);
         paint(opts.note, opts.actions);
       },
       remove: () => dropLocal(rec),
@@ -977,7 +1066,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   /** Находку можно открыть, только если у неё есть точка прыжка и её запись не
    *  спрятана тумблером мышления — иначе клик либо не имеет цели вовсе (веха
    *  склейки без курсора), либо вёл бы к записи, которой сейчас не видно в ленте. */
-  const jumpable = (hit: FeedHit): boolean => Boolean(hit.cursor) && (hit.entry.kind !== 'thinking' || showThinking) && (hit.entry.kind !== 'tool' || showActions);
+  const jumpable = (hit: FeedHit): boolean => Boolean(hit.cursor) && (hit.entry.kind !== 'thinking' || showThinking) && (hit.entry.kind !== 'tool' || showActions || Boolean(hit.entry.questions?.length));
 
   const paintHits = (found: FeedHit[]): void => {
     lastHits = found;

@@ -102,6 +102,10 @@ function writeDraft(key: string, draft: Draft): void {
   }
 }
 
+/** Слэш-команда: «/имя» в начале и дальше пробел или конец. Путь («/root/a/file.ts …»)
+ *  командой не считается — после имени у него идёт слэш. */
+const COMMAND_RE = /^\/[^\s/]+(?:\s|$)/;
+
 export function mountComposer(host: HTMLElement, session: string, deps: ComposerDeps): ComposerHandle {
   const { transport, live, thread } = deps;
   const draftKey = DRAFT_PREFIX + session;
@@ -407,8 +411,11 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
           { label: t('chat.composer.toField'), run: () => { msg.remove(); restoreToField(text); } },
         ],
       });
+    // «Отправляется» живёт до ответа на act: принял — «отправлено» (у работающего агента —
+    // «в очереди»). Слэш-команда может открыть меню и в переписку не попасть вовсе —
+    // она становится строкой «команда отправлена» и записи транскрипта не ждёт.
     const delivered = (): void => {
-      msg.set(state, { delivered: true });
+      msg.set(COMMAND_RE.test(text) ? 'command' : state === 'queued' ? 'queued' : 'sent', { delivered: true });
       thread.refresh();
       window.setTimeout(() => {
         if (!disposed) thread.refresh();

@@ -36,10 +36,26 @@ const HLJS_TAG = /<span class="([^"<>]*)">|<\/span>/g;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K] => document.createElement(tag);
 const isWord = (ch: string | undefined): boolean => ch !== undefined && /[\p{L}\p{N}_]/u.test(ch);
 
-/** Рисует markdown-текст узлами DOM. Единственный вход модуля. */
-export function renderMarkdown(text: string): DocumentFragment {
+/** Адрес со схемой (`javascript:`, `data:`, `file:`…) или сетевой (`//host`): локальным
+ *  путём он не считается никогда. */
+const HAS_SCHEME = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i;
+/** Рисовать ли `[название](локальный/путь)` названием: включает только чат, на время
+ *  одного (синхронного) прохода. */
+let localLinks = false;
+
+/** Рисует markdown-текст узлами DOM. Единственный вход модуля. `localLinks` — ссылка с
+ *  локальным путём становится названием в `span.th-md__pathlink[data-path]` (без href:
+ *  куда вести и вести ли вообще, решает чат по правилам пути файла); без флага такая
+ *  ссылка остаётся текстом, как и любой адрес с неразрешённой схемой. */
+export function renderMarkdown(text: string, opts: { localLinks?: boolean } = {}): DocumentFragment {
   const frag = document.createDocumentFragment();
-  for (const node of blocks(text.split('\n'))) frag.append(node);
+  const was = localLinks;
+  localLinks = opts.localLinks === true;
+  try {
+    for (const node of blocks(text.split('\n'))) frag.append(node);
+  } finally {
+    localLinks = was;
+  }
   return frag;
 }
 
@@ -481,7 +497,18 @@ function linkAt(text: string, at: number): { el: Node; next: number } | null {
     .slice(close + 2, i - 1)
     .trim()
     .replace(/\s+["'(].*$/, '');
-  if (!SAFE_SCHEME.test(dest)) return null;
+  if (!SAFE_SCHEME.test(dest)) {
+    // Локальный путь: только в чате, не картинка и только адрес без схемы — `javascript:`,
+    // `data:` и прочие остаются текстом, как раньше.
+    if (!localLinks || image || dest === '' || HAS_SCHEME.test(dest) || /[\u0000-\u001f]/.test(dest)) return null;
+    const span = el('span');
+    span.className = 'th-md__pathlink';
+    span.dataset.path = dest;
+    const name = label.trim() === '' ? dest : label;
+    if (name.includes('`') || name.includes('*')) inline(span, name);
+    else span.textContent = name;
+    return { el: span, next: i };
+  }
   const a = anchor(dest, label.trim() === '' ? dest : label);
   if (image) a.classList.add('th-md__image');
   return { el: a, next: i };

@@ -494,6 +494,11 @@ const ru: Dict = {
       tool: 'Инструмент',
       note: 'Веха',
     },
+    question: {
+      label: 'Вопрос агента',
+      answer: 'ответ: {text}',
+      chosen: 'выбрано: {text}',
+    },
     note: {
       compacted: 'Беседа сжата',
       interrupted: 'Прервано',
@@ -526,8 +531,10 @@ const ru: Dict = {
     thread: 'Переписка',
     local: {
       sending: 'отправляется',
+      sent: 'отправлено',
       queued: 'в очереди',
       failed: 'не отправлено',
+      command: 'команда отправлена: {name}',
     },
     composer: {
       placeholder: 'Напиши агенту…',
@@ -1188,6 +1195,11 @@ const en: Dict = {
       tool: 'Tool',
       note: 'Milestone',
     },
+    question: {
+      label: 'Agent’s question',
+      answer: 'answer: {text}',
+      chosen: 'chosen: {text}',
+    },
     note: {
       compacted: 'Conversation compacted',
       interrupted: 'Interrupted',
@@ -1220,8 +1232,10 @@ const en: Dict = {
     thread: 'Conversation',
     local: {
       sending: 'sending',
+      sent: 'sent',
       queued: 'queued',
       failed: 'not sent',
+      command: 'command sent: {name}',
     },
     composer: {
       placeholder: 'Write to the agent…',

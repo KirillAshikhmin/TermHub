@@ -22,6 +22,17 @@ const SKIP = 'a, pre, button';
 /** Линкует пути в текстовых узлах `root`. Повторный проход безопасен: пути внутри уже
  *  поставленной ссылки пропускаются. */
 export function linkifyPaths(root: ParentNode, linker: PathLinker): void {
+  // Ссылка markdown с локальным путём: название становится ссылкой, если путь открывается;
+  // иначе остаётся названием (и станет ссылкой следующим проходом, когда приедут корни).
+  for (const span of root.querySelectorAll<HTMLElement>('span.th-md__pathlink[data-path]')) {
+    const target = linker.target(span.dataset.path ?? '');
+    if (!target) continue;
+    const a = document.createElement('a');
+    a.className = 'th-path th-md__pathlink';
+    a.href = target;
+    a.append(...span.childNodes);
+    span.replaceWith(a);
+  }
   const texts: Text[] = [];
   const walker = document.createTreeWalker(root as Node, 4 /* SHOW_TEXT */);
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -82,7 +93,7 @@ export function copyButtonFor(pre: HTMLElement): HTMLButtonElement {
 export function renderChatMarkdown(text: string, linker: PathLinker | null): DocumentFragment {
   let frag: DocumentFragment;
   try {
-    frag = renderMarkdown(text);
+    frag = renderMarkdown(text, { localLinks: true });
   } catch {
     frag = document.createDocumentFragment();
     const p = document.createElement('p');

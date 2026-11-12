@@ -655,7 +655,11 @@ describe('лента: разговор, а не служебный шум', () =
       cHuman('u5', 'разберись с тестом', '2026-09-14T13:00:04.000Z'),
     ]);
     const p = page(await readFeed(f, 'claude'));
-    expect(p.entries.map((e) => [e.kind, e.text])).toEqual([['human', 'разберись с тестом']]);
+    // Слэш-команду человек набрал сам — она остаётся репликой «/имя аргументы» (таск 21).
+    expect(p.entries.map((e) => [e.kind, e.text])).toEqual([
+      ['human', '/effort max'],
+      ['human', 'разберись с тестом'],
+    ]);
   });
 });
 

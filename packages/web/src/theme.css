@@ -5785,6 +5785,113 @@ main.th-feed--chat {
   display: none;
 }
 
+/* Принято агентом: пометка без ожидания. */
+.th-feed--chat .th-feed__entry--local[data-state='sent'],
+.th-feed--chat .th-feed__entry--local[data-state='command'] {
+  opacity: 1;
+}
+/* Отправленная слэш-команда: приглушённая строка без плашки сообщения. */
+.th-feed--chat .th-feed__entry--local.is-command {
+  align-self: flex-end;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.th-feed__entry--local.is-command .th-feed__local {
+  margin-top: 0;
+}
+
+/* Вопрос агента в переписке: значок, текст, варианты с пояснениями, данный ответ. */
+.th-feed__entry--question {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md, 10px);
+  background: var(--bg-elev-1, transparent);
+}
+.th-q {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.th-q__mark {
+  flex: none;
+  width: 1.4em;
+  height: 1.4em;
+  border-radius: 50%;
+  background: var(--accent-tint);
+  color: var(--accent);
+  font-weight: 700;
+  line-height: 1.4em;
+  text-align: center;
+}
+.th-q__body {
+  flex: 1;
+  min-width: 0;
+}
+.th-q__header {
+  margin-bottom: 2px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.th-q__text > :first-child {
+  margin-top: 0;
+}
+.th-q__text > :last-child {
+  margin-bottom: 0;
+}
+.th-q__options {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.th-q__option {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm, 6px);
+  overflow-wrap: anywhere;
+}
+.th-q__option::before {
+  content: '•';
+  color: var(--text-dim);
+}
+.th-q__option.is-chosen {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.th-q__option.is-chosen::before {
+  content: '✓';
+  color: var(--accent);
+}
+.th-q__option.is-chosen .th-q__label {
+  font-weight: 600;
+}
+.th-q__hint {
+  font-size: 0.85em;
+  color: var(--text-dim);
+}
+.th-q__answer {
+  margin-top: 8px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
 /* «В терминале набрано»: текст из строки агента над полем чата (chat-typed.ts). */
 .th-typed {
   display: flex;

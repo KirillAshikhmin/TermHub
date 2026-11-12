@@ -12,7 +12,20 @@ import type { UsageResult } from '../src/transcript-usage.js';
 export const FEED_PAGE: FeedResult = {
   ok: true,
   agent: 'claude',
-  entries: [{ id: 'u1', at: 1757800000000, kind: 'human', text: 'привет' }],
+  entries: [
+    { id: 'u1', at: 1757800000000, kind: 'human', text: 'привет' },
+    {
+      id: 'q1',
+      at: 1757800001000,
+      kind: 'tool',
+      text: 'AskUserQuestion Чай или вода?',
+      tool: 'AskUserQuestion',
+      detail: true,
+      questions: [
+        { text: 'Чай или вода?', header: 'Напиток', options: [{ label: 'Чай', hint: 'горячий' }, { label: 'Вода' }], answer: ['Чай'] },
+      ],
+    },
+  ],
   head: '42:0',
   tail: '42:120',
   bof: true,
@@ -24,7 +37,9 @@ export const FEED_PAGE: FeedResult = {
 
 /** То же тело, выписанное руками: ожидание не считается тем же способом, что ответ. */
 export const FEED_PAGE_JSON =
-  '{"ok":true,"agent":"claude","entries":[{"id":"u1","at":1757800000000,"kind":"human","text":"привет"}],' +
+  '{"ok":true,"agent":"claude","entries":[{"id":"u1","at":1757800000000,"kind":"human","text":"привет"},' +
+  '{"id":"q1","at":1757800001000,"kind":"tool","text":"AskUserQuestion Чай или вода?","tool":"AskUserQuestion","detail":true,' +
+  '"questions":[{"text":"Чай или вода?","header":"Напиток","options":[{"label":"Чай","hint":"горячий"},{"label":"Вода"}],"answer":["Чай"]}]}],' +
   '"head":"42:0","tail":"42:120","bof":true,"eof":false,"skipped":0,"complete":true,"live":true}';
 
 /** Ответ на неожиданный сбой чтения: один и тот же на обоих транспортах. */

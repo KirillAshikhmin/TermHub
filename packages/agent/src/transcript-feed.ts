@@ -77,6 +77,27 @@ export interface FeedEntry {
    *  результату вызова, лежащему в том же окне; результата в окне нет и файл дочитан до
    *  конца — `running`; результата нет, а файл дальше — поля нет (неизвестно). */
   result?: ToolResult;
+  /** Вопросы, заданные человеку этим вызовом (`AskUserQuestion` у Claude,
+   *  `request_user_input` и `request_user_input_async` у Codex) — только у `tool`. Вид
+   *  записи остаётся `tool`, а `text` несёт вопросы словами: клиент, не знающий поля,
+   *  показывает прежнюю строку действия и вопроса не теряет. */
+  questions?: FeedQuestion[];
+}
+
+/** Один вопрос вызова. `answer` — данный ответ: подписи выбранных вариантов либо свой
+ *  текст человека; поля нет — ответа в окне страницы не нашлось (ещё не дан либо лежит
+ *  дальше). Откуда он берётся: Claude — `toolUseResult.answers` записи результата; Codex
+ *  `request_user_input` — вывод вызова; `request_user_input_async` — более поздняя запись
+ *  человека `<send_user_message_question_reply>` (вывод вызова там только `{accepted}`). */
+export interface FeedQuestion {
+  text: string;
+  /** Короткий заголовок вопроса — у Claude и у синхронного вопроса Codex. */
+  header?: string;
+  /** Варианты; `hint` — пояснение (у асинхронного вопроса Codex пояснений нет). */
+  options?: { label: string; hint?: string }[];
+  /** Можно отметить несколько вариантов (`multiSelect` у Claude). */
+  multi?: true;
+  answer?: string[];
 }
 
 /** Исход действия. `exit` — код выхода команды, только когда транскрипт его назвал и он
@@ -242,6 +263,7 @@ interface Row {
   broken: boolean;
   /** Результат вызова, если строка — вывод инструмента. */
   result?: { id: string; mark: ToolResult };
+  answers?: Answer[];
 }
 
 /** Кусок ленты: строки окна плюс то, что окно успело увидеть о краях файла. */
@@ -381,7 +403,7 @@ function linesOf(
     const end = from + nl + 1;
     if (!(first && dropFirst)) {
       const parsed = classify(buf.toString('utf8', pos, nl), agent, start);
-      rows.push({ start, end, entries: parsed.entries, broken: parsed.broken, result: parsed.result });
+      rows.push({ start, end, entries: parsed.entries, broken: parsed.broken, result: parsed.result, answers: parsed.answers });
     }
     first = false;
     lastEnd = end;
@@ -456,10 +478,15 @@ function assemble(
  *  не только по попавшим на страницу: вызов у края страницы обычно кончается чуть дальше. */
 function markResults(rows: Row[], entries: FeedEntry[], atEnd: boolean): void {
   const marks = new Map<string, ToolResult>();
-  for (const row of rows) if (row.result) marks.set(row.result.id, row.result.mark);
+  const answers = new Map<string, Answer[]>();
+  for (const row of rows) {
+    if (row.result) marks.set(row.result.id, row.result.mark);
+    for (const answer of row.answers ?? []) answers.set(answer.call, [...(answers.get(answer.call) ?? []), answer]);
+  }
   for (const entry of entries) {
     const id = callIds.get(entry);
     if (!id) continue;
+    if (entry.questions) applyAnswers(entry, answers.get(id) ?? []);
     const mark = marks.get(id);
     if (mark) entry.result = mark;
     else if (atEnd) entry.result = { state: 'running' };
@@ -489,6 +516,8 @@ interface Parsed {
   broken: boolean;
   /** Результат вызова, если строка — вывод инструмента. */
   result?: { id: string; mark: ToolResult };
+  /** Ответы на вопросы, если строка их несёт: результат вызова либо запись-ответ Codex. */
+  answers?: Answer[];
 }
 
 /** Общее у всех записей строки: идентификатор, метка и ветка. */
@@ -511,10 +540,12 @@ function classify(line: string, agent: FileAgent, offset: number): Parsed {
     return { entries: [], broken: true };
   const rec = raw as Record<string, unknown>;
   const result = resultOf(rec, agent);
+  const answers = answersOf(rec, agent);
   return {
     entries: agent === 'claude' ? fromClaude(rec, offset) : fromCodex(rec, offset),
     broken: false,
     ...(result ? { result } : {}),
+    ...(answers.length ? { answers } : {}),
   };
 }
 
@@ -629,6 +660,20 @@ function humanWords(text: string): string {
   return ENV_DUMPS.some(([head, body]) => head.test(rest) && body.test(rest)) ? '' : rest;
 }
 
+/** Слэш-команда Claude: её человек набрал сам, а CLI записал тегами `<command-name>/имя`,
+ *  `<command-message>`, `<command-args>` (замер 12.11.2026: 28 записей в 60 беседах, все —
+ *  строка из одних тегов, имя всегда со слэшем; `/model`, `/clear`, `/rename`, команды
+ *  навыков). Лента показывает её как набрано — «/имя аргументы». Вывод команды
+ *  (`<local-command-stdout>`) идёт отдельной записью и остаётся шумом. Команды, открывающие
+ *  только окно (`/usage`), CLI не пишет вовсе. */
+const COMMAND_NAME_RE = /<command-name>\s*(\/[^<\s]{1,80})\s*<\/command-name>/;
+function commandWords(text: string): string {
+  const name = COMMAND_NAME_RE.exec(text);
+  if (!name) return '';
+  const args = tagOf(text, 'command-args');
+  return args ? `${name[1]} ${args}` : name[1];
+}
+
 function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
   const type = rec.type;
   if (type !== 'user' && type !== 'assistant') return [];
@@ -649,7 +694,7 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     const text = claudeText(message?.content);
     if (rec.isCompactSummary === true) return [note(base, 'compacted', text)];
     if (str(rec.interruptedMessageId)) return [note(base, 'interrupted', text)];
-    const words = humanWords(text);
+    const words = [commandWords(text), humanWords(text)].filter(Boolean).join('\n');
     return words ? [make(base, 0, 'human', words)] : [];
   }
   if (rec.isApiErrorMessage === true) return [note(base, 'error', claudeText(message?.content))];
@@ -665,7 +710,15 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     if (block.type === 'text' && text.trim()) out.push(make(base, out.length, 'agent', text));
     else if (block.type === 'thinking' && thinking) out.push(make(base, out.length, 'thinking', thinking));
     else if (block.type === 'tool_use' && str(block.name))
-      out.push(callId(withDetail(tool(base, out.length, str(block.name), argOf(block.input), descOf(block.input))), block.id));
+      out.push(
+        callId(
+          withDetail(
+            asked(base, out.length, str(block.name), block.input) ??
+              tool(base, out.length, str(block.name), argOf(block.input), descOf(block.input)),
+          ),
+          block.id,
+        ),
+      );
   }
   return out;
 }
@@ -768,7 +821,10 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     // `developer` — это инструкции окружения, а не реплика человека.
     const kind = payload.role === 'user' ? 'human' : payload.role === 'assistant' ? 'agent' : null;
     if (!kind) return [];
-    const text = kind === 'human' ? humanWords(codexText(payload.content)) : codexText(payload.content);
+    const raw = codexText(payload.content);
+    // Ответ на вопрос очереди — служебная обёртка: он встаёт отметкой у самого вопроса.
+    if (kind === 'human' && REPLY_RE.test(raw)) return [];
+    const text = kind === 'human' ? humanWords(raw) : raw;
     return text ? [make(base, 0, kind, text)] : [];
   }
   if (payload.type === 'reasoning') {
@@ -783,9 +839,173 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     const name = str(payload.name);
     if (!name) return [];
     const args = payload.type === 'function_call' ? payload.arguments : payload.input;
-    return [callId(withDetail(tool(base, 0, name, codexArg(args))), payload.call_id)];
+    return [callId(withDetail(asked(base, 0, name, args) ?? tool(base, 0, name, codexArg(args))), payload.call_id)];
   }
   return [];
+}
+
+// --- вопросы агента --------------------------------------------------------------------
+
+/** Инструменты, которыми агент спрашивает человека. */
+const QUESTION_TOOLS = new Set(['AskUserQuestion', 'request_user_input', 'request_user_input_async']);
+/** Пределы блока вопроса: вопросов и вариантов больше не бывает (Claude — до 4 и 4), а
+ *  подпись и пояснение варианта — строки, не документы. Вместе с пределом текста записи
+ *  они держат вес записи ограниченным. */
+const QUESTION_MAX = 8;
+const OPTION_MAX = 12;
+const OPTION_LIMIT = 1000;
+/** Ответ на асинхронный вопрос Codex: запись человека из одной этой обёртки. */
+const REPLY_RE = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/;
+
+/** Ответ на один вопрос вызова `call`. Вопрос назван тем, что знает источник: текстом
+ *  (Claude), идентификатором (синхронный Codex) или номером (асинхронный Codex). */
+interface Answer {
+  call: string;
+  text?: string;
+  key?: string;
+  index?: number;
+  answer: string[];
+}
+
+/** Чем вопросы записи названы в источнике — служебное, наружу не едет. */
+const questionKeys = new WeakMap<FeedEntry, { texts: string[]; keys: string[] }>();
+
+function short(value: unknown): string {
+  const text = str(value).trim();
+  return text.length > OPTION_LIMIT ? `${text.slice(0, OPTION_LIMIT - 1)}…` : text;
+}
+
+/** Запись вопроса из вызова инструмента; не вопрос или вопросов не разобрать — `null`, и
+ *  вызов едет обычным действием. */
+function asked(base: Base, index: number, name: string, input: unknown): FeedEntry | null {
+  if (!QUESTION_TOOLS.has(name)) return null;
+  const args = typeof input === 'string' ? recordOf(input) : input;
+  if (args === null || typeof args !== 'object') return null;
+  const list = (args as Record<string, unknown>).questions;
+  if (!Array.isArray(list)) return null;
+  const questions: FeedQuestion[] = [];
+  const texts: string[] = [];
+  const keys: string[] = [];
+  // Предел текста записи — один на все вопросы вызова: каждый следующий режется остатком.
+  let budget = TEXT_LIMIT;
+  let truncated = false;
+  for (const item of list.slice(0, QUESTION_MAX)) {
+    if (item === null || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const full = (str(raw.question) || str(raw.title)).trim();
+    if (!full) continue;
+    const clipped = clip(full, budget);
+    budget -= Buffer.byteLength(clipped.text);
+    if (clipped.truncated) truncated = true;
+    const question: FeedQuestion = { text: clipped.text };
+    const header = short(raw.header);
+    if (header) question.header = header;
+    const options: NonNullable<FeedQuestion['options']> = [];
+    for (const opt of Array.isArray(raw.options) ? raw.options.slice(0, OPTION_MAX) : []) {
+      const rec = (opt !== null && typeof opt === 'object' ? opt : {}) as Record<string, unknown>;
+      const label = short(typeof opt === 'string' ? opt : rec.label);
+      if (!label) continue;
+      const hint = short(rec.description);
+      options.push(hint ? { label, hint } : { label });
+    }
+    if (options.length) question.options = options;
+    if (raw.multiSelect === true) question.multi = true;
+    questions.push(question);
+    texts.push(full);
+    keys.push(str(raw.id));
+  }
+  if (questions.length === 0) return null;
+  const entry = make(base, index, 'tool', `${name} ${questions.map((q) => q.text).join('\n')}`);
+  entry.tool = name;
+  entry.questions = questions;
+  if (truncated) entry.truncated = true;
+  questionKeys.set(entry, { texts, keys });
+  return entry;
+}
+
+/** Ответы, которые несёт строка файла: результат вызова вопроса либо запись-ответ Codex. */
+function answersOf(rec: Record<string, unknown>, agent: FileAgent): Answer[] {
+  const out: Answer[] = [];
+  if (agent === 'claude') {
+    const meta = rec.toolUseResult;
+    if (rec.type !== 'user' || meta === null || typeof meta !== 'object') return out;
+    const given = (meta as Record<string, unknown>).answers;
+    if (given === null || typeof given !== 'object' || Array.isArray(given)) return out;
+    const content = (rec.message as Record<string, unknown> | undefined)?.content;
+    const block = Array.isArray(content)
+      ? (content.find((b) => b !== null && typeof b === 'object' && (b as Record<string, unknown>).type === 'tool_result') as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+    const call = str(block?.tool_use_id);
+    if (!call) return out;
+    for (const [text, value] of Object.entries(given as Record<string, unknown>))
+      if (str(value).trim()) out.push({ call, text, answer: [short(value)] });
+    return out;
+  }
+  const payload = rec.payload as Record<string, unknown> | undefined;
+  if (rec.type !== 'response_item' || !payload) return out;
+  if (payload.type === 'function_call_output') {
+    const call = str(payload.call_id);
+    const output = str(payload.output);
+    // Дешёвая отсечка: вывод команд — не JSON с ответами, разбирать его незачем.
+    if (!call || !output.startsWith('{') || !output.includes('"answers"')) return out;
+    const given = recordOf(output)?.answers;
+    if (given === null || typeof given !== 'object' || Array.isArray(given)) return out;
+    for (const [key, value] of Object.entries(given as Record<string, unknown>)) {
+      const list = (value as Record<string, unknown> | null)?.answers;
+      const answer = Array.isArray(list) ? list.map(short).filter(Boolean) : [];
+      if (answer.length) out.push({ call, key, answer });
+    }
+    return out;
+  }
+  if (payload.type !== 'message' || payload.role !== 'user') return out;
+  const reply = REPLY_RE.exec(codexText(payload.content));
+  if (!reply) return out;
+  let list: unknown;
+  try {
+    list = JSON.parse(reply[1]);
+  } catch {
+    return out;
+  }
+  for (const item of Array.isArray(list) ? list : []) {
+    if (item === null || typeof item !== 'object') continue;
+    const one = item as Record<string, unknown>;
+    const answer = short(one.answer);
+    let where: unknown;
+    try {
+      where = JSON.parse(str(one.questionItemId));
+    } catch {
+      continue;
+    }
+    // `[<что-то>, <call_id>, <номер вопроса>]` — замер 12.11.2026, 69 ответов из 69.
+    if (!answer || !Array.isArray(where) || typeof where[1] !== 'string' || typeof where[2] !== 'number') continue;
+    out.push({ call: where[1], index: where[2], answer: [answer] });
+  }
+  return out;
+}
+
+/** Ставит ответы вопросам записи. Несколько отметок Claude пишет одной строкой через «, » —
+ *  она делится, только если каждая часть есть среди вариантов: свой текст с запятой остаётся
+ *  целым. */
+function applyAnswers(entry: FeedEntry, answers: Answer[]): void {
+  const names = questionKeys.get(entry);
+  if (!names || !entry.questions) return;
+  for (const given of answers) {
+    const at =
+      given.index !== undefined ? given.index
+      : given.key !== undefined ? names.keys.indexOf(given.key)
+      : names.texts.indexOf(given.text ?? '');
+    const question = entry.questions[at];
+    if (!question) continue;
+    let answer = given.answer;
+    if (question.multi && answer.length === 1) {
+      const parts = answer[0].split(', ');
+      const labels = new Set((question.options ?? []).map((o) => o.label));
+      if (parts.length > 1 && parts.every((part) => labels.has(part))) answer = parts;
+    }
+    question.answer = answer;
+  }
 }
 
 function callId(entry: FeedEntry, id: unknown): FeedEntry {
@@ -878,10 +1098,10 @@ function make(base: Base, index: number, kind: FeedEntry['kind'], text: string):
 
 /** Текст записи режется по 64 КиБ. Граница ищется по байтам и сдвигается назад до начала
  *  символа: иначе на месте разреза получился бы обломок многобайтной буквы. */
-function clip(text: string): { text: string; truncated: boolean } {
-  if (Buffer.byteLength(text) <= TEXT_LIMIT) return { text, truncated: false };
+function clip(text: string, limit = TEXT_LIMIT): { text: string; truncated: boolean } {
+  if (Buffer.byteLength(text) <= limit) return { text, truncated: false };
   const buf = Buffer.from(text, 'utf8');
-  let end = TEXT_LIMIT;
+  let end = Math.max(0, limit);
   while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
   return { text: buf.toString('utf8', 0, end), truncated: true };
 }
@@ -903,8 +1123,20 @@ export function weigh(entry: FeedEntry): number {
     Buffer.byteLength(entry.tool ?? '') +
     Buffer.byteLength(entry.desc ?? '') +
     Buffer.byteLength(entry.from ?? '') +
+    (entry.questions ? questionWeight(entry.questions) : 0) +
     120
   );
+}
+
+/** Вес вопросов записи: тексты плюс ключи и скобки вокруг каждого вопроса и варианта. */
+function questionWeight(questions: FeedQuestion[]): number {
+  let n = 16;
+  for (const q of questions) {
+    n += Buffer.byteLength(q.text) + Buffer.byteLength(q.header ?? '') + 60;
+    for (const o of q.options ?? []) n += Buffer.byteLength(o.label) + Buffer.byteLength(o.hint ?? '') + 24;
+    for (const a of q.answer ?? []) n += Buffer.byteLength(a) + 4;
+  }
+  return n;
 }
 
 /** Веха беседы. Подробность из источника проходит тот же фильтр, что и реплика человека:

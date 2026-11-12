@@ -98,3 +98,55 @@ describe('копирование кода', () => {
     expect(() => btn.click()).not.toThrow();
   });
 });
+
+describe('ссылка markdown на локальный файл', () => {
+  it('абсолютный путь в корне: на экране название, ведёт в проводник; скобок и пути нет', () => {
+    const el = host(renderChatMarkdown('Задано по требованию [навык](/root/a/skills/demo/SKILL.md).', linker(['/root/a'])));
+    const a = el.querySelector<HTMLAnchorElement>('a.th-path')!;
+    expect(a.textContent).toBe('навык');
+    expect(a.getAttribute('href')).toBe(`#/files/${encodeURIComponent('/root/a')}/`);
+    expect(a.hasAttribute('target')).toBe(false);
+    expect(el.textContent).toBe('Задано по требованию навык.');
+  });
+
+  it('относительный путь: цель решает linker, название остаётся названием', () => {
+    const seen: string[] = [];
+    const rel: PathLinker = { target: (path) => (seen.push(path), path === 'docs/guide.md' ? '#/sfiles/work/docs/guide.md' : null) };
+    const el = host(renderChatMarkdown('См. [руководство](docs/guide.md)', rel));
+    const a = el.querySelector<HTMLAnchorElement>('a.th-path')!;
+    expect(a.textContent).toBe('руководство');
+    expect(a.getAttribute('href')).toBe('#/sfiles/work/docs/guide.md');
+    expect(seen).toContain('docs/guide.md');
+  });
+
+  it('путь вне корней и гость без права: название текстом, без ссылки и без сырой разметки', () => {
+    for (const l of [linker(['/root/a']), null]) {
+      const el = host(renderChatMarkdown('Файл [заметки](/etc/notes.md) рядом', l));
+      expect(el.querySelectorAll('a').length).toBe(0);
+      expect(el.textContent).toBe('Файл заметки рядом');
+    }
+  });
+
+  it('корни приехали позже: повторный проход делает название ссылкой', () => {
+    let roots: string[] = [];
+    const late: PathLinker = { target: (path) => (roots.some((r) => path.startsWith(`${r}/`)) ? '#/files/x' : null) };
+    const el = host(renderChatMarkdown('[план](/root/a/plan.md)', late));
+    expect(el.querySelectorAll('a').length).toBe(0);
+    roots = ['/root/a'];
+    linkifyPaths(el, late);
+    linkifyPaths(el, late);
+    expect([...el.querySelectorAll('a.th-path')].map((a) => a.textContent)).toEqual(['план']);
+  });
+
+  it('небезопасные схемы остаются текстом как были; https работает как раньше', () => {
+    const all: PathLinker = { target: () => '#/files/any' };
+    const el = host(
+      renderChatMarkdown('[a](javascript:alert(1)) [b](data:text/html,x) [c](vbscript:x) [d](file:///etc/passwd) [e](//evil.example/x) [сайт](https://example.com/p)', all),
+    );
+    const links = [...el.querySelectorAll<HTMLAnchorElement>('a')];
+    expect(links.map((a) => [a.textContent, a.getAttribute('href'), a.target])).toEqual([['сайт', 'https://example.com/p', '_blank']]);
+    expect(el.textContent).toContain('[a](javascript:alert(1))');
+    expect(el.textContent).toContain('[b](data:text/html,x)');
+    expect(el.textContent).toContain('[e](//evil.example/x)');
+  });
+});
