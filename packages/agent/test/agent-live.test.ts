@@ -200,6 +200,33 @@ describe('sessionAct — запрос', () => {
     expect(screenOf(result).kind).toBe('working');
   });
 
+  it('отказ tmux на вставке: причина словами, без текста запроса и командной строки, клавиша отправки не уходит', async () => {
+    const text = 'секретный запрос на полсотни строк\n'.repeat(50);
+    const hex = [...new TextEncoder().encode(text)].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+    const cmd = `tmux -L termhub send-keys -t %1 -H 1b 5b 32 30 30 7e ${hex} 1b 5b 32 30 31 7e`;
+    const f = fake('claude', 'idle');
+    f.src.paste = async () => {
+      throw Object.assign(new Error(`Command failed: ${cmd}\ncommand too long\n`), {
+        code: 1,
+        cmd,
+        stderr: 'command too long\n',
+      });
+    };
+    const result = await sessionAct('work', { kind: 'prompt', text }, f.src);
+    expect(result).toEqual({ ok: false, reason: 'lookup-failed', detail: 'cannot act in work: command too long' });
+    expect(f.sent).toEqual([]);
+  });
+
+  it('длинное сообщение сбоя в отказ действия целиком не едет', async () => {
+    const f = fake('claude', 'idle');
+    f.src.paste = async () => {
+      throw new Error('x'.repeat(5000));
+    };
+    const result = await sessionAct('work', { kind: 'prompt', text: 'привет' }, f.src);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.detail.length).toBeLessThan(400);
+  });
+
   it('при работающем агенте запрос уходит в его очередь тем же путём', async () => {
     const f = fake('claude', 'working', (sent) => (sent.startsWith('paste:') ? claudeInput('next') : 'queued'));
     const result = await act(f, { kind: 'prompt', text: 'next' });

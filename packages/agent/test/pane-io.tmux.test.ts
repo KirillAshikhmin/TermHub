@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { capturePane, pasteText, sendKeys } from '../src/pane-io.js';
+import { capturePane, PASTE_LIMIT, pasteText, sendKeys } from '../src/pane-io.js';
+import { runTmux } from '../src/tmux-run.js';
 import { killTmuxServer } from './tmux-socket.js';
 
 let tmuxAvailable = false;
@@ -132,6 +133,89 @@ describe.skipIf(!tmuxAvailable)('pane-io — экран и ввод на нас�
       Buffer.from('\x1b[201~', 'utf8').toString('hex');
     await waitFor(() => receivedHex().length >= before + expected.length, 'вставка');
     expect(receivedHex().slice(before)).toBe(expected);
+  });
+
+  /** Текст ровно в `bytes` байтов UTF-8: кириллица, эмодзи и переносы строк. */
+  function bigText(bytes: number): string {
+    const line = 'строка запроса — line of the request 🚀 знаки ё и 👩‍💻\n';
+    const size = Buffer.byteLength(line);
+    const text = line.repeat(Math.floor(bytes / size));
+    return text + 'x'.repeat(bytes - Buffer.byteLength(text));
+  }
+
+  for (const [label, bytes] of [
+    ['4 КиБ', 4 * 1024],
+    ['20 КиБ', 20 * 1024],
+    ['64 КиБ (предел вставки)', PASTE_LIMIT - 12],
+  ] as const) {
+    it(`pasteText: текст ${label} доходит целиком и одной вставкой`, async () => {
+      const text = bigText(bytes);
+      expect(Buffer.byteLength(text)).toBe(bytes);
+      const before = receivedHex().length;
+      await pasteText(session, socketName, text);
+      const expected = Buffer.from(`\x1b[200~${text.replace(/\n/g, '\r')}\x1b[201~`, 'utf8').toString('hex');
+      await waitFor(() => receivedHex().length >= before + expected.length, `вставка ${label}`);
+      const got = receivedHex().slice(before);
+      expect(got.length).toBe(expected.length);
+      expect(got === expected).toBe(true);
+    });
+  }
+
+  it('pasteText: сверх предела вставки — отказ, в панель ничего не уходит', async () => {
+    const before = receivedHex().length;
+    await expect(pasteText(session, socketName, bigText(PASTE_LIMIT))).rejects.toThrow(/too long to paste/);
+    await sendKeys(session, socketName, Uint8Array.of(0x79));
+    await waitFor(() => receivedHex().length >= before + 2, 'байт после отказа');
+    expect(receivedHex().slice(before)).toBe('79');
+  });
+
+  it('sendKeys: байтов больше, чем помещается в одну команду tmux, доходят все и по порядку', async () => {
+    const bytes = new Uint8Array(9000);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = 0x61 + (i % 26);
+    const before = receivedHex().length;
+    await sendKeys(session, socketName, bytes);
+    const expected = Buffer.from(bytes).toString('hex');
+    await waitFor(() => receivedHex().length >= before + expected.length, 'байты клавиш');
+    expect(receivedHex().slice(before) === expected).toBe(true);
+  });
+
+  it('pasteText: обрыв на втором куске — отказ, а вставка всё равно закрыта', async () => {
+    const text = bigText(8 * 1024);
+    const before = receivedHex().length;
+    let calls = 0;
+    const flaky: typeof runTmux = (args, opts) => {
+      if (args[0] === 'send-keys' && ++calls === 2) {
+        return Promise.reject(new Error('tmux send-keys failed: server exited unexpectedly'));
+      }
+      return runTmux(args, opts);
+    };
+    await expect(pasteText(session, socketName, text, undefined, flaky)).rejects.toThrow(/server exited unexpectedly/);
+    expect(calls).toBe(3);
+    const open = Buffer.from('\x1b[200~').toString('hex');
+    const close = Buffer.from('\x1b[201~').toString('hex');
+    await waitFor(() => receivedHex().slice(before).endsWith(close), 'закрывающая скобка вставки');
+    const got = receivedHex().slice(before);
+    const whole = Buffer.from(text.replace(/\n/g, '\r'), 'utf8').toString('hex');
+    expect(got.startsWith(open)).toBe(true);
+    const part = got.slice(open.length, -close.length);
+    expect(part.length).toBeGreaterThan(0);
+    expect(part.length).toBeLessThan(whole.length);
+    expect(whole.startsWith(part)).toBe(true);
+  });
+
+  it('отказ tmux назван словами: ни командной строки, ни отправленных байтов в сообщении', async () => {
+    const hex = new Array<string>(600).fill('d0');
+    const err = await runTmux(['send-keys', '-t', '%987654', '-H', ...hex], { socketName }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toMatch(/^tmux send-keys failed: /);
+    expect(err!.message).toContain("can't find pane");
+    expect(err!.message).not.toContain('d0 d0');
+    expect(err!.message).not.toContain('-H');
+    expect(err!.message.length).toBeLessThan(300);
+    expect(String((err as { cmd?: unknown }).cmd ?? '')).not.toContain('d0 d0');
   });
 
   it('чтение экрана и ввод не меняют размер окна и не подключают клиента', async () => {

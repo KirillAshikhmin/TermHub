@@ -36,16 +36,45 @@ export interface TmuxRunOptions {
   timeoutMs?: number;
 }
 
+/** Предел текста причины: stderr чужого процесса в ответ клиенту целиком не едет. */
+const REASON_LIMIT = 200;
+
+/** Причина сбоя запуска словами. Сообщение `execFile` («Command failed: <вся командная
+ *  строка>») сюда не попадает никогда: в аргументах tmux едет ввод пользователя, и вместе
+ *  с сообщением он оказался бы в логе и на экране клиента. Берётся первая строка stderr,
+ *  без неё — срок, сигнал или код выхода. */
+export function failureReason(err: unknown): string {
+  const e = err as TmuxError & { killed?: boolean; signal?: string | null; cmd?: string };
+  const line = (typeof e?.stderr === 'string' ? e.stderr : '')
+    .split('\n')
+    .map((part) => part.trim())
+    .find((part) => part !== '');
+  if (line) return line.slice(0, REASON_LIMIT);
+  if (e?.killed) return 'timed out';
+  if (typeof e?.signal === 'string' && e.signal !== '') return `killed by ${e.signal}`;
+  if (e?.code === 'ENOENT') return 'tmux is not installed';
+  if (e?.code === 'E2BIG') return 'argument list too long';
+  if (typeof e?.cmd === 'string') return `exit code ${String(e.code ?? 'unknown')}`;
+  const text = err instanceof Error ? err.message : String(err);
+  return text.length > REASON_LIMIT ? `${text.slice(0, REASON_LIMIT)}…` : text;
+}
+
 /** Запускает tmux и отдаёт stdout. Отказ — исключение с прикреплённым stderr: только
- *  так его потом прочитает isNoServerError. */
+ *  так его потом прочитает isNoServerError. Сообщение отказа — `tmux <команда> failed:
+ *  <причина>`, без аргументов: командная строка в нём не остаётся (и поле `cmd` снято). */
 export function runTmux(args: string[], opts: TmuxRunOptions = {}): Promise<string> {
   const full = opts.socketName ? ['-L', opts.socketName, ...args] : args;
   return new Promise((resolve, reject) => {
     const options = { encoding: 'utf8' as const, maxBuffer: MAX_BUFFER, timeout: opts.timeoutMs ?? 0 };
     execFile('tmux', full, options, (err, stdout, stderr) => {
       if (err) {
-        (err as TmuxError).stderr = stderr;
-        reject(err);
+        const failure = err as TmuxError & { cmd?: string };
+        failure.stderr = stderr;
+        failure.message = `tmux ${args.find((arg) => !arg.startsWith('-')) ?? ''} failed: ${failureReason(failure)}`;
+        delete failure.cmd;
+        // Стек начинается прежним сообщением — с той же командной строкой.
+        failure.stack = `${failure.name}: ${failure.message}`;
+        reject(failure);
         return;
       }
       resolve(stdout);

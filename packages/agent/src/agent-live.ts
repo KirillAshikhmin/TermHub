@@ -35,6 +35,7 @@ import {
 import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
+import { failureReason } from './tmux-run.js';
 
 /** Версия и модель агента — то, чего экран не называет. */
 export interface AgentInfo {
@@ -877,8 +878,10 @@ function fail(reason: string, detail: string): ChatFailure {
   return { ok: false, reason, detail };
 }
 
+/** Причина сбоя для ответа клиенту: без командной строки запуска (в ней едет текст
+ *  запроса) и не длиннее пары строк — общий разбор в `tmux-run`. */
 function describe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return failureReason(err);
 }
 
 const queues = new Map<string, Promise<unknown>>();
