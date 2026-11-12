@@ -22,7 +22,7 @@ import type {
 } from '@termhub/protocol/chat';
 
 import { profileOf, isTested, type AgentProfile, type NotesSign } from './agent-profiles.js';
-import { readPending, readPicker, readPopup, readScreen, type PendingInvite } from './agent-screen.js';
+import { readPending, readPicker, readPopup, readPopupPick, readScreen, type PendingInvite } from './agent-screen.js';
 import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
@@ -292,11 +292,13 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
     );
   }
   // Работающему агенту запрос ставится в очередь клавишей профиля, если она у него своя.
-  const queue = typed.screen.kind === 'working' ? profile.keys.queue : undefined;
+  let working = typed.screen.kind === 'working';
   if (profile.keys.queue !== undefined) {
-    const blocked = await listOpen(ctx, queue !== undefined);
-    if (blocked) return blocked;
+    const checked = await checkLists(ctx);
+    if (typeof checked !== 'boolean') return checked;
+    working = checked;
   }
+  const queue = working ? profile.keys.queue : undefined;
   await press(ctx, queue ?? profile.keys.submit);
   const sent = await until(ctx, (s) => !atInput(s) || !s.input);
   if (queue === undefined || sent.met) return done(sent.screen);
@@ -308,22 +310,33 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   );
 }
 
-/** Список подстановки над строкой ввода, при котором клавиша отправила бы не то, что
- *  набрано: список упоминаний — всегда; список команд — у работающего агента, если
- *  набранное не единственная его строка целиком (тогда клавиша очереди ставит команду
- *  как есть — замер). Открыт — вставленное убирается, ответ — отказ; нет — `undefined`. */
-async function listOpen(ctx: Ctx, working: boolean): Promise<ChatFailure | undefined> {
+/** Сверка после вставки у агента с клавишей очереди: работает ли он (`true`) — либо отказ,
+ *  если клавиша отправила бы не то, что набрано. Тогда вставленное убирается, клавиши
+ *  отправки и очереди не идут. Отказ дают: список упоминаний над строкой; список команд,
+ *  если набранное не та его строка, что будет исполнена (у работающего — не единственная
+ *  строка целиком: только это измерено); у работающего — команда одним словом без списка
+ *  (что делает там клавиша очереди, не измерено). */
+async function checkLists(ctx: Ctx): Promise<boolean | ChatFailure> {
   const seen = await peekSeen(ctx);
-  if (!atInput(seen.screen) || !seen.screen.input) {
+  const input = seen.screen.input;
+  if (!atInput(seen.screen) || !input) {
     return fail('stale', 'the agent screen changed after the paste; the pasted text may be left in the agent input line');
   }
-  const list = working ? readPopup(seen.lines, ctx.profile) : [];
-  const exact = list.length === 1 && `/${list[0]!.name}` === seen.screen.input;
-  if (!readPicker(seen.lines, ctx.profile) && (list.length === 0 || exact)) return undefined;
+  const working = seen.screen.kind === 'working';
+  const list = readPopup(seen.lines, ctx.profile);
+  let why: string | undefined;
+  if (readPicker(seen.lines, ctx.profile)) why = 'the agent shows a completion list at its input line';
+  else if (list.length > 0) {
+    const exact = working
+      ? list.length === 1 && `/${list[0]!.name}` === input
+      : `/${readPopupPick(seen.lines, ctx.profile) ?? ''}` === input;
+    if (!exact) why = 'the agent shows a completion list at its input line and the text is not the command it would run';
+  } else if (working && /^\/\S*$/u.test(input)) why = 'the agent is working and does not list this command';
+  if (why === undefined) return working;
   const swept = await sweepInput(ctx, seen.screen);
   return fail(
     working ? 'busy' : 'stale',
-    `the agent shows a completion list at its input line${working ? ': the command can be sent when the agent finishes its turn' : ''}; the pasted text ${swept ? 'was removed from' : 'is left in'} the agent input line`,
+    `${why}${working ? ': the command can be sent when the agent finishes its turn' : ''}; the pasted text ${swept ? 'was removed from' : 'is left in'} the agent input line`,
   );
 }
 

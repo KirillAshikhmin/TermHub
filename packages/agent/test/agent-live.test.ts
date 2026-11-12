@@ -377,6 +377,62 @@ describe('sessionAct — запрос работающему Codex', () => {
     expect(f.sent).toEqual(['paste:текст, после которого список открылся', '\x15']);
   });
 
+  /** Снимок Codex без оформления с заменой одной строки. */
+  function swapped(name: string, from: string, to: string): string[] {
+    const lines = shot('codex', name).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    const at = lines.findIndex((l) => l === from);
+    expect(at).toBeGreaterThan(0);
+    return lines.map((l, index) => (index === at ? to : l));
+  }
+
+  it('высокий список команд вытеснил строку работы: работу называет подвал — ни Tab, ни Enter, строка стёрта, busy', async () => {
+    const part = shot('codex', 'queue-slash-partial').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    const at = part.findIndex((l) => l.startsWith('› /model  '));
+    const rows = shot('codex', 'slash')
+      .map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''))
+      .filter((l) => /^ {2}\/\S+ {2,}\S/.test(l));
+    const tall = [...part.slice(0, at + 1), ...rows, ...part.slice(at + 1)].map((l) => (l === '› /mo' ? '› /m' : l));
+    expect(rows.length).toBeGreaterThanOrEqual(6);
+    const f = fake('codex', 'waiting-terminal', (sent) =>
+      sent.startsWith('paste:') ? tall : sent === '\x15' ? 'waiting-terminal' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: '/m' });
+    expect(result).toMatchObject({ ok: false, reason: 'busy' });
+    expect(!result.ok && result.detail).toMatch(/removed from the agent input line/);
+    expect(f.sent).toEqual(['paste:/m', '\x15']);
+  });
+
+  it('ожидающий Codex, неполная команда при открытом списке: Enter не идёт (исполнил бы выбранный пункт), строка стёрта', async () => {
+    const f = fake('codex', 'idle', (sent) =>
+      sent.startsWith('paste:') ? 'slash-filtered' : sent === '\x15' ? 'idle' : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: '/mo' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/completion list.*removed from the agent input line/);
+    expect(f.sent).toEqual(['paste:/mo', '\x15']);
+  });
+
+  it('ожидающий Codex, команда целиком и указатель списка на ней — уходит прежний Enter', async () => {
+    const exact = swapped('slash-filtered', '› /mo', '› /model');
+    const f = fake('codex', 'idle', (sent) => (sent.startsWith('paste:') ? exact : sent === '\r' ? 'menu-model' : undefined));
+    expect(screenOf(await act(f, { kind: 'prompt', text: '/model' })).kind).toBe('menu');
+    expect(f.sent).toEqual(['paste:/model', '\r']);
+  });
+
+  it('работающий Codex, команда одним словом без списка — что там делает Tab, не измерено: busy, строка стёрта', async () => {
+    const typed = swapped('queue-hint', '› note one', '› /nosuchcmd');
+    const f = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? typed : sent === '\x15' ? 'working' : undefined));
+    const result = await act(f, { kind: 'prompt', text: '/nosuchcmd' });
+    expect(result).toMatchObject({ ok: false, reason: 'busy' });
+    expect(!result.ok && result.detail).toMatch(/when the agent finishes its turn.*removed from the agent input line/);
+    expect(f.sent).toEqual(['paste:/nosuchcmd', '\x15']);
+    // С аргументом списка нет, Tab ставит в очередь как есть (замер).
+    const args = swapped('queue-hint', '› note one', '› /nosuchcmd arg');
+    const g = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? args : sent === '\t' ? 'queued-followup' : undefined));
+    expect(screenOf(await act(g, { kind: 'prompt', text: '/nosuchcmd arg' })).queued).toBe(1);
+    expect(g.sent).toEqual(['paste:/nosuchcmd arg', '\t']);
+  });
+
   it('«Waiting for background terminal»: over и take-input — busy, Ctrl+C не уходит', async () => {
     const over = fake('codex', 'waiting-terminal-typed');
     expect(await act(over, { kind: 'prompt', text: 'привет', over: true })).toMatchObject({ ok: false, reason: 'busy' });

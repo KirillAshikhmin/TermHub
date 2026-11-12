@@ -98,6 +98,10 @@ describe('профиль Codex', () => {
     );
     expect([waiting?.[1], waiting?.[2]]).toEqual(['Waiting for background terminal', '1m 00s']);
     expect(profile.screen.status.test('Waiting for background terminal')).toBe(false);
+    // Подсказка очереди в подвале сама называет работу — строка работы бывает не видна.
+    expect(profile.screen.working!.test('  tab to queue message')).toBe(true);
+    expect(profile.screen.working!.test('GPT-6-Astra max · ~/work · Working  tab to queue message  97% context left')).toBe(true);
+    expect(profile.screen.working!.test('GPT-6-Astra max · ~/work · Ready  ← for agents · ? for shortcuts')).toBe(false);
     // Списки подстановки: при них Tab и Enter вставляют выбранное (замер).
     expect(profile.screen.picker!.test('  enter/tab insert · esc close · ↑/↓ select · ←/→ filter')).toBe(true);
     expect(profile.screen.picker!.test('  enter select · esc back')).toBe(false);

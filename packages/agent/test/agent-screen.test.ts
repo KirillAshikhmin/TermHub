@@ -6,7 +6,7 @@ import type { AgentId, ScreenKind } from '@termhub/protocol/chat';
 import { describe, expect, it } from 'vitest';
 
 import { profileOf } from '../src/agent-profiles.js';
-import { readPending, readPicker, readPopup, readScreen } from '../src/agent-screen.js';
+import { readPending, readPicker, readPopup, readPopupPick, readScreen } from '../src/agent-screen.js';
 
 // Снимки сняты с живых агентов на отдельном сокете tmux (`capture-pane -p -e`):
 // рядом с каждым — json с версией агента и размером панели. Ожидания ниже выписаны
@@ -129,8 +129,8 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'queue-slash-exact': 'working',
     'queue-slash-partial': 'working',
     'queue-slash-completed': 'working',
-    // Строка работы выше списка упоминаний, дальше, чем её ищет разбор.
-    'queue-mention-list': 'idle',
+    // Строка работы выше списка упоминаний, дальше, чем её ищет разбор: работу называет подвал.
+    'queue-mention-list': 'working',
   },
 };
 
@@ -950,6 +950,26 @@ describe('Codex: запрос работающему агенту', () => {
     }
     expect(readPicker(shot('claude', 'idle'), profileOf('claude'))).toBe(false);
     expect(readPicker([], codex)).toBe(false);
+  });
+
+  it('подвал «tab to queue message» сам называет работу: высокий список вытеснил строку работы за пределы поиска', () => {
+    expect(read('codex', 'queue-mention-list')).toEqual({ kind: 'working', input: 'look at @READ' });
+    // Список команд в восемь строк над «/m» — как его рисует Codex (строки из снимка slash).
+    const lines = plain(shot('codex', 'queue-slash-partial'));
+    const at = lines.findIndex((l) => l.startsWith('› /model  '));
+    const rows = plain(shot('codex', 'slash')).filter((l) => /^ {2}\/\S+ {2,}\S/.test(l));
+    expect(rows).toHaveLength(7);
+    const tall = [...lines.slice(0, at + 1), ...rows, ...lines.slice(at + 1)].map((l) => (l === '› /mo' ? '› /m' : l));
+    expect(readScreen(tall, codex)).toEqual({ kind: 'working', input: '/m', queued: 1 });
+    expect(readPopup(tall, codex)).toHaveLength(8);
+  });
+
+  it('указатель списка команд: какая строка выбрана', () => {
+    expect(readPopupPick(shot('codex', 'slash'), codex)).toBe('model');
+    expect(readPopupPick(shot('codex', 'slash-filtered'), codex)).toBe('model');
+    expect(readPopupPick(shot('codex', 'queue-slash-completed'), codex)).toBeUndefined();
+    expect(readPopupPick(shot('codex', 'idle'), codex)).toBeUndefined();
+    expect(readPopupPick([], codex)).toBeUndefined();
   });
 
   it('те же слова без скобки с «esc to interrupt» работой не считаются', () => {

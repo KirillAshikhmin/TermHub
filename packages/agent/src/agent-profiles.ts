@@ -470,6 +470,9 @@ const CODEX: AgentProfile = {
     // Последней строкой бывает и одна подсказка очереди — у работающего Codex с текстом в
     // строке ввода, когда строка состояния собрана пользователем.
     footer: /^\s{2}\S.* · \S|\bcontext left$|^\s{2}tab to queue message$/,
+    // Подсказку очереди Codex рисует только во время хода: она называет работу и тогда,
+    // когда строку работы вытеснил за пределы поиска высокий список над строкой ввода.
+    working: /\btab to queue message\b/,
     notFooter: /\b(?:enter|esc)\b/i,
     footerLines: 3,
     statusLine: { sep: /\s{2,}|\s·\s/, working: /^Working$/, idle: /^Ready$/ },

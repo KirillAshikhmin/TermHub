@@ -276,13 +276,24 @@ function backgroundOf(footer: string, profile: AgentProfile): { shells?: number;
 /** Список команд, который агент показывает над строкой ввода по «/». Нет списка или
  *  нет самой строки ввода — пусто. */
 export function readPopup(lines: string[], profile: AgentProfile): ChatCommand[] {
+  return popupOf(lines, profile).list;
+}
+
+/** Имя команды, на которой стоит указатель списка по «/»: её исполнит клавиша отправки.
+ *  Списка нет или указателя в нём нет — `undefined`. */
+export function readPopupPick(lines: string[], profile: AgentProfile): string | undefined {
+  return popupOf(lines, profile).pick;
+}
+
+function popupOf(lines: string[], profile: AgentProfile): { list: ChatCommand[]; pick?: string } {
   const rows = lines.map(strip);
   const last = lastFilled(rows, rows.length - 1);
-  if (last < 0) return [];
+  if (last < 0) return { list: [] };
   const box = findBox(rows, trayOf(rows, last, profile).last, profile);
-  if (typeof box === 'string') return [];
+  if (typeof box === 'string') return { list: [] };
   const signs = profile.screen;
 
+  let pick: string | undefined;
   const out: ChatCommand[] = [];
   let more: string[] = [];
   let i = box.top - 1;
@@ -294,6 +305,7 @@ export function readPopup(lines: string[], profile: AgentProfile): ChatCommand[]
     if (found) {
       const hint = [found[2] ?? '', ...more].join(' ').trim();
       out.push({ name: found[1]!, ...(hint ? { hint } : {}), source: 'screen' });
+      if (text.trimStart().startsWith(signs.prompt)) pick = found[1]!;
       more = [];
       continue;
     }
@@ -301,7 +313,7 @@ export function readPopup(lines: string[], profile: AgentProfile): ChatCommand[]
     if (!tail || more.length >= EXTRA_LIMIT) break;
     more.unshift(tail[1]!);
   }
-  return out.reverse();
+  return { list: out.reverse(), ...(pick === undefined ? {} : { pick }) };
 }
 
 /** Открыт ли над строкой ввода список подстановки (`picker` профиля): его подсказка —
