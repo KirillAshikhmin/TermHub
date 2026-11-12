@@ -256,11 +256,21 @@ export function limitOf(value: number | undefined): number {
  *  файл) — `cursor-stale`, и клиент берёт хвост заново. Цепочку файлов проверяет тот, кто
  *  её знает: здесь виден ровно один файл. */
 function cursorOf(raw: string, ino: number, size: number): number | null {
-  const parts = /^(\d+):(\d+)$/.exec(raw);
+  const parts = CURSOR_RE.exec(raw);
   if (!parts) return null;
   if (Number(parts[1]) !== ino) return null;
   const offset = Number(parts[2]);
   return offset > size ? null : offset;
+}
+
+/** `<inode>:<offset>`, а у второго и следующих действий одной строки — ещё `#<номер>`
+ *  (номер действия в строке, с нуля; у первого его нет). Место в файле номер не меняет:
+ *  прыжок и страница по такому курсору — те же, что по курсору строки. */
+const CURSOR_RE = /^(\d+):(\d+)(?:#(\d{1,3}))?$/;
+
+/** Номер действия в строке, на которое указывает курсор. */
+function toolIndexOf(raw: string): number {
+  return Number(CURSOR_RE.exec(raw)?.[3] ?? 0);
 }
 
 // --- окно чтения ---------------------------------------------------------------------
@@ -302,22 +312,37 @@ async function backSlice(
   let win = WINDOW_MIN;
   let bound = end;
   let rows: Row[] = [];
+  // Курсор посреди строки ставит только шаг через строку длиннее окна. Её начало тогда —
+  // последний обрывок этого куска: целиком строку не прочесть, но веху по её началу
+  // поставить можно (`oversized`).
+  let stepped = end > 0 && end < size && !(await startsLine(fh, end));
+  let mark: Row | undefined;
   for (;;) {
     const from = Math.max(0, end - win);
-    const seg = linesOf(await window(fh, from, bound), from, agent, from > 0);
+    const buf = await window(fh, from, bound);
+    const seg = linesOf(buf, from, agent, from > 0);
+    if (stepped && bound === end) {
+      const at = seg.lastEnd >= 0 ? seg.lastEnd : from === 0 ? 0 : -1;
+      if (at >= 0) {
+        stepped = false;
+        if (at < end) mark = oversized(buf.subarray(at - from), agent, at, end);
+      }
+    }
     rows = seg.rows.concat(rows);
     const atStart = from === 0;
-    if (atStart || win >= WINDOW_MAX || counted(rows) >= limit)
+    if (atStart || win >= WINDOW_MAX || counted(rows) >= limit) {
+      const all = mark ? rows.concat(mark) : rows;
       // Строк не нашлось вовсе — окно целиком внутри одной строки длиннее своего потолка.
       // Тогда левый край просмотренного куска и есть новый курсор: страница пуста, но
       // следующий запрос начнётся за этим куском, а не на том же месте.
       return {
-        rows,
+        rows: all,
         atStart,
         atEnd: end >= size,
-        firstStart: rows.length > 0 ? rows[0].start : from,
-        lastEnd: rows.length > 0 ? rows[rows.length - 1].end : end,
+        firstStart: all.length > 0 ? all[0].start : from,
+        lastEnd: all.length > 0 ? all[all.length - 1].end : end,
       };
+    }
     // Следующий кусок кончается там, где началась первая целая строка этого: байты перед
     // ней — обрезанная строка, её целая половина лежит как раз в новом куске.
     bound = seg.rows.length > 0 ? seg.rows[0].start : bound;
@@ -343,9 +368,17 @@ async function fwdSlice(
   let rows: Row[] = [];
   for (;;) {
     const to = Math.min(size, start + win);
-    const seg = linesOf(await window(fh, from, to), from, agent, dropFirst);
+    const buf = await window(fh, from, to);
+    const seg = linesOf(buf, from, agent, dropFirst);
     rows = rows.concat(seg.rows);
-    if (to >= size || win >= WINDOW_MAX || counted(rows) >= limit)
+    if (to >= size || win >= WINDOW_MAX || counted(rows) >= limit) {
+      // Строка началась на курсоре и не кончилась в целом окне: целиком её не прочесть, но
+      // веху по её началу поставить можно. Край строки-вехи — край куска: следующая
+      // страница начнётся за ним, как и после пустого шага.
+      if (rows.length === 0 && !dropFirst && to < size) {
+        const mark = oversized(buf, agent, from, to);
+        if (mark) rows = [mark];
+      }
       // Пусто и не дочитано до конца файла — та же строка-переросток: курсор уходит за
       // просмотренный кусок. Пусто у конца файла — другое дело: там строка ещё пишется,
       // и курсор обязан остаться перед ней, иначе её начало уедет мимо ленты.
@@ -357,6 +390,7 @@ async function fwdSlice(
         lastEnd:
           rows.length > 0 ? rows[rows.length - 1].end : to >= size ? start : to,
       };
+    }
     // Недописанный хвост куска — начало строки, которая целиком попадёт в следующий.
     if (seg.lastEnd >= 0) {
       from = seg.lastEnd;
@@ -364,6 +398,35 @@ async function fwdSlice(
     }
     win *= 2;
   }
+}
+
+/** Сколько байт начала строки-переростка смотрит `oversized`. */
+const OVERSIZED_HEAD = 64 * 1024;
+
+/** Веха по началу строки, которая в окно чтения не помещается (`head` — её первые байты,
+ *  `start` — её начало, `end` — край просмотренного куска). Узнаётся одна такая строка —
+ *  запись сжатия Codex: на живых данных она бывает длиннее 4 МиБ, и без вехи сжатие в ленте
+ *  пропадало вовсе. Сохранённое (`retained`) из неё не читается — веха едет без раскрытия;
+ *  текст — итог сжатия, если он целиком лежит в начале строки. Прочие строки-переростки
+ *  (вывод инструмента) в ленту не идут, как и раньше. */
+function oversized(head: Buffer, agent: FileAgent, start: number, end: number): Row | undefined {
+  if (agent !== 'codex') return undefined;
+  const text = head.toString('utf8', 0, Math.min(head.length, OVERSIZED_HEAD));
+  const cut = text.indexOf('"payload"');
+  const top = cut < 0 ? text : text.slice(0, cut);
+  if (!/^\s*\{/.test(top) || !/"type"\s*:\s*"compacted"/.test(top)) return undefined;
+  const ordinal = /"ordinal"\s*:\s*(\d+)/.exec(top)?.[1];
+  const base: Base = { id: ordinal ?? String(start), at: stamp(/"timestamp"\s*:\s*"([^"]*)"/.exec(top)?.[1]) };
+  let said = '';
+  const found = cut < 0 ? null : /^"payload"\s*:\s*\{\s*"message"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text.slice(cut));
+  if (found) {
+    try {
+      said = str(JSON.parse(found[1]));
+    } catch {
+      said = '';
+    }
+  }
+  return { start, end, entries: [note(base, 'compacted', said)], broken: false };
 }
 
 /** Стоит ли смещение на начале строки: байт перед ним — перевод строки. */
@@ -463,8 +526,14 @@ function assemble(
     // Курсор записи ставится здесь и только здесь: до страницы ни признака файла, ни
     // смещения строки у разбора нет. Строка — единица чтения, поэтому у всех её записей
     // он один: `around` по нему вернёт их все, включая ту, от которой прыгнули.
+    // Исключение — второе и следующие действия строки (у Claude их бывает несколько): им
+    // к курсору дописан номер, чтобы подробности отдавались по каждому, а не по первому.
     const cursor = `${ino}:${row.start}`;
-    for (const entry of row.entries) entry.cursor = cursor;
+    let tools = 0;
+    for (const entry of row.entries) {
+      const nth = entry.kind === 'tool' ? tools++ : 0;
+      entry.cursor = nth > 0 ? `${cursor}#${nth}` : cursor;
+    }
     entries.push(...row.entries);
   }
   fillTimes(entries);
@@ -1436,7 +1505,7 @@ export async function readDetail(file: string, agent: FileAgent, cursor: string)
       const kept = retainedDetail(line.text);
       if (kept) return kept;
     }
-    const found = line === null ? null : callOf(line.text, agent, line.end);
+    const found = line === null ? null : callOf(line.text, agent, line.end, toolIndexOf(cursor));
     if (!found) return { ok: false, reason: 'cursor-stale', detail: `cursor ${cursor} is not on an action` };
     const outcome = found.id ? await outcomeOf(fh, agent, found.id, found.end, st.size) : null;
     return { ok: true, ...detailOf(agent, found, outcome) };
@@ -1502,9 +1571,10 @@ async function lineAt(fh: FileHandle, at: number, size: number): Promise<{ text:
   return null;
 }
 
-/** Первый вызов инструмента в строке. Одна строка Claude бывает с несколькими блоками, но
- *  адрес у них общий — курсор строки; подробности берутся первого. */
-function callOf(line: string, agent: FileAgent, end: number): Call | null {
+/** Вызов инструмента номер `nth` в строке (с нуля). Одна строка Claude бывает с несколькими
+ *  вызовами: счёт идёт по тем же блокам и в том же порядке, что дают записи `tool` страницы.
+ *  У Codex вызов в строке один. */
+function callOf(line: string, agent: FileAgent, end: number, nth = 0): Call | null {
   let raw: unknown;
   try {
     raw = JSON.parse(line);
@@ -1517,14 +1587,16 @@ function callOf(line: string, agent: FileAgent, end: number): Call | null {
     if (rec.type !== 'assistant') return null;
     const content = (rec.message as Record<string, unknown> | undefined)?.content;
     if (!Array.isArray(content)) return null;
+    let seen = 0;
     for (const item of content) {
       if (item === null || typeof item !== 'object') continue;
       const block = item as Record<string, unknown>;
-      if (block.type === 'tool_use' && str(block.name))
-        return { name: str(block.name), id: str(block.id), input: block.input, end };
+      if (block.type !== 'tool_use' || !str(block.name)) continue;
+      if (seen++ === nth) return { name: str(block.name), id: str(block.id), input: block.input, end };
     }
     return null;
   }
+  if (nth > 0) return null;
   const payload = rec.payload as Record<string, unknown> | undefined;
   if (rec.type !== 'response_item' || !payload) return null;
   if ((payload.type !== 'function_call' && payload.type !== 'custom_tool_call') || !str(payload.name)) return null;

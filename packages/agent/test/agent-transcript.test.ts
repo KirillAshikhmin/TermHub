@@ -16,7 +16,9 @@ import {
 } from '../src/agent-transcript.js';
 import { opencodeDbPath } from '../src/opencode-db.js';
 
-const HOME = '/home/u';
+// Не `/home/…`: на macOS это автомонтируемый каталог (autofs, auto_home), и даже `readlink`
+// ссылки, ведущей в него, ждёт automountd — от 65 мс до многих секунд.
+const HOME = '/nowhere/u';
 const PANE = 'SprutApp:@6.%6';
 const SESSION_ID = '6d01e8cf-a7e0-431e-bd42-dd0769492ef9';
 const CWD = '/Users/u/projects/Sprut.App';

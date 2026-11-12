@@ -39,3 +39,20 @@ describe('parseAction — «показать вопрос»', () => {
     expect(parseAction({ kind: 'step', to: 2 })).toBeNull();
   });
 });
+
+describe('parseAction — ключ идемпотентности', () => {
+  it('ключ едет только с запросом: строка до 128 знаков; иное значение отбрасывается, запрос остаётся', () => {
+    expect(parseAction({ kind: 'prompt', text: 'привет', key: 'k-1' })).toEqual({ kind: 'prompt', text: 'привет', key: 'k-1' });
+    expect(parseAction({ kind: 'prompt', text: 'привет', over: true, key: 'k-1' })).toEqual({
+      kind: 'prompt',
+      text: 'привет',
+      over: true,
+      key: 'k-1',
+    });
+    for (const key of ['', 7, null, 'x'.repeat(129)]) {
+      expect(parseAction({ kind: 'prompt', text: 'привет', key })).toEqual({ kind: 'prompt', text: 'привет' });
+    }
+    expect(parseAction({ kind: 'interrupt', key: 'k-1' })).toEqual({ kind: 'interrupt' });
+    expect(parseAction({ kind: 'mode', to: 'plan', key: 'k-1' })).toEqual({ kind: 'mode', to: 'plan' });
+  });
+});

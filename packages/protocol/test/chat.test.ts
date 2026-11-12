@@ -8,7 +8,7 @@ import { questionStamp } from '../src/chat.js';
 import type { ChatAction, LiveState, ScreenOption, ScreenQuestion } from '../src/chat.js';
 
 /** Отпечаток вопроса «Which color?» с вариантами Red и Blue, посчитанный до пояснений. */
-const BARE_STAMP = '9460751f43fd2359';
+const BARE_STAMP = '4cd2993f6e07c229';
 import { FrameType } from '../src/frames.js';
 
 describe('кадры чата', () => {
@@ -81,6 +81,22 @@ describe('questionStamp', () => {
     const wide = questionStamp(title, options, 'Reason: May I create hello.txt in the current directory?');
     const narrow = questionStamp(title, options, 'Reason: May I create hello.txt in the current\ndirectory?');
     expect(narrow).toBe(wide);
+  });
+
+  it('пробел внутри строки значим: `rm -rf / tmp/x` и `rm -rf /tmp/x` — разные запросы', () => {
+    const title = 'Do you want to proceed?';
+    const a = questionStamp(title, options, 'Bash command\nrm -rf /tmp/x');
+    expect(questionStamp(title, options, 'Bash command\nrm -rf / tmp/x')).not.toBe(a);
+    expect(questionStamp('Run rm -rf / tmp/x?', options)).not.toBe(questionStamp('Run rm -rf /tmp/x?', options));
+    expect(questionStamp(title, [{ key: '1', label: 'rm / tmp' }])).not.toBe(
+      questionStamp(title, [{ key: '1', label: 'rm /tmp' }]),
+    );
+  });
+
+  it('серия пробелов и перенос с отступом — один пробел: ширина панели отпечаток не меняет', () => {
+    const title = 'Do you want to proceed?';
+    const wide = questionStamp(title, options, 'Bash command\nrm -rf /tmp/x && echo done');
+    expect(questionStamp(title, options, '  Bash command\n  rm -rf /tmp/x &&\n    echo   done  ')).toBe(wide);
   });
 
   it('граница вариантов и тела различима', () => {

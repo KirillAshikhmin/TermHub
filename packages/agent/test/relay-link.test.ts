@@ -1498,6 +1498,7 @@ describe('RelayLink — лента сессии через relay', () => {
   let acted: { session: string; action: ChatAction }[] = [];
   let detailAsked: Array<[string, string]> = [];
   let commandsAsked: string[] = [];
+  let commandsVerify: boolean[] = [];
   /** Задержка ответа на экран по имени сессии: ответы приходят не в порядке запросов. */
   const liveDelay = new Map<string, number>();
 
@@ -1533,9 +1534,10 @@ describe('RelayLink — лента сессии через relay', () => {
         detailAsked.push([session, cursor]);
         return cursor === DETAIL_CURSOR ? DETAIL_BODY : DETAIL_STALE;
       },
-      commands: async (session) => {
+      commands: async (session, verify) => {
         if (crash) throw new Error('pane vanished');
         commandsAsked.push(session);
+        commandsVerify.push(verify === true);
         return COMMANDS_LIST;
       },
       caffeinate: {
@@ -1562,6 +1564,7 @@ describe('RelayLink — лента сессии через relay', () => {
     acted = [];
     detailAsked = [];
     commandsAsked = [];
+    commandsVerify = [];
     liveDelay.clear();
   });
 
@@ -1642,8 +1645,24 @@ describe('RelayLink — лента сессии через relay', () => {
     expect(usageAsked).toEqual([OWN_SESSION]);
   }, 25000);
 
+  it('поле detail у гостя без права files — отказ forbidden кадром ленты: вывод команд и правки ему не идут', async () => {
+    const guest = await feedClient({ session: OWN_SESSION, write: true, files: false });
+    guest.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, detail: DETAIL_CURSOR }));
+    const refused = await guest.next();
+    expect(refused?.type).toBe(FrameType.FeedResult);
+    expect(frameJson<{ ok: boolean; reason: string }>(refused!)).toMatchObject({ ok: false, reason: 'forbidden' });
+    expect(detailAsked).toEqual([]);
+    // Сама лента — строки действий — ему по-прежнему открыта.
+    guest.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION }));
+    expect(td.decode((await guest.next())!.payload)).toBe(FEED_PAGE_JSON);
+    // Владельцу подробности идут.
+    const owner = await feedClient();
+    owner.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, detail: DETAIL_CURSOR }));
+    expect(td.decode((await owner.next())!.payload)).toBe(DETAIL_BODY_JSON);
+  }, 25000);
+
   it('поле detail: подробности действия тем же кадром и тем же JSON, что по LAN; ленту при этом не читает', async () => {
-    const c = await feedClient({ session: OWN_SESSION, write: false, files: false });
+    const c = await feedClient({ session: OWN_SESSION, write: false, files: true });
     c.send(jsonFrame(FrameType.Feed, 0, { session: OWN_SESSION, detail: DETAIL_CURSOR }));
     const frame = await c.next();
     expect(frame?.type).toBe(FrameType.FeedResult);
@@ -1671,6 +1690,17 @@ describe('RelayLink — лента сессии через relay', () => {
     crash = true;
     c.send(jsonFrame(FrameType.Commands, 0, { id: 32, session: OWN_SESSION }));
     expect(td.decode((await c.next())!.payload)).toBe(withId(32, COMMANDS_CRASH_JSON));
+  }, 25000);
+
+  it('кадр Commands без поля `verify` только читает список; сверку с экраном просит `verify: true`', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Commands, 0, { id: 51, session: OWN_SESSION }));
+    await c.next();
+    c.send(jsonFrame(FrameType.Commands, 0, { id: 52, session: OWN_SESSION, verify: 1 }));
+    await c.next();
+    c.send(jsonFrame(FrameType.Commands, 0, { id: 53, session: OWN_SESSION, verify: true }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(53, COMMANDS_LIST_JSON));
+    expect(commandsVerify).toEqual([false, false, true]);
   }, 25000);
 
   it('гость: Commands без write — forbidden, чужая сессия — forbidden; с write своя сессия отвечается', async () => {
@@ -1775,6 +1805,13 @@ describe('RelayLink — лента сессии через relay', () => {
     expect(frame?.type).toBe(FrameType.ActResult);
     expect(td.decode(frame!.payload)).toBe(withId(8, ACT_DONE_JSON));
     expect(acted).toEqual([{ session: OWN_SESSION, action: ACT_ACTION }]);
+  }, 25000);
+
+  it('кадр Act: ключ идемпотентности запроса доезжает до исполнителя', async () => {
+    const c = await feedClient();
+    c.send(jsonFrame(FrameType.Act, 0, { id: 9, session: OWN_SESSION, action: { kind: 'prompt', text: 'привет', key: 'k-relay' } }));
+    await c.next();
+    expect(acted).toEqual([{ session: OWN_SESSION, action: { kind: 'prompt', text: 'привет', key: 'k-relay' } }]);
   }, 25000);
 
   it('два запроса подряд получают каждый свой ответ, даже если ответы пришли не по порядку', async () => {

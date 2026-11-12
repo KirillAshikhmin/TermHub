@@ -166,3 +166,29 @@ describe('FileService.imageChunk — та же проверка на кажды�
     await expect(files.imageChunk(path.join(root, 'notes.png'), -1, 64)).rejects.toThrow();
   });
 });
+
+describe('FileService.imageStream — картинка потоком (G41)', () => {
+  it('отдаёт тип, размер и поток кусками: файл целиком в память не читается', async () => {
+    const body = Buffer.concat([PNG, Buffer.alloc(300 * 1024, 7)]);
+    await fsp.writeFile(path.join(root, 'big.png'), body);
+    const image = await files.imageStream(path.join(root, 'big.png'));
+    expect(image.mime).toBe('image/png');
+    expect(image.size).toBe(body.length);
+    const chunks: Buffer[] = [];
+    for await (const chunk of image.stream) chunks.push(chunk as Buffer);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(Math.max(...chunks.map((c) => c.length))).toBeLessThanOrEqual(64 * 1024);
+    expect(Buffer.compare(Buffer.concat(chunks), body)).toBe(0);
+  });
+
+  it('проверки те же, что у чтения целиком: чужой путь, не картинка, больше 20 МиБ — отказ без потока', async () => {
+    await fsp.writeFile(path.join(outside, 'secret.png'), PNG);
+    await fsp.writeFile(path.join(root, 'page.png'), '<html></html>');
+    const huge = path.join(root, 'huge.png');
+    await fsp.writeFile(huge, PNG);
+    await fsp.truncate(huge, IMAGE_MAX_BYTES + 1);
+    for (const bad of [path.join(outside, 'secret.png'), path.join(root, 'page.png'), huge, path.join(root, 'none.png')]) {
+      await expect(files.imageStream(bad)).rejects.toThrow();
+    }
+  });
+});

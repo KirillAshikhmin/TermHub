@@ -22,7 +22,16 @@ import type {
 } from '@termhub/protocol/chat';
 
 import { profileOf, isTested, type AgentProfile, type NotesSign } from './agent-profiles.js';
-import { readPending, readPicker, readPopup, readPopupPick, readScreen, type PendingInvite } from './agent-screen.js';
+import {
+  readDialogSign,
+  readModeName,
+  readPending,
+  readPicker,
+  readPopup,
+  readPopupPick,
+  readScreen,
+  type PendingInvite,
+} from './agent-screen.js';
 import { resolve as resolvePane, HEAD_BYTES, type TranscriptResult } from './agent-transcript.js';
 import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
@@ -48,6 +57,8 @@ export interface LiveSources {
    *  `command` — команда панели. */
   version(agent: AgentId, file: string | undefined, command: string): Promise<AgentInfo>;
   sleep(ms: number): Promise<void>;
+  /** Монотонные часы, мс: по ним живёт память ключей идемпотентности. */
+  now(): number;
 }
 
 /** Шаг опроса экрана после клавиш. */
@@ -68,6 +79,11 @@ const TAIL_BYTES = 256 * 1024;
 const MULTI_FLOW: Partial<Record<AgentId, { next: string; submit: RegExp }>> = {
   claude: { next: '\x1b[C', submit: /^Submit answers$/ },
 };
+
+/** Сколько помнится ключ идемпотентности доставленного запроса и сколько их помнится всего. */
+const KEY_TTL_MS = 2 * 60 * 1000;
+const KEY_MAX = 512;
+const KEY_LIMIT = 128;
 
 const UNKNOWN: ScreenState = { kind: 'unknown' };
 const encoder = new TextEncoder();
@@ -98,19 +114,59 @@ export async function sessionLive(session: string, sources?: Partial<LiveSources
 }
 
 /** Действие чата: клавиши в панель агента после сверки экрана. Не бросает. Действия
- *  одной сессии идут строго по очереди — два сразу перемешали бы клавиши. */
+ *  одной сессии идут строго по очереди — два сразу перемешали бы клавиши.
+ *
+ *  Запрос с ключом идемпотентности (`prompt.key`) доставляется один раз: повтор с тем же
+ *  ключом и текстом в той же сессии в течение двух минут клавиш не шлёт и получает прежний
+ *  ответ (идущий — тот же, которого ждёт первый). Помнится только успех: отказ значит, что
+ *  запрос не отправлен, и повтор идёт заново, с обычной сверкой экрана. */
 export function sessionAct(session: string, action: ChatAction, sources?: Partial<LiveSources>): Promise<ActResult> {
   const src = withDefaults(sources);
-  return sessionQueue(session, src.socketName, async () => {
-    try {
-      const ctx = await look(session, src);
-      if (!ctx.ok) return ctx;
-      return await run(ctx, action);
-    } catch (err) {
-      return fail('lookup-failed', `cannot act in ${session}: ${describe(err)}`);
-    }
+  const job = (): Promise<ActResult> =>
+    sessionQueue(session, src.socketName, async () => {
+      try {
+        const ctx = await look(session, src);
+        if (!ctx.ok) return ctx;
+        const result = await run(ctx, action);
+        // Экран другой панели действие не подтверждает: успех по нему был бы догадкой.
+        if (result.ok && ctx.moved) {
+          return fail('stale', 'the active pane of the session changed during the action: its outcome is not confirmed');
+        }
+        return result;
+      } catch (err) {
+        return fail('lookup-failed', `cannot act in ${session}: ${describe(err)}`);
+      }
+    });
+  const key = action.kind === 'prompt' ? action.key : undefined;
+  if (typeof key !== 'string' || key === '' || key.length > KEY_LIMIT) return job();
+
+  const id = `${src.socketName ?? ''}\u0000${session}\u0000${key}`;
+  const now = src.now();
+  for (const [known, entry] of delivered) {
+    if (now - entry.at >= KEY_TTL_MS) delivered.delete(known);
+  }
+  const text = action.kind === 'prompt' ? action.text : '';
+  const known = delivered.get(id);
+  if (known && known.text === text) return known.result;
+  const result = job();
+  const entry: Delivered = { at: now, text, result };
+  delivered.delete(id);
+  delivered.set(id, entry);
+  while (delivered.size > KEY_MAX) delivered.delete(delivered.keys().next().value!);
+  void result.then((outcome) => {
+    if (!outcome.ok && delivered.get(id) === entry) delivered.delete(id);
   });
+  return result;
 }
+
+interface Delivered {
+  at: number;
+  text: string;
+  result: Promise<ActResult>;
+}
+
+/** Доставленные запросы по ключу идемпотентности (сокет tmux, сессия, ключ). */
+const delivered = new Map<string, Delivered>();
 
 /** Очередь клавиш сессии (ключ — сокет tmux и имя сессии): всё, что нажимает клавиши в
  *  панели агента, идёт через неё — действия чата и сверка списка команд. */
@@ -130,6 +186,10 @@ interface Ctx {
   screen: ScreenState;
   /** Приглашение «вопрос ждёт» на этом экране: какая клавиша им названа. */
   invite: PendingInvite | undefined;
+  /** Строки экрана, по которым он распознан. */
+  lines: string[];
+  /** Посреди действия активной оказалась другая панель: его исход не подтверждён. */
+  moved: boolean;
 }
 
 /** Сессия → снимок экрана → агент панели → распознанный экран. */
@@ -167,6 +227,8 @@ async function look(session: string, src: LiveSources): Promise<Ctx | ChatFailur
     file,
     screen: readScreen(shot.lines, profile),
     invite: readPending(shot.lines, profile),
+    lines: shot.lines,
+    moved: false,
   };
 }
 
@@ -178,7 +240,10 @@ function claudeCommand(command: string): boolean {
  *  сверять чужой экран и слать по нему клавиши нельзя. */
 async function peek(ctx: Ctx): Promise<ScreenState> {
   const shot = await ctx.src.capture(ctx.session);
-  if (shot.pane !== ctx.pane) return UNKNOWN;
+  if (shot.pane !== ctx.pane) {
+    ctx.moved = true;
+    return UNKNOWN;
+  }
   return readScreen(shot.lines, ctx.profile);
 }
 
@@ -191,7 +256,10 @@ interface Seen {
 /** То же, что `peek`, но со строками экрана и приглашением «вопрос ждёт». */
 async function peekSeen(ctx: Ctx): Promise<Seen> {
   const shot = await ctx.src.capture(ctx.session);
-  if (shot.pane !== ctx.pane) return { screen: UNKNOWN, invite: undefined, lines: [] };
+  if (shot.pane !== ctx.pane) {
+    ctx.moved = true;
+    return { screen: UNKNOWN, invite: undefined, lines: [] };
+  }
   return {
     screen: readScreen(shot.lines, ctx.profile),
     invite: readPending(shot.lines, ctx.profile),
@@ -233,6 +301,16 @@ async function run(ctx: Ctx, action: ChatAction): Promise<ActResult> {
     // На ожидании ввода прерывать нечего, а Esc там не безобиден (два подряд у Claude —
     // меню отката).
     if (screen.kind === 'idle') return done(screen);
+    // Что клавиша прерывания сделает на экране, который не узнан, неизвестно.
+    if (screen.kind === 'unknown') {
+      return fail('stale', 'agent screen is not recognized: the interrupt key is not sent blindly');
+    }
+    if (readDialogSign(ctx.lines, profile)?.noInterrupt === true) {
+      return fail(
+        'unsupported',
+        "the interrupt key would interrupt the agent's turn, not this question: answer the question or skip it in the terminal",
+      );
+    }
     await press(ctx, profile.keys.interrupt);
     return done((await until(ctx, (s) => differs(s, screen))).screen);
   }
@@ -292,16 +370,32 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
     );
   }
   // Работающему агенту запрос ставится в очередь клавишей профиля, если она у него своя.
-  let working = typed.screen.kind === 'working';
+  // Экран перечитывается прямо перед клавишей: она идёт, только если на нём по-прежнему
+  // строка ввода с тем самым текстом, что подтвердил вставку. Всплывший в этот миг диалог
+  // (запрос разрешения) клавишу отправки не получает.
+  let working: boolean;
   if (profile.keys.queue !== undefined) {
-    const checked = await checkLists(ctx);
+    const checked = await checkLists(ctx, typed.screen.input ?? '');
     if (typeof checked !== 'boolean') return checked;
     working = checked;
+  } else {
+    const fresh = await peek(ctx);
+    if (!atInput(fresh) || fresh.input !== typed.screen.input) return fail('stale', CHANGED_AFTER_PASTE);
+    working = fresh.kind === 'working';
   }
   const queue = working ? profile.keys.queue : undefined;
   await press(ctx, queue ?? profile.keys.submit);
-  const sent = await until(ctx, (s) => !atInput(s) || !s.input);
-  if (queue === undefined || sent.met) return done(sent.screen);
+  if (queue === undefined) return done((await until(ctx, (s) => !atInput(s) || !s.input)).screen);
+  // Клавиша очереди: успех — только узнанный экран со строкой ввода, и пустой. Иной экран
+  // не доказывает, что сообщение встало в очередь.
+  const sent = await until(ctx, (s) => atInput(s) && !s.input);
+  if (sent.met) return done(sent.screen);
+  if (!atInput(sent.screen)) {
+    return fail(
+      'stale',
+      'after the queue key the agent is not at its input line: whether the message was queued is not confirmed',
+    );
+  }
   // Клавиша очереди текст не забрала. Строка до вставки была пуста — в ней только наше.
   const swept = await sweepInput(ctx, sent.screen);
   return fail(
@@ -310,18 +404,20 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   );
 }
 
+const CHANGED_AFTER_PASTE =
+  'the agent screen changed after the paste: the send key was not pressed; the pasted text may be left in the agent input line';
+
 /** Сверка после вставки у агента с клавишей очереди: работает ли он (`true`) — либо отказ,
  *  если клавиша отправила бы не то, что набрано. Тогда вставленное убирается, клавиши
  *  отправки и очереди не идут. Отказ дают: список упоминаний над строкой; список команд,
  *  если набранное не та его строка, что будет исполнена (у работающего — не единственная
  *  строка целиком: только это измерено); у работающего — команда одним словом без списка
  *  (что делает там клавиша очереди, не измерено). */
-async function checkLists(ctx: Ctx): Promise<boolean | ChatFailure> {
+async function checkLists(ctx: Ctx, pasted: string): Promise<boolean | ChatFailure> {
   const seen = await peekSeen(ctx);
   const input = seen.screen.input;
-  if (!atInput(seen.screen) || !input) {
-    return fail('stale', 'the agent screen changed after the paste; the pasted text may be left in the agent input line');
-  }
+  // `pasted` — строка, что подтвердила вставку: к клавише в ней обязан стоять тот же текст.
+  if (!atInput(seen.screen) || !input || input !== pasted) return fail('stale', CHANGED_AFTER_PASTE);
   const working = seen.screen.kind === 'working';
   const list = readPopup(seen.lines, ctx.profile);
   let why: string | undefined;
@@ -398,20 +494,45 @@ async function command(ctx: Ctx, name: string, menu?: string): Promise<ActResult
 }
 
 /** Режим: клавиша цикла до нужного, с проверкой экраном после каждого нажатия и не
- *  больше числа режимов. Нажатие, после которого режим не сменился, — последнее. */
+ *  больше числа режимов профиля. Нажатие, после которого режим не сменился, — последнее.
+ *  Цикл может пройти через режим, которого в профиле нет (подвал у строки ввода есть, а
+ *  известного режима в нём нет): нажатия продолжаются в том же пределе. Остановились в
+ *  таком режиме — отказ, который его называет, а не успех. */
 async function mode(ctx: Ctx, to: unknown): Promise<ActResult> {
   const { profile } = ctx;
   if (!profile.modes.some((m) => m.id === to)) return fail('unsupported', 'agent has no such mode');
+  const outside = (lines: string[]): ChatFailure => {
+    const name = readModeName(lines, profile);
+    return fail(
+      'stale',
+      `agent is in a mode outside the profile${name ? `: «${name}»` : ' (its footer names no known mode)'}; switch it in the terminal`,
+    );
+  };
   let now = ctx.screen;
-  if (!atInput(now) || now.mode === undefined) return fail('stale', 'agent mode is not readable on screen');
+  let lines = ctx.lines;
+  if (!atInput(now)) return fail('stale', 'agent mode is not readable on screen');
+  if (now.mode === undefined) return outside(lines);
   for (let i = 0; i < profile.modes.length && now.mode !== to; i++) {
     const before = now.mode;
     await press(ctx, profile.keys.modeCycle);
-    const next = await until(ctx, (s) => atInput(s) && s.mode !== undefined && s.mode !== before);
-    if (!atInput(next.screen)) return fail('stale', 'agent screen changed while switching the mode');
-    now = next.screen;
-    if (!next.met) break;
+    // Известный режим, отличный от прежнего, — шаг подтверждён. Режим вне профиля
+    // подтверждают два одинаковых кадра подряд: один мог быть кадром перерисовки.
+    let seen: Seen = { screen: UNKNOWN, invite: undefined, lines: [] };
+    let met = false;
+    for (let left = Math.ceil(SETTLE_MS / STEP_MS); left > 0 && !met; left--) {
+      await ctx.src.sleep(STEP_MS);
+      const next = await peekSeen(ctx);
+      const s = next.screen;
+      if (atInput(s) && s.mode !== undefined) met = s.mode !== before;
+      else if (atInput(s) && before !== undefined) met = atInput(seen.screen) && sameLines(next.lines, seen.lines);
+      seen = next;
+    }
+    if (!atInput(seen.screen)) return fail('stale', 'agent screen changed while switching the mode');
+    now = seen.screen;
+    lines = seen.lines;
+    if (!met) break;
   }
+  if (now.mode === undefined) return outside(lines);
   return done(now);
 }
 
@@ -692,6 +813,7 @@ function withDefaults(over?: Partial<LiveSources>): LiveSources {
     resolve: over?.resolve ?? ((pane) => resolvePane(pane, { home, socketName })),
     version: over?.version ?? agentInfo,
     sleep: over?.sleep ?? ((ms) => new Promise((wake) => setTimeout(wake, ms))),
+    now: over?.now ?? (() => performance.now()),
   };
 }
 

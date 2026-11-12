@@ -21,6 +21,9 @@ export const PASTE_MAX_BYTES = 20 * 1024 * 1024;
 export const FILE_MAX_BYTES = 50 * 1024 * 1024;
 /** Сколько живёт вставленный файл: агент читает его при вставке, дольше он не нужен. */
 export const PASTE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+/** Общий предел каталога вложений: новый файл, который в него не помещается, вытесняет
+ *  старейшие. Без него каталог рос бы неделю без границы — по 50 МиБ на загрузку. */
+export const PASTE_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 /** Недогруженная кусками картинка бросается через это время тишины. */
 const PART_IDLE_MS = 60_000;
 const MAX_PARTS = 8;
@@ -62,10 +65,13 @@ export class PasteStore {
   private readonly dir: string;
   private readonly parts = new Map<string, Part>();
   private readonly now: () => number;
+  private readonly quota: number;
 
-  constructor(opts: { dir?: string; now?: () => number } = {}) {
+  /** `quota` — общий предел каталога в байтах (по умолчанию 2 ГиБ). */
+  constructor(opts: { dir?: string; now?: () => number; quota?: number } = {}) {
     this.dir = opts.dir ?? path.join(configDir(), 'paste');
     this.now = opts.now ?? Date.now;
+    this.quota = opts.quota ?? PASTE_QUOTA_BYTES;
   }
 
   /** LAN: тело запроса потоком. Возвращает путь файла. `name` — исходное имя файла клиента:
@@ -150,24 +156,40 @@ export class PasteStore {
     return path.join(this.dir, `.part-${randomBytes(8).toString('hex')}`);
   }
 
-  /** Имя файла — время и случайный хвост: в нём нет ни пробелов, ни данных клиента. */
+  /** Имя файла — время и случайный хвост: в нём нет ни пробелов, ни данных клиента. Место
+   *  под файл освобождается до его появления в каталоге. */
   private async publish(temp: string, ext: string): Promise<string> {
-    await this.sweep();
+    const incoming = await fsp.stat(temp).then(
+      (stat) => stat.size,
+      () => 0,
+    );
+    await this.sweep(incoming);
     const stamp = new Date(this.now()).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
     const target = path.join(this.dir, `paste-${stamp}-${randomBytes(3).toString('hex')}.${ext}`);
     await fsp.link(temp, target);
     return target;
   }
 
-  /** Убирает отжившие файлы. Сбой уборки вставке не мешает. */
-  private async sweep(): Promise<void> {
+  /** Убирает отжившие файлы, а затем старейшие — пока вместе с новым (`incoming` байт)
+   *  каталог не уложится в общий предел. Считаются и убираются только свои файлы
+   *  (`paste-*`). Сбой уборки вставке не мешает. */
+  private async sweep(incoming: number): Promise<void> {
     try {
       const edge = this.now() - PASTE_KEEP_MS;
+      const kept: { file: string; size: number; mtimeMs: number }[] = [];
       for (const name of await fsp.readdir(this.dir)) {
         if (!name.startsWith('paste-')) continue;
         const file = path.join(this.dir, name);
         const stat = await fsp.stat(file);
         if (stat.mtimeMs < edge) await fsp.rm(file, { force: true });
+        else kept.push({ file, size: stat.size, mtimeMs: stat.mtimeMs });
+      }
+      kept.sort((a, b) => a.mtimeMs - b.mtimeMs || (a.file < b.file ? -1 : 1));
+      let total = kept.reduce((sum, item) => sum + item.size, 0);
+      for (const item of kept) {
+        if (total + incoming <= this.quota) break;
+        await fsp.rm(item.file, { force: true });
+        total -= item.size;
       }
     } catch {
       // каталог недоступен — следующая вставка попробует снова

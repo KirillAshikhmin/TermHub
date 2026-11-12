@@ -5,7 +5,15 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { FILE_MAX_BYTES, PASTE_KEEP_MS, PASTE_MAX_BYTES, PasteStore, fileExt, pasteExt } from '../src/paste-image.js';
+import {
+  FILE_MAX_BYTES,
+  PASTE_KEEP_MS,
+  PASTE_MAX_BYTES,
+  PASTE_QUOTA_BYTES,
+  PasteStore,
+  fileExt,
+  pasteExt,
+} from '../src/paste-image.js';
 
 let dir: string;
 beforeEach(() => {
@@ -116,5 +124,54 @@ describe('любой файл с устройства (G06)', () => {
       'Unsupported image type',
     );
     expect(leftovers()).toEqual([]);
+  });
+});
+
+describe('общий предел каталога вложений (G41)', () => {
+  /** Файл каталога заданного размера и возраста (секунды от начала отсчёта). */
+  const seed = (name: string, size: number, age: number): string => {
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, Buffer.alloc(size, 1));
+    fs.utimesSync(file, 1_700_000_000 + age, 1_700_000_000 + age);
+    return file;
+  };
+  const now = (): number => (1_700_000_000 + 1000) * 1000;
+
+  it('по умолчанию предел — 2 ГиБ', () => {
+    expect(PASTE_QUOTA_BYTES).toBe(2 * 1024 * 1024 * 1024);
+  });
+
+  it('новый файл не помещается — старейшие убираются до его появления, свежие остаются', async () => {
+    const oldest = seed('paste-a.png', 40, 1);
+    const middle = seed('paste-b.png', 40, 2);
+    const newest = seed('paste-c.png', 40, 3);
+    const foreign = seed('notes.txt', 500, 0);
+    const store = new PasteStore({ dir, now, quota: 150 });
+    const file = await store.saveStream('image/png', Readable.from([Buffer.alloc(50, 2)]));
+    // 120 занято + 50 новых > 150: уходит один старейший, остального хватает.
+    expect(fs.existsSync(oldest)).toBe(false);
+    expect(fs.existsSync(middle)).toBe(true);
+    expect(fs.existsSync(newest)).toBe(true);
+    expect(fs.statSync(file).size).toBe(50);
+    // Чужие файлы каталога в счёт не идут и не трогаются.
+    expect(fs.existsSync(foreign)).toBe(true);
+  });
+
+  it('кусками — тот же предел; файл крупнее всего предела вытесняет всё прежнее и остаётся один', async () => {
+    seed('paste-a.png', 40, 1);
+    seed('paste-b.png', 40, 2);
+    const store = new PasteStore({ dir, now, quota: 100 });
+    await store.chunk('upload-0001', 'image/png', Buffer.alloc(60, 3), 0, false);
+    const { path: file } = await store.chunk('upload-0001', 'image/png', Buffer.alloc(60, 3), 60, true);
+    expect(fs.readdirSync(dir).filter((n) => n.startsWith('paste-'))).toEqual([path.basename(file!)]);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('места хватает — ничего не убирается', async () => {
+    const kept = seed('paste-a.png', 40, 1);
+    const store = new PasteStore({ dir, now, quota: 150 });
+    await store.saveStream('image/png', Readable.from([Buffer.alloc(50, 2)]));
+    expect(fs.existsSync(kept)).toBe(true);
   });
 });

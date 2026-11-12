@@ -98,7 +98,7 @@ import { buildSessionName } from './gradle.js';
 import { sessionDetail, sessionFeed, sessionUsage, type FeedResult } from './session-feed.js';
 import { sessionCommands } from './agent-commands.js';
 import type { UsageReader } from './transcript-usage.js';
-import { feedPage, feedSession, type DetailReader, type FeedReader } from './feed-request.js';
+import { feedPage, feedSession, wantsDetail, type DetailReader, type FeedReader } from './feed-request.js';
 import { sessionAct, sessionLive } from './agent-live.js';
 import {
   actPage,
@@ -327,7 +327,8 @@ export class RelayLink {
     this.act = opts.act ?? ((session, action) => sessionAct(session, action, { socketName: this.socketName }));
     this.detail =
       opts.detail ?? ((session, cursor) => sessionDetail(session, cursor, { socketName: this.socketName }));
-    this.commands = opts.commands ?? ((session) => sessionCommands(session, { socketName: this.socketName }));
+    this.commands =
+      opts.commands ?? ((session, verify) => sessionCommands(session, { socketName: this.socketName }, { verify }));
   }
 
   /** Подключается к relay и держит соединение (реконнект — до stop()). */
@@ -1237,6 +1238,13 @@ export class RelayLink {
       // раз в три секунды), и клиент, сопоставляющий ответ ленты по типу кадра, принял
       // бы чужой отказ за свой. Тело — та же форма, что у прочих отказов ленты.
       const refused: FeedResult = { ok: false, reason: 'forbidden', detail: 'session not shared' };
+      this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, refused));
+      return;
+    }
+    // Подробности действия — вывод команд и содержимое правок: то же, что отдаёт проводник.
+    // Гостю без права `files` лента показывает только строку действия.
+    if (wantsDetail(req) && s.scope && !s.scope.files) {
+      const refused: FeedResult = { ok: false, reason: 'forbidden', detail: 'no files permission' };
       this.sendFrameBytes(s, jsonFrame(FrameType.FeedResult, frame.channel, refused));
       return;
     }

@@ -56,6 +56,12 @@ export interface DialogSign {
   /** Свой ответ — заметка к варианту (Codex): поле открывается клавишей `keys.notes`,
    *  текст набирается в нём, клавиша отправки отвечает. */
   notes?: NotesSign;
+  /** Над заголовком обязана стоять строка `chip` (полоса шагов): без неё экран с тем же
+   *  подвалом — не этот диалог, а меню агента с похожей подсказкой. */
+  strip?: true;
+  /** Клавиша прерывания на этом диалоге его не закрывает, а делает другое (прерывает ход
+   *  агента): действие `interrupt` здесь клавишу не шлёт. */
+  noInterrupt?: true;
 }
 
 /** Поле заметки в диалоге. Подсказки сверяются целиком: свой ответ измерен только на
@@ -164,6 +170,9 @@ export interface ScreenSigns {
   picker?: RegExp;
   /** Конец текста, на котором агент открывает список упоминаний. */
   mention?: RegExp;
+  /** Как подвал называет режим: группа 1 — название, каким его рисует агент. Нужен, чтобы
+   *  назвать режим, которого в `modes` нет. */
+  modeLine?: RegExp;
 }
 
 export interface AgentProfile {
@@ -345,13 +354,18 @@ const CLAUDE: AgentProfile = {
     steps: { item: /([☐☒✔])\s+(\S(?:.*?\S)?)(?=\s+[☐☒✔→]|\s*$)/gu, done: '☒', submit: '✔' },
     free: /^Type something\.?$/,
     dialogs: [
+      // Подвал «Enter to select» стоит и под меню Claude (тема, настройки): вопрос отличает
+      // полоса шагов над заголовком — она есть и у одиночного вопроса («☐ Название»).
       {
         kind: 'question',
         footer: /^Enter to select\b/,
         below: 'description',
         freeBeforeRule: true,
+        strip: true,
       },
-      { kind: 'permission', footer: /^Esc to cancel\b/, below: 'label' },
+      // Заголовок измерен один — «Do you want to create hello.txt?»; под тем же подвалом
+      // Claude спрашивает и другое (подтверждение плана), и это не запрос разрешения.
+      { kind: 'permission', footer: /^Esc to cancel\b/, title: /^Do you want to\b/, below: 'label' },
       { kind: 'question', title: /^Ready to submit your answers\?$/, below: 'label' },
     ],
     menus: [
@@ -362,6 +376,8 @@ const CLAUDE: AgentProfile = {
     ],
     popup: /^\s{2}[❯ ]\s\/(\S+)(?:\s{2,}(\S.*))?$/,
     popupMore: /^\s{12,}(\S.*)$/,
+    // «⏵⏵ accept edits on (shift+tab to cycle)», «⏸ plan mode on (shift+tab to cycle)».
+    modeLine: /(\p{L}[\p{L} ]*? on) \(shift\+tab to cycle\)/u,
   },
 };
 
@@ -527,6 +543,9 @@ const CODEX: AgentProfile = {
         counter: /^(\d+) of (\d+)$/,
         below: 'label',
         freeLast: /^Other$/,
+        // Esc в подвале этого диалога нет, а у работающего Codex он прерывает ход (замер:
+        // на этом экране не нажимался). Вопрос снимают ответом или «⌃] skip».
+        noInterrupt: true,
       },
       {
         kind: 'permission',

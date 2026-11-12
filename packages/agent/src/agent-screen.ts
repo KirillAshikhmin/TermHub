@@ -144,11 +144,39 @@ export function readPending(lines: string[], profile: AgentProfile): PendingInvi
   const rows = lines.map(strip);
   const bottom = lastFilled(rows, rows.length - 1);
   if (bottom < 0) return undefined;
-  let invite: PendingInvite | undefined;
-  readAbove(rows, trayOf(rows, bottom, profile).last, profile, (found) => {
-    invite = found;
-  });
-  return invite;
+  const seen: Seen = {};
+  readAbove(rows, trayOf(rows, bottom, profile).last, profile, seen);
+  return seen.invite;
+}
+
+/** Каким признаком профиля узнан диалог на экране (вопрос или запрос разрешения). Экран
+ *  не диалог — `undefined`. Тот же разбор, что в `readScreen`. */
+export function readDialogSign(lines: string[], profile: AgentProfile): DialogSign | undefined {
+  const rows = lines.map(strip);
+  const bottom = lastFilled(rows, rows.length - 1);
+  if (bottom < 0) return undefined;
+  const seen: Seen = {};
+  readAbove(rows, trayOf(rows, bottom, profile).last, profile, seen);
+  return seen.dialog;
+}
+
+/** Как агент называет свой режим в подвале строки ввода (`modeLine` профиля) — в том числе
+ *  режим, которого в профиле нет. Нет строки ввода или подвал режим не называет — `undefined`. */
+export function readModeName(lines: string[], profile: AgentProfile): string | undefined {
+  const sign = profile.screen.modeLine;
+  if (!sign) return undefined;
+  const rows = lines.map(strip);
+  const last = lastFilled(rows, rows.length - 1);
+  if (last < 0) return undefined;
+  const box = findBox(rows, trayOf(rows, last, profile).last, profile);
+  if (typeof box === 'string') return undefined;
+  return sign.exec(box.footer)?.[1];
+}
+
+/** Что разбор экрана заметил попутно. */
+interface Seen {
+  invite?: PendingInvite;
+  dialog?: DialogSign;
 }
 
 export function readScreen(lines: string[], profile: AgentProfile): ScreenState {
@@ -169,7 +197,7 @@ function readAbove(
   rows: Row[],
   last: number,
   profile: AgentProfile,
-  note?: (invite: PendingInvite) => void,
+  seen: Seen = {},
 ): ScreenState {
   const signs = profile.screen;
 
@@ -188,19 +216,25 @@ function readAbove(
       .filter((text) => text !== '')
       .join(' ');
     const question = readDialog(rows, at - 1, dialog, profile, hint);
-    if (question) return { kind: dialog.kind, question };
+    if (question) {
+      seen.dialog = dialog;
+      return { kind: dialog.kind, question };
+    }
   }
 
   const menu = readMenu(rows, last, profile);
   if (menu) return { kind: 'menu', menu };
 
   const box = findBox(rows, last, profile);
-  if (typeof box !== 'string') return readBox(rows, box, profile, note);
+  if (typeof box !== 'string') return readBox(rows, box, profile, seen);
 
   for (const dialog of signs.dialogs) {
     if (dialog.footer || !dialog.title) continue;
     const question = readDialog(rows, last, dialog, profile);
-    if (question) return { kind: dialog.kind, question };
+    if (question) {
+      seen.dialog = dialog;
+      return { kind: dialog.kind, question };
+    }
   }
   if (hinted) return unknown('dialog not recognized');
   if (optionOf(rows[last]!.text, profile)) return unknown('dialog cut off');
@@ -441,11 +475,17 @@ function readDialog(
   options.reverse();
   if (dialog.freeLast) options[options.length - 1]!.free = true;
   if (options.some((option, index) => option.key !== String(index + 1))) return null;
-  if (options.filter((option) => option.selected).length > 1) return null;
+  const pointed = options.filter((option) => option.selected).length;
+  if (pointed > 1) return null;
+  const multi = options.some((option) => option.checked !== undefined);
+  // Диалог агента всегда показывает указатель. Не на варианте он бывает только у вопроса
+  // с отметками — там он стоит и на строке отправки. Без указателя это не диалог, а
+  // нумерованный текст, похожий на него.
+  if (pointed === 0 && !multi) return null;
 
   const head = readHead(rows, top - 1, dialog, profile);
   if (!head) return null;
-  const multi = options.some((option) => option.checked !== undefined);
+  if (dialog.strip === true && !head.strip) return null;
   // Свой ответ заметкой: подсказка — одна из двух измеренных, и вариант, к которому
   // заметка идёт, стоит последним.
   const noted =
@@ -502,9 +542,10 @@ function readHead(
   from: number,
   dialog: DialogSign,
   profile: AgentProfile,
-): { title: string; body: string; steps?: ScreenStep[]; place?: string } | null {
+): { title: string; body: string; steps?: ScreenStep[]; place?: string; strip: boolean } | null {
   const signs = profile.screen;
   let steps: ScreenStep[] | undefined;
+  let strip = false;
   const paragraphs: string[][] = [];
   let current: string[] = [];
   const close = (): void => {
@@ -542,6 +583,7 @@ function readHead(
     }
     if (signs.chip.test(text.trim())) {
       if (dialog.notCounter?.test(text.trim())) return null;
+      strip = true;
       steps ??= stepsOf(rows[i]!, profile);
       close();
       continue;
@@ -560,7 +602,7 @@ function readHead(
     .filter((_, index) => index !== at)
     .map((lines) => lines.join('\n'))
     .join('\n');
-  return { title, body, ...(steps ? { steps } : {}), ...(place ? { place } : {}) };
+  return { title, body, ...(steps ? { steps } : {}), ...(place ? { place } : {}), strip };
 }
 
 /** Строка ввода агента внизу экрана — или причина, по которой её там нет. */
@@ -669,7 +711,7 @@ function readBox(
   rows: Row[],
   box: Box,
   profile: AgentProfile,
-  note?: (invite: PendingInvite) => void,
+  seen: Seen = {},
 ): ScreenState {
   const signs = profile.screen;
   const head = rows[box.first]!;
@@ -737,7 +779,7 @@ function readBox(
   const model = modelOf(box.items, profile);
   const mode = modeOf(box.footer, profile, model !== undefined || busy !== undefined || ready);
   const invite = pendingOf(rows, box, profile);
-  if (invite) note?.(invite);
+  if (invite) seen.invite = invite;
   return {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),

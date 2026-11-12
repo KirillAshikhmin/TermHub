@@ -101,7 +101,7 @@ async function start(opts: {
   live?: (session: string) => Promise<LiveResult>;
   act?: (session: string, action: ChatAction) => Promise<ActResult>;
   detail?: (session: string, cursor: string) => Promise<DetailResult>;
-  commands?: (session: string) => Promise<CommandsResult>;
+  commands?: (session: string, verify?: boolean) => Promise<CommandsResult>;
 }): Promise<Started> {
   const server = new AgentServer({
     config: opts.config ?? fixtureConfig(),
@@ -795,6 +795,29 @@ describe('AgentServer — GET /api/files/image', () => {
     }
   });
 
+  it('картинка уходит потоком: чтение файла целиком в память маршрут не зовёт', async () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-image-stream-')));
+    const body = Buffer.concat([PNG, Buffer.alloc(200 * 1024, 5)]);
+    fs.writeFileSync(path.join(base, 'big.png'), body);
+    class NoWholeRead extends FileService {
+      override async readImage(): Promise<never> {
+        throw new Error('whole-file read');
+      }
+    }
+    const s = await start({ files: new NoWholeRead({ roots: [base] }) });
+    try {
+      const res = await fetch(`${s.base}/api/files/image?path=${encodeURIComponent(path.join(base, 'big.png'))}`, {
+        headers: { cookie: authCookie() },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-length')).toBe(String(body.length));
+      expect(Buffer.compare(Buffer.from(await res.arrayBuffer()), body)).toBe(0);
+    } finally {
+      await s.server.close();
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it('без файлового сервиса — 503', async () => {
     const s = await start({});
     try {
@@ -1429,6 +1452,40 @@ describe('GET /api/commands — команды для подсказок по LA
     expect(asked).toEqual(['work']);
   });
 
+  it('GET только читает готовый список; сверку с экраном запускает POST — и только со своей страницы', async () => {
+    const asked: [string, boolean][] = [];
+    s = await start({
+      commands: async (session, verify) => {
+        asked.push([session, verify === true]);
+        return COMMANDS_LIST;
+      },
+    });
+    const headers = { cookie: authCookie(), 'content-type': 'application/json' };
+    // Параметр в адресе сверку не включает: GET с чужой страницы клавиш не шлёт никогда.
+    await fetch(`${s.base}/api/commands?session=work&verify=1`, { headers });
+    await fetch(`${s.base}/api/commands?session=work&verify=true`, { headers });
+    expect(asked).toEqual([
+      ['work', false],
+      ['work', false],
+    ]);
+    asked.length = 0;
+    const body = JSON.stringify({ session: 'work', verify: true });
+    const own = await fetch(`${s.base}/api/commands`, { method: 'POST', headers, body });
+    expect(own.status).toBe(200);
+    expect(await own.text()).toBe(COMMANDS_LIST_JSON);
+    expect(asked).toEqual([['work', true]]);
+    asked.length = 0;
+    const foreign = await fetch(`${s.base}/api/commands`, {
+      method: 'POST',
+      headers: { ...headers, origin: 'https://evil.example' },
+      body,
+    });
+    expect(foreign.status).toBe(403);
+    // Без поля `verify` POST — то же чтение.
+    await fetch(`${s.base}/api/commands`, { method: 'POST', headers, body: JSON.stringify({ session: 'work' }) });
+    expect(asked).toEqual([['work', false]]);
+  });
+
   it('отказ едет причиной, сорванный вызов — тем же телом, что через relay; без cookie — 401', async () => {
     s = await start({ commands: async () => ({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' }) });
     const res = await fetch(`${s.base}/api/commands?session=work`, { headers: { cookie: authCookie() } });
@@ -1484,6 +1541,12 @@ describe('GET /api/live и POST /api/act — чат по LAN', () => {
       body,
     });
   }
+
+  it('act: ключ идемпотентности запроса доезжает до исполнителя', async () => {
+    await startChat();
+    await post(JSON.stringify({ session: 'work', action: { kind: 'prompt', text: 'привет', key: 'k-lan' } }));
+    expect(acted).toEqual([{ session: 'work', action: { kind: 'prompt', text: 'привет', key: 'k-lan' } }]);
+  });
 
   it('live отдаёт состояние экрана как есть — тем же JSON, что и кадр LiveResult', async () => {
     await startChat();

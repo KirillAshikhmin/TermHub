@@ -1327,26 +1327,28 @@ describe('фоновые агенты и команды оболочки', () =>
 describe('вопросы: пояснения вариантов, заметка, ожидающий вопрос', () => {
   const codex = profileOf('codex');
 
+  // Значения сменились один раз — когда пробел внутри строки стал значимым (G41); пары
+  // «широкий/узкий» и «со списком агентов» равны по-прежнему.
   it('прежние отпечатки не изменились', () => {
     const before: [AgentId, string, string][] = [
-      ['claude', 'permission', '003bac1e0e0fd528'],
-      ['claude', 'permission-narrow', '003bac1e0e0fd528'],
-      ['claude', 'agents-permission', '003bac1e0e0fd528'],
-      ['claude', 'question', '46ddd0e63b82ac40'],
-      ['claude', 'question-narrow', '46ddd0e63b82ac40'],
-      ['claude', 'agents-question', '46ddd0e63b82ac40'],
-      ['claude', 'question-free', 'e3c5e7e98149bb87'],
-      ['claude', 'question-free-typed', 'e3c5e7e98149bb87'],
-      ['claude', 'question-multi', 'bd4e54736adb052d'],
-      ['claude', 'question-review', 'f28682d105515327'],
-      ['codex', 'question', '4b6faf99d2d7eeef'],
-      ['codex', 'question-narrow', '4b6faf99d2d7eeef'],
-      ['codex', 'permission', '972877912d315f17'],
-      ['codex', 'permission-narrow', '972877912d315f17'],
-      ['codex', 'permission-mcp', 'be48c67eec586458'],
-      ['codex', 'question-described', 'dd9a21e7408b7a91'],
-      ['codex', 'pending-opened', '671612fb84e9333d'],
-      ['codex', 'permission-mcp-live', '6cd232cccc7d104a'],
+      ['claude', 'permission', '023ca09efc6d10d8'],
+      ['claude', 'permission-narrow', '023ca09efc6d10d8'],
+      ['claude', 'agents-permission', '023ca09efc6d10d8'],
+      ['claude', 'question', '4e4fef1e58fd42d8'],
+      ['claude', 'question-narrow', '4e4fef1e58fd42d8'],
+      ['claude', 'agents-question', '4e4fef1e58fd42d8'],
+      ['claude', 'question-free', 'fae41a61eb02e52f'],
+      ['claude', 'question-free-typed', 'fae41a61eb02e52f'],
+      ['claude', 'question-multi', '7b901893ce67833d'],
+      ['claude', 'question-review', '89368819b6ffb57f'],
+      ['codex', 'question', 'bb80a749ec8f362f'],
+      ['codex', 'question-narrow', 'bb80a749ec8f362f'],
+      ['codex', 'permission', '54e254c100bc4d37'],
+      ['codex', 'permission-narrow', '54e254c100bc4d37'],
+      ['codex', 'permission-mcp', 'c99a854ec5a9e3d8'],
+      ['codex', 'question-described', '4a507dcfa8aa4d99'],
+      ['codex', 'pending-opened', 'fe62fa534b8014a5'],
+      ['codex', 'permission-mcp-live', '271221349820cfc2'],
     ];
     for (const [agent, name, stamp] of before) {
       expect(`${agent}/${name} ${read(agent, name).question?.stamp}`).toBe(`${agent}/${name} ${stamp}`);
@@ -1652,12 +1654,108 @@ describe('Claude Code: полоса шагов над вопросом', () => {
     expect(readScreen(answered, claude).question!.stamp).toBe(base);
     // Одиночный вопрос с тем же текстом — отпечаток прежний, не серийный.
     expect(base).not.toBe(read('claude', 'question').question!.stamp);
-    expect(read('claude', 'question').question!.stamp).toBe('46ddd0e63b82ac40');
+    expect(read('claude', 'question').question!.stamp).toBe('4e4fef1e58fd42d8');
   });
 
   it('у Codex полосы нет — полей нет', () => {
     const q = read('codex', 'question-described').question!;
     expect(q.steps).toBeUndefined();
     expect(q.step).toBeUndefined();
+  });
+});
+
+// G41: диалог читается вопросом, только когда агент сам показывает, где его указатель.
+describe('диалог без указателя и экраны с нумерованными пунктами', () => {
+  /** Снимок, с которого снят указатель вариантов (знак строки ввода перед цифрой). */
+  const unpointed = (agent: AgentId, name: string): string[] => {
+    const sign = profileOf(agent).screen.prompt;
+    const option = new RegExp(`^\\s*${sign}\\s+\\d{1,2}\\.\\s`, 'u');
+    // eslint-disable-next-line no-control-regex
+    const bare = (line: string): string => line.replace(/\x1b\[[0-9;:?]*[A-Za-z]/g, '');
+    return shot(agent, name).map((line) => (option.test(bare(line)) ? line.replace(sign, ' ') : line));
+  };
+
+  it('без указателя ни на одном варианте запрос разрешения и вопрос не читаются диалогом', () => {
+    const cases: [AgentId, string][] = [
+      ['claude', 'permission'],
+      ['claude', 'question'],
+      ['claude', 'question-review'],
+      ['codex', 'permission'],
+      ['codex', 'permission-mcp'],
+      ['codex', 'question'],
+      ['codex', 'pending-queued-opened'],
+    ];
+    for (const [agent, name] of cases) {
+      // Снимок с указателем — диалог: иначе проверка ниже ничего бы не значила.
+      expect(read(agent, name).question, `${agent}/${name}`).toBeDefined();
+      const state = readScreen(unpointed(agent, name), profileOf(agent));
+      expect(`${agent}/${name} ${state.kind}`).toBe(`${agent}/${name} unknown`);
+      expect(state.question).toBeUndefined();
+    }
+  });
+
+  it('вопрос с отметками читается и тогда, когда указатель стоит на отправке, а не на варианте', () => {
+    const state = readScreen(unpointed('claude', 'question-multi'), profileOf('claude'));
+    expect(state.kind).toBe('question');
+    expect(state.question?.multi).toBe(true);
+    expect(state.question?.stamp).toBe(read('claude', 'question-multi').question?.stamp);
+  });
+
+  it('нумерованные пункты без признаков вопроса из профиля — не вопрос: menu либо unknown', () => {
+    // Неизмеренные экраны Claude: выбор темы и подтверждение плана. Подвалы — не из профиля.
+    const theme = [
+      ' Theme',
+      ' Choose the text style that looks best with your terminal',
+      '',
+      ' ❯ 1. Dark mode ✔',
+      '   2. Light mode',
+      '   3. Dark mode (colorblind-friendly)',
+      '',
+      ' Enter to confirm · Esc to exit',
+    ];
+    const plan = [
+      '⏺ Here is my plan',
+      '',
+      ' Ready to code?',
+      '',
+      ' ❯ 1. Yes, and auto-accept edits',
+      '   2. Yes, and manually approve edits',
+      '   3. No, keep planning',
+      '',
+      ' ctrl-g to edit in editor',
+    ];
+    const bare = ['Pick one', '', '❯ 1. First', '  2. Second'];
+    // То же с подвалами, которые у Claude стоят под вопросом и под запросом разрешения:
+    // одного подвала мало — у вопроса над заголовком полоса шагов, у запроса разрешения
+    // заголовок начинается с «Do you want to».
+    const rule = '─'.repeat(60);
+    const themeLikeQuestion = [
+      rule,
+      ' Theme',
+      ' Choose the text style that looks best with your terminal',
+      '❯ 1. Dark mode',
+      '  2. Light mode',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ];
+    const planLikePermission = [
+      rule,
+      ' Ready to code?',
+      ' Here is the plan',
+      ' Would you like to proceed?',
+      ' ❯ 1. Yes, and auto-accept edits',
+      '   2. No, keep planning',
+      ' Esc to cancel · Tab to amend',
+    ];
+    for (const lines of [themeLikeQuestion, planLikePermission]) {
+      const state = readScreen(lines, profileOf('claude'));
+      expect(`${lines[1]} → ${state.kind}`).toBe(`${lines[1]} → unknown`);
+    }
+    for (const lines of [theme, plan, bare]) {
+      for (const agent of ['claude', 'codex'] as const) {
+        const state = readScreen(lines, profileOf(agent));
+        expect(['menu', 'unknown']).toContain(state.kind);
+        expect(state.question).toBeUndefined();
+      }
+    }
   });
 });

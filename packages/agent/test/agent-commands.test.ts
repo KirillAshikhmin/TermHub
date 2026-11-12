@@ -119,8 +119,35 @@ class Sim {
   }
 }
 
+/** Список со сверкой — так его просит запрос, прошедший проверку Origin. */
+const listVerified = (session: string, sources: Partial<CommandsSources>): ReturnType<typeof sessionCommands> =>
+  sessionCommands(session, sources, { verify: true });
+
 const builtinNames = profileOf('claude').builtins.map((b) => b.name);
 const cacheFile = (): string => path.join(home, '.termhub', 'commands-claude-2.1.322.json');
+
+describe('sessionCommands — чтение без сверки', () => {
+  it('без просьбы о сверке клавиши в панель не идут даже у ожидающего агента; список — с диска и из профиля', async () => {
+    write(path.join(home, '.claude/commands/ship.md'), '---\ndescription: Ship the build\n---\nbody');
+    const sim = new Sim(['help', 'zeta-from-screen']);
+    const res = await sessionCommands('work', sim.sources());
+    if (!res.ok) throw new Error(res.detail);
+    expect(sim.sent).toEqual([]);
+    expect(res.verified).toBe(false);
+    expect(res.commands.map((c) => c.name)).toContain('ship');
+    expect(res.commands.map((c) => c.name)).not.toContain('zeta-from-screen');
+  });
+
+  it('готовый результат сверки чтение отдаёт из кэша — тоже без клавиш', async () => {
+    await listVerified('work', new Sim(['help', 'zeta-from-screen']).sources());
+    const sim = new Sim(['help', 'zeta-from-screen']);
+    const res = await sessionCommands('work', sim.sources());
+    if (!res.ok) throw new Error(res.detail);
+    expect(sim.sent).toEqual([]);
+    expect(res.verified).toBe(true);
+    expect(res.commands.map((c) => c.name)).toContain('zeta-from-screen');
+  });
+});
 
 describe('sessionCommands — каталоги на диске', () => {
   it('встроенные, пользовательские и проектные команды и навыки: имя, подсказка, источник', async () => {
@@ -129,7 +156,7 @@ describe('sessionCommands — каталоги на диске', () => {
     write(path.join(home, '.claude/skills/alpha/SKILL.md'), '---\nname: alpha\ndescription: Does alpha things\n---\n# alpha');
     write(path.join(project, '.claude/commands/local.md'), '---\ndescription: Project only\n---\n');
     const sim = new Sim([], { kind: 'working' });
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.commands.slice(0, builtinNames.length).map((c) => c.name)).toEqual(builtinNames);
     const rest = res.commands.slice(builtinNames.length);
@@ -156,13 +183,13 @@ describe('sessionCommands — каталоги на диске', () => {
     write(path.join(home, '.claude/skills/noname/SKILL.md'), '---\nname: noname\n---\n');
     write(path.join(home, '.claude/commands/ok.md'), '---\ndescription: fine\n---\n');
     fs.mkdirSync(path.join(home, '.claude/commands/emptydir'), { recursive: true });
-    const res = await sessionCommands('work', new Sim([], { kind: 'working' }).sources());
+    const res = await listVerified('work', new Sim([], { kind: 'working' }).sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.commands.slice(builtinNames.length)).toEqual([{ name: 'ok', hint: 'fine', source: 'user' }]);
   });
 
   it('каталогов нет вовсе — одни встроенные, запрос не падает', async () => {
-    const res = await sessionCommands('work', new Sim([], { kind: 'working' }).sources({ cwd: async () => undefined }));
+    const res = await listVerified('work', new Sim([], { kind: 'working' }).sources({ cwd: async () => undefined }));
     if (!res.ok) throw new Error(res.detail);
     expect(res.commands.map((c) => c.name)).toEqual(builtinNames);
     expect(res.commands.every((c) => c.source === 'builtin')).toBe(true);
@@ -170,7 +197,7 @@ describe('sessionCommands — каталоги на диске', () => {
 
   it('команда диска с именем встроенной встроенную не дублирует', async () => {
     write(path.join(home, '.claude/commands/compact.md'), '---\ndescription: my compact\n---\n');
-    const res = await sessionCommands('work', new Sim([], { kind: 'working' }).sources());
+    const res = await listVerified('work', new Sim([], { kind: 'working' }).sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.commands.filter((c) => c.name === 'compact')).toEqual([
       expect.objectContaining({ name: 'compact', source: 'builtin' }),
@@ -179,7 +206,7 @@ describe('sessionCommands — каталоги на диске', () => {
 
   it('нет агента в панели — отказ той же причиной, что у экрана', async () => {
     const sim = new Sim([]);
-    const res = await sessionCommands(
+    const res = await listVerified(
       'work',
       sim.sources({ resolve: async () => ({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' }) }),
     );
@@ -194,7 +221,7 @@ describe('sessionCommands — сверка с экраном агента', () =
 
   it('листает окно списка до конца, добавляет неизвестные команды пометкой screen, возвращает строку пустой и запоминает на хосте', async () => {
     const sim = new Sim(full());
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(true);
     const added = res.commands.filter((c) => c.source === 'screen');
@@ -218,17 +245,17 @@ describe('sessionCommands — сверка с экраном агента', () =
 
   it('второй раз клавиши не шлются: список берётся из сохранённого', async () => {
     const first = new Sim(full());
-    const a = await sessionCommands('work', first.sources());
+    const a = await listVerified('work', first.sources());
     const second = new Sim(full());
-    const b = await sessionCommands('work', second.sources());
+    const b = await listVerified('work', second.sources());
     expect(second.sent).toEqual([]);
     expect(b).toEqual(a);
   });
 
   it('сохранённое читается и когда агент занят: версия та же — сверка уже была', async () => {
-    await sessionCommands('work', new Sim(full()).sources());
+    await listVerified('work', new Sim(full()).sources());
     const busy = new Sim([], { kind: 'working' });
-    const res = await sessionCommands('work', busy.sources());
+    const res = await listVerified('work', busy.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(true);
     expect(res.commands.filter((c) => c.source === 'screen').map((c) => c.name)).toEqual(extra);
@@ -236,9 +263,9 @@ describe('sessionCommands — сверка с экраном агента', () =
   });
 
   it('другая версия агента — новая сверка', async () => {
-    await sessionCommands('work', new Sim(full()).sources());
+    await listVerified('work', new Sim(full()).sources());
     const next = new Sim([...full(), 'brand-new']);
-    const res = await sessionCommands('work', next.sources({ version: async () => ({ version: '2.1.400' }) }));
+    const res = await listVerified('work', next.sources({ version: async () => ({ version: '2.1.400' }) }));
     if (!res.ok) throw new Error(res.detail);
     expect(next.sent.length).toBeGreaterThan(0);
     expect(res.commands.map((c) => c.name)).toContain('brand-new');
@@ -247,7 +274,7 @@ describe('sessionCommands — сверка с экраном агента', () =
 
   it('агент работает — сверка невозможна: verified false, клавиши не посланы, ничего не сохранено', async () => {
     const sim = new Sim(full(), { kind: 'working' });
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(false);
     expect(sim.sent).toEqual([]);
@@ -257,7 +284,7 @@ describe('sessionCommands — сверка с экраном агента', () =
   it('в строке агента уже текст — сверка невозможна, строка не тронута', async () => {
     const sim = new Sim(full(), { kind: 'input' });
     sim.input = 'hello draft text';
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(false);
     expect(sim.sent).toEqual([]);
@@ -267,21 +294,21 @@ describe('sessionCommands — сверка с экраном агента', () =
   it('список длиннее предела: verified false, строка возвращена пустой, не сохранено, повторно клавиши не шлются', async () => {
     const many = Array.from({ length: 600 }, (_, i) => `cmd-${i}`);
     const sim = new Sim(many);
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(false);
     expect(sim.input).toBe('');
     expect(sim.sent.filter((k) => k === DOWN).length).toBeLessThanOrEqual(300);
     expect(fs.existsSync(cacheFile())).toBe(false);
     const before = sim.sent.length;
-    await sessionCommands('work', sim.sources());
+    await listVerified('work', sim.sources());
     expect(sim.sent).toHaveLength(before);
   });
 
   it('срок 5 с: по часам, а не по числу нажатий', async () => {
     const sim = new Sim(Array.from({ length: 250 }, (_, i) => `cmd-${i}`));
     let clock = 0;
-    const res = await sessionCommands(
+    const res = await listVerified(
       'work',
       sim.sources({
         // Каждый вызов часов — 100 мс: за 5 секунд успевает меньше сотни нажатий.
@@ -296,7 +323,7 @@ describe('sessionCommands — сверка с экраном агента', () =
 
   it('если Backspace не стёр строку, она стирается клавишами профиля — и только тогда, когда в ней текст', async () => {
     const sim = new Sim(full(), { delClears: false });
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(sim.input).toBe('');
     expect(sim.sent.slice(-2)).toEqual(['\x1b', '\x1b']);
@@ -316,7 +343,7 @@ describe('sessionCommands — сверка с экраном агента', () =
         if (sim.ptr >= sim.scroll + WINDOW) sim.scroll = sim.ptr - WINDOW + 1;
       }
     };
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(false);
     expect(fs.existsSync(cacheFile())).toBe(false);
@@ -325,7 +352,7 @@ describe('sessionCommands — сверка с экраном агента', () =
   it('испорченный файл сохранённого игнорируется: сверка идёт заново', async () => {
     write(cacheFile(), '{не json');
     const sim = new Sim(full());
-    const res = await sessionCommands('work', sim.sources());
+    const res = await listVerified('work', sim.sources());
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(true);
     expect(sim.sent.length).toBeGreaterThan(0);
@@ -362,7 +389,7 @@ describe('sessionCommands — сверка с экраном агента', () =
         sim.input += text;
       },
     };
-    const res = await sessionCommands('work', sources);
+    const res = await listVerified('work', sources);
     if (!res.ok) throw new Error(res.detail);
     expect(act).toBeDefined();
     const acted = await act!;

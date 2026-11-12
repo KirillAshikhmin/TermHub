@@ -149,3 +149,79 @@ describe('раскрытие вехи сжатия', () => {
     expect(page.entries.at(-1)!.text).toBe('продолжаю');
   });
 });
+
+// G41: запись сжатия длиннее окна чтения (на живых данных — 4,19 МБ при окне 4 МиБ) лента
+// перешагивает, и веха пропадала вовсе. Теперь по началу такой строки ставится веха без
+// раскрытия: сохранённое из неё не читается.
+describe('веха сжатия длиннее окна чтения', () => {
+  const before = {
+    timestamp: '2026-11-12T10:00:01.000Z',
+    type: 'response_item',
+    payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'до сжатия' }] },
+  };
+  const giant = (message = ''): object =>
+    compacted({ ...RETAINED, user_messages: [msg(0, 'x'.repeat(5 * 1024 * 1024))] }, message);
+
+  /** Вся беседа страницами назад от хвоста — так её дочитывает экран. */
+  async function allBack(file: string): Promise<FeedPage['entries']> {
+    const out: FeedPage['entries'] = [];
+    let cursor: string | undefined;
+    for (let i = 0; i < 20; i += 1) {
+      const page = (await readFeed(file, 'codex', cursor === undefined ? {} : { before: cursor })) as FeedPage;
+      expect(page.ok).toBe(true);
+      out.unshift(...page.entries);
+      if (page.bof) return out;
+      cursor = page.head;
+    }
+    throw new Error('начало беседы не достигнуто');
+  }
+
+  /** И вперёд от начала файла. */
+  async function allForward(file: string): Promise<FeedPage['entries']> {
+    const out: FeedPage['entries'] = [];
+    let cursor = `${fs.statSync(file).ino}:0`;
+    for (let i = 0; i < 20; i += 1) {
+      const page = (await readFeed(file, 'codex', { after: cursor })) as FeedPage;
+      expect(page.ok).toBe(true);
+      out.push(...page.entries);
+      if (page.eof) return out;
+      cursor = page.tail;
+    }
+    throw new Error('конец беседы не достигнут');
+  }
+
+  it('назад от хвоста: веха стоит на своём месте, один раз и без раскрытия', async () => {
+    const file = put('long-back.jsonl', [meta, before, giant(), after]);
+    const entries = await allBack(file);
+    expect(entries.map((e) => e.note ?? e.text)).toEqual(['до сжатия', 'compacted', 'продолжаю']);
+    const mark = entries[1]!;
+    expect(mark.kind).toBe('note');
+    expect(mark.at).toBe(Date.parse('2026-11-12T10:00:05.000Z'));
+    expect(mark.retained).toBeUndefined();
+    expect(mark.cursor).toMatch(/^\d+:\d+$/);
+  });
+
+  it('вперёд от начала: та же веха, один раз', async () => {
+    const file = put('long-fwd.jsonl', [meta, before, giant(), after]);
+    const entries = await allForward(file);
+    expect(entries.map((e) => e.note ?? e.text)).toEqual(['до сжатия', 'compacted', 'продолжаю']);
+    expect(entries[1]!.retained).toBeUndefined();
+  });
+
+  it('итог сжатия, стоящий в начале записи, остаётся текстом вехи', async () => {
+    const file = put('long-text.jsonl', [meta, before, giant('итог: сделано «А», осталось "Б"'), after]);
+    const mark = (await allBack(file)).find((e) => e.note === 'compacted');
+    expect(mark?.text).toBe('итог: сделано «А», осталось "Б"');
+  });
+
+  it('строка-переросток другого вида вехой не становится', async () => {
+    const big = {
+      timestamp: '2026-11-12T10:00:05.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call_output', call_id: 'c1', output: 'compacted '.repeat(600 * 1024) },
+    };
+    const file = put('long-other.jsonl', [meta, before, big, after]);
+    expect((await allBack(file)).map((e) => e.note ?? e.text)).toEqual(['до сжатия', 'продолжаю']);
+    expect((await allForward(file)).map((e) => e.note ?? e.text)).toEqual(['до сжатия', 'продолжаю']);
+  });
+});

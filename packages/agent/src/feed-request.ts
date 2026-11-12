@@ -47,6 +47,13 @@ export async function feedPage(
   }
 }
 
+/** Просит ли запрос подробности действия (вывод команды, содержимое правки), а не страницу
+ *  ленты — тем же правилом, каким его читает `feedPage`. По нему мост relay решает, хватает
+ *  ли гостю прав: подробности требуют права `files`. */
+export function wantsDetail(raw: Record<string, unknown>): boolean {
+  return !usageFlag(raw.usage) && cursorValue(raw.detail) !== undefined;
+}
+
 /** Флаг расхода: `true` из кадра, `1`/`true` из query-строки; пусто — флага нет. */
 function usageFlag(value: unknown): boolean {
   return value === true || value === 1 || value === '1' || value === 'true';

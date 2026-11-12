@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
-import type { Duplex } from 'node:stream';
+import { pipeline, type Duplex } from 'node:stream';
 import type { TermhubConfig } from './config.js';
 import { describeDial, readRelayDial } from './relay-dial.js';
 import { verifyPassword, loadAuthorized, saveAuthorized, parseScope, VERSION } from './config.js';
@@ -259,7 +259,8 @@ export class AgentServer {
     this.act = opts.act ?? ((session, action) => sessionAct(session, action, { socketName: this.socketName }));
     this.detail =
       opts.detail ?? ((session, cursor) => sessionDetail(session, cursor, { socketName: this.socketName }));
-    this.commands = opts.commands ?? ((session) => sessionCommands(session, { socketName: this.socketName }));
+    this.commands =
+      opts.commands ?? ((session, verify) => sessionCommands(session, { socketName: this.socketName }, { verify }));
   }
 
   /** Регистрирует обработчик терминальных WS (Task 6). */
@@ -439,6 +440,7 @@ export class AgentServer {
     if (method === 'GET' && pathname === '/api/live') return this.liveApi(res, url);
     if (method === 'POST' && pathname === '/api/act') return this.actApi(req, res);
     if (method === 'GET' && pathname === '/api/commands') return this.commandsApi(res, url);
+    if (method === 'POST' && pathname === '/api/commands') return this.commandsVerifyApi(req, res);
     if (method === 'GET' && pathname === '/api/files/list') return this.filesList(res, url);
     if (method === 'GET' && pathname === '/api/files/read') return this.fileRead(res, url);
     if (method === 'GET' && pathname === '/api/files/stat') return this.fileStatHttp(res, url);
@@ -596,9 +598,24 @@ export class AgentServer {
     return this.sendJson(res, 200, await livePage(this.live, { session: url.searchParams.get('session') }));
   }
 
-  /** Команды агента сессии по LAN: то же тело, что кадр CommandsResult через relay. */
+  /** Команды агента сессии по LAN: то же тело, что кадр CommandsResult через relay. GET
+   *  только читает готовый список (профиль, диск, кэш сверки): проверки Origin у GET нет,
+   *  и клавиши по нему в панель не идут. */
   private async commandsApi(res: ServerResponse, url: URL): Promise<void> {
     return this.sendJson(res, 200, await commandsPage(this.commands, { session: url.searchParams.get('session') }));
+  }
+
+  /** Тот же список со сверкой по экрану агента: `{session, verify: true}`. Сверка нажимает
+   *  клавиши, поэтому идёт POST-запросом — он проходит проверку Origin выше. */
+  private async commandsVerifyApi(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Record<string, unknown>;
+    try {
+      body = await this.readJson(req, res);
+    } catch (err) {
+      if (!(err instanceof BadJsonError)) throw err;
+      body = {};
+    }
+    return this.sendJson(res, 200, await commandsPage(this.commands, { session: body.session, verify: body.verify }));
   }
 
   /** Действие чата по LAN: `{session, action}`. Тело, которое не разобрать (не JSON, не
@@ -712,26 +729,30 @@ export class AgentServer {
   }
 
   /** Картинка по абсолютному пути из сообщения чата (миниатюры). Все проверки — в
-   *  `FileService.readImage`: realpath, разрешённые каталоги, растр по сигнатуре, 20 МиБ.
+   *  `FileService.imageStream`: realpath, разрешённые каталоги, растр по сигнатуре, 20 МиБ.
    *  Отдаётся типом, узнанным по содержимому; `nosniff` и песочница не дают браузеру
    *  истолковать ответ как документ на нашем origin. Параметр `session` на LAN не нужен:
    *  гостей здесь нет (он есть в запросе ради одного вида на оба провода). */
   private async fileImage(res: ServerResponse, url: URL): Promise<void> {
     if (!this.files) return this.sendJson(res, 503, { error: 'file browser unavailable' });
-    let image: { mime: string; size: number; data: Buffer };
+    let image: Awaited<ReturnType<FileService['imageStream']>>;
     try {
-      image = await this.files.readImage(url.searchParams.get('path') ?? '');
+      image = await this.files.imageStream(url.searchParams.get('path') ?? '');
     } catch (err) {
       return this.sendJson(res, 400, { error: (err as Error).message });
     }
     res.writeHead(200, {
       'Content-Type': image.mime,
-      'Content-Length': String(image.data.length),
+      'Content-Length': String(image.size),
       'X-Content-Type-Options': 'nosniff',
       'Content-Security-Policy': "default-src 'none'; sandbox",
       'Cache-Control': 'private, no-store',
     });
-    res.end(image.data);
+    // Потоком: 20 МиБ в память не читаются. Сбой чтения посреди ответа рвёт соединение —
+    // заголовки уже ушли, и дописать нечего.
+    pipeline(image.stream, res, (err) => {
+      if (err) res.destroy();
+    });
   }
 
   /** Стрим файла с поддержкой Range (нативное видео/скачивание, LAN). */

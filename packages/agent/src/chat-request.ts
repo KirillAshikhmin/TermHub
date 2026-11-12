@@ -9,8 +9,9 @@ export type LiveReader = (session: string) => Promise<LiveResult>;
 /** Действие чата в сессии. */
 export type ActRunner = (session: string, action: ChatAction) => Promise<ActResult>;
 
-/** Команды агента сессии для подсказок. */
-export type CommandsReader = (session: string) => Promise<CommandsResult>;
+/** Команды агента сессии для подсказок. `verify` — сверить список с экраном агента: это
+ *  нажимает клавиши в панели, без него вызов только читает. */
+export type CommandsReader = (session: string, verify?: boolean) => Promise<CommandsResult>;
 
 /** Имя сессии из запроса. Не строка — пустое имя: отказ выдаст сам вызов. Гостю это имя
  *  сверяют с расшаренной сессией — до всякого чтения экрана. */
@@ -28,10 +29,11 @@ export async function livePage(read: LiveReader, raw: Record<string, unknown>): 
 }
 
 /** Список команд по запросу любого транспорта. Не бросает: сорванный вызов отвечает той же
- *  причиной, что и прочие запросы чата. */
+ *  причиной, что и прочие запросы чата. Сверку включает только поле `verify`, равное
+ *  `true`: строка из адреса запроса (`verify=1`) её не включает — GET обязан только читать. */
 export async function commandsPage(read: CommandsReader, raw: Record<string, unknown>): Promise<CommandsResult> {
   try {
-    return await read(chatSession(raw));
+    return await read(chatSession(raw), raw.verify === true);
   } catch (err) {
     return { ok: false, reason: 'lookup-failed', detail: (err as Error).message };
   }
@@ -57,7 +59,13 @@ export function parseAction(value: unknown): ChatAction | null {
   switch (raw.kind) {
     case 'prompt':
       if (typeof raw.text !== 'string') return null;
-      return { kind: 'prompt', text: raw.text, ...(raw.over === true ? { over: true } : {}) };
+      return {
+        kind: 'prompt',
+        text: raw.text,
+        ...(raw.over === true ? { over: true } : {}),
+        // Ключ идемпотентности: только у запроса; негодное значение — запрос без ключа.
+        ...(typeof raw.key === 'string' && raw.key !== '' && raw.key.length <= 128 ? { key: raw.key } : {}),
+      };
     case 'answer': {
       if (typeof raw.stamp !== 'string') return null;
       if (raw.option !== undefined && typeof raw.option !== 'string') return null;

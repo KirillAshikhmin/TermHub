@@ -6,6 +6,7 @@ import { constants as fsConstants } from 'node:fs';
 import fsp, { type FileHandle } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { FileContent, FileEntry, FileInfo } from '@termhub/protocol';
 import { openPathOnHost } from './host-open.js';
@@ -46,6 +47,8 @@ const MEDIA_MIME: Record<string, string> = {
 
 /** Предел картинки, отдаваемой по абсолютному пути (миниатюры чата). */
 export const IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+/** Кусок, которым картинка читается с диска при отдаче потоком. */
+const IMAGE_STREAM_CHUNK = 64 * 1024;
 /** Потолок одного куска картинки (relay). */
 const IMAGE_CHUNK_MAX = 4 * 1024 * 1024;
 /** Расширения, с которыми путь вообще рассматривается как картинка. SVG здесь нет намеренно:
@@ -211,6 +214,15 @@ export class FileService {
     } finally {
       await handle.close();
     }
+  }
+
+  /** Та же картинка потоком (LAN): файл идёт в ответ кусками по `IMAGE_STREAM_CHUNK`, в
+   *  память целиком не читается. Проверки — те же, читается проверенный дескриптор; он
+   *  закрывается с концом или обрывом потока. */
+  async imageStream(file: string, within?: string): Promise<{ mime: string; size: number; stream: Readable }> {
+    const { handle, size, mime } = await this.openImage(file, within);
+    const stream = handle.createReadStream({ start: 0, end: Math.max(0, size - 1), highWaterMark: IMAGE_STREAM_CHUNK });
+    return { mime, size, stream };
   }
 
   /** Кусок той же картинки (relay). Каждый кусок проходит все проверки заново: между

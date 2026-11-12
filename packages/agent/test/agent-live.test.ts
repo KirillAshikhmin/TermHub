@@ -68,6 +68,7 @@ function fake(
     },
     version: over.version ?? (async () => ({ version: agent === 'claude' ? '2.1.322' : '0.167.0', model: 'Fable 5.2' })),
     sleep: async () => undefined,
+    ...(over.now ? { now: over.now } : {}),
   };
   return state;
 }
@@ -233,12 +234,94 @@ describe('sessionAct — запрос', () => {
     expect(f.sent).toEqual(['paste:привет']);
   });
 
+  it('запрос разрешения всплыл между проверкой вставки и клавишей отправки — Enter ему не достаётся: stale', async () => {
+    const f = fake('claude', 'idle', (sent) => (sent.startsWith('paste:') ? claudeInput('привет') : undefined));
+    const capture = f.src.capture!;
+    let afterPaste = 0;
+    f.src.capture = async (session) => {
+      const got = await capture(session);
+      // Первый снимок после вставки показывает строку с текстом, следующий — уже диалог.
+      if (f.sent.length === 1 && ++afterPaste > 1) return { ...got, lines: shot('claude', 'permission') };
+      return got;
+    };
+    const result = await act(f, { kind: 'prompt', text: 'привет' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['paste:привет']);
+  });
+
+  it('текст в строке перед клавишей отправки уже не тот, что подтвердил вставку, — клавиша не идёт', async () => {
+    const f = fake('claude', 'idle', (sent) => (sent.startsWith('paste:') ? claudeInput('привет') : undefined));
+    const capture = f.src.capture!;
+    let afterPaste = 0;
+    f.src.capture = async (session) => {
+      const got = await capture(session);
+      if (f.sent.length === 1 && ++afterPaste > 1) return { ...got, lines: claudeInput('привет и ещё набранное в терминале') };
+      return got;
+    };
+    expect(await act(f, { kind: 'prompt', text: 'привет' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['paste:привет']);
+  });
+
   it('пустой запрос и запрос на экране вопроса отвергаются без клавиш', async () => {
     const empty = fake('claude', 'idle');
     expect(await act(empty, { kind: 'prompt', text: ' \n ' })).toMatchObject({ ok: false, reason: 'unsupported' });
     const asked = fake('claude', 'question');
     expect(await act(asked, { kind: 'prompt', text: 'привет' })).toMatchObject({ ok: false, reason: 'stale' });
     expect([...empty.sent, ...asked.sent]).toEqual([]);
+  });
+});
+
+describe('sessionAct — ключ идемпотентности запроса', () => {
+  const typed = (sent: string): string | string[] | undefined =>
+    sent.startsWith('paste:') ? claudeInput('привет') : sent === '\r' ? 'working' : undefined;
+
+  it('повтор с тем же ключом клавиш не шлёт и возвращает прежний результат', async () => {
+    let clock = 1000;
+    const f = fake('claude', 'idle', typed, { now: () => clock });
+    const first = await act(f, { kind: 'prompt', text: 'привет', key: 'k-1' });
+    expect(first).toMatchObject({ ok: true, screen: { kind: 'working' } });
+    expect(f.sent).toEqual(['paste:привет', '\r']);
+    clock += 119_000;
+    const again = await act(f, { kind: 'prompt', text: 'привет', key: 'k-1' });
+    expect(again).toEqual(first);
+    expect(f.sent).toEqual(['paste:привет', '\r']);
+  });
+
+  it('через две минуты ключ забыт; другой ключ, другая сессия и запрос без ключа идут заново', async () => {
+    let clock = 1000;
+    const f = fake('claude', 'idle', (sent) => (sent.startsWith('paste:') ? claudeInput('привет') : 'idle'), { now: () => clock });
+    await act(f, { kind: 'prompt', text: 'привет', key: 'k-2' });
+    await act(f, { kind: 'prompt', text: 'привет', key: 'k-3' });
+    await act(f, { kind: 'prompt', text: 'привет' });
+    await act(f, { kind: 'prompt', text: 'привет' });
+    expect(f.sent).toHaveLength(8);
+    await sessionAct('other', { kind: 'prompt', text: 'привет', key: 'k-2' }, f.src);
+    expect(f.sent).toHaveLength(10);
+    clock += 120_001;
+    await act(f, { kind: 'prompt', text: 'привет', key: 'k-2' });
+    expect(f.sent).toHaveLength(12);
+  });
+
+  it('отказ ключом не запоминается: запрос не доставлен, повтор идёт заново со сверкой экрана', async () => {
+    let shown = false;
+    const f = fake('claude', 'idle', (sent) => (sent.startsWith('paste:') && shown ? claudeInput('привет') : sent === '\r' ? 'working' : undefined), {
+      now: () => 1,
+    });
+    expect(await act(f, { kind: 'prompt', text: 'привет', key: 'k-4' })).toMatchObject({ ok: false, reason: 'stale' });
+    shown = true;
+    expect(await act(f, { kind: 'prompt', text: 'привет', key: 'k-4' })).toMatchObject({ ok: true });
+    expect(f.sent).toEqual(['paste:привет', 'paste:привет', '\r']);
+  });
+
+  it('два запроса с одним ключом разом — клавиши уходят один раз', async () => {
+    const f = fake('claude', 'idle', typed, { now: () => 1 });
+    f.src.sleep = () => new Promise((wake) => setTimeout(wake, 1));
+    const [a, b] = await Promise.all([
+      act(f, { kind: 'prompt', text: 'привет', key: 'k-5' }),
+      act(f, { kind: 'prompt', text: 'привет', key: 'k-5' }),
+    ]);
+    expect(b).toEqual(a);
+    expect(f.sent).toEqual(['paste:привет', '\r']);
   });
 });
 
@@ -331,7 +414,19 @@ describe('sessionAct — запрос работающему Codex', () => {
     );
     const result = await act(f, { kind: 'prompt', text: 'note one' });
     expect(f.sent).toEqual(['paste:note one', '\t']);
-    expect(screenOf(result).kind).toBe('menu');
+    // Успех после клавиши очереди — только строка ввода, и пустая: иной экран не доказывает,
+    // что сообщение встало в очередь.
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/is not at its input line/);
+  });
+
+  it('после Tab неузнанный экран — тоже отказ, а не успех', async () => {
+    const f = fake('codex', 'working', (sent) =>
+      sent.startsWith('paste:') ? 'queue-hint' : sent === '\t' ? ['$ ls', 'README.md'] : undefined,
+    );
+    const result = await act(f, { kind: 'prompt', text: 'note one' });
+    expect(f.sent).toEqual(['paste:note one', '\t']);
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
   });
 
   // Домер: при открытом списке по «/» или «@» Tab (и Enter) подставляют выбранное в строку.
@@ -936,13 +1031,27 @@ describe('sessionAct — прерывание, режим, модель, сжа�
     expect(f.sent).toEqual(['\x1b']);
   });
 
-  it('interrupt работает и на неузнанном экране, а на ожидании ввода клавишу не шлёт', async () => {
+  it('interrupt на неузнанном экране клавишу не шлёт и отвечает отказом, на ожидании ввода — не шлёт', async () => {
     const unknown = fake('claude', 'shell');
-    expect(await act(unknown, { kind: 'interrupt' })).toMatchObject({ ok: true, screen: { kind: 'unknown' } });
-    expect(unknown.sent).toEqual(['\x1b']);
+    expect(await act(unknown, { kind: 'interrupt' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(unknown.sent).toEqual([]);
     const idle = fake('claude', 'idle');
     expect(await act(idle, { kind: 'interrupt' })).toMatchObject({ ok: true, screen: { kind: 'idle' } });
     expect(idle.sent).toEqual([]);
+  });
+
+  it('interrupt на открытом вопросе очереди Codex Esc не шлёт: он прервал бы ход, а не вопрос', async () => {
+    for (const name of ['pending-queued-opened', 'pending-queued-other', 'pending-queued-first-of-two']) {
+      const f = fake('codex', name);
+      const result = await act(f, { kind: 'interrupt' });
+      expect(result).toMatchObject({ ok: false, reason: 'unsupported' });
+      expect(!result.ok && result.detail).toMatch(/would interrupt the agent's turn/);
+      expect(f.sent).toEqual([]);
+    }
+    // Обычный вопрос Codex прерывается по-прежнему.
+    const plain = fake('codex', 'question', () => 'idle');
+    expect(await act(plain, { kind: 'interrupt' })).toMatchObject({ ok: true });
+    expect(plain.sent).toEqual(['\x1b']);
   });
 
   it('на экране unknown и menu любое действие, кроме interrupt, — stale без клавиш', async () => {
@@ -986,6 +1095,33 @@ describe('sessionAct — прерывание, режим, модель, сжа�
     const result = await act(f, { kind: 'mode', to: 'auto' });
     expect(f.sent).toHaveLength(4);
     expect(screenOf(result).mode).toBe('accept');
+  });
+
+  /** Строка ввода Claude в режиме, которого в профиле нет. */
+  const bypass = (): string[] =>
+    shot('claude', 'idle-accept').map((line) => line.replace('accept edits on', 'bypass permissions on'));
+
+  it('mode: цикл прошёл через режим вне профиля — нажатия продолжаются до нужного', async () => {
+    const f = fake('claude', 'idle-plan', (_sent, index) => (index === 0 ? bypass() : 'idle-auto'));
+    expect(screenOf(await act(f, { kind: 'mode', to: 'auto' })).mode).toBe('auto');
+    expect(f.sent).toEqual(['\x1b[Z', '\x1b[Z']);
+  });
+
+  it('mode: остановились в режиме вне профиля — отказ называет фактический режим, а не успех', async () => {
+    const f = fake('claude', 'idle-plan', () => bypass());
+    const result = await act(f, { kind: 'mode', to: 'auto' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toContain('bypass permissions on');
+    // Из неизвестного режима нажатие, после которого экран не назвал известный, — последнее.
+    expect(f.sent).toEqual(['\x1b[Z', '\x1b[Z']);
+  });
+
+  it('mode: агент уже в режиме вне профиля — отказ называет его, клавиш нет', async () => {
+    const f = fake('claude', bypass());
+    const result = await act(f, { kind: 'mode', to: 'plan' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toContain('bypass permissions on');
+    expect(f.sent).toEqual([]);
   });
 
   it('model набирает команду меню моделей из профиля и отдаёт экран с меню', async () => {
@@ -1053,6 +1189,26 @@ describe('sessionAct — прерывание, режим, модель, сжа�
     };
     expect(await act(f, { kind: 'prompt', text: 'привет' })).toMatchObject({ ok: false, reason: 'stale' });
     expect(f.sent).toEqual(['paste:привет']);
+  });
+
+  it('активной стала другая панель после клавиши — отказ, а не успех с неузнанным экраном', async () => {
+    const cases: [AgentId, string, ChatAction, (sent: string) => string | string[] | undefined][] = [
+      ['claude', 'working', { kind: 'interrupt' }, () => undefined],
+      ['claude', 'idle', { kind: 'compact' }, (sent) => (sent === '/compact' ? claudeInput('/compact') : undefined)],
+      ['claude', 'idle', { kind: 'prompt', text: 'привет' }, (sent) => (sent.startsWith('paste:') ? claudeInput('привет') : undefined)],
+    ];
+    for (const [agent, start, action, react] of cases) {
+      const f = fake(agent, start, react);
+      const capture = f.src.capture!;
+      const last = action.kind === 'interrupt' ? '\x1b' : '\r';
+      f.src.capture = async (session) => {
+        const got = await capture(session);
+        return f.sent.at(-1) === last ? { ...got, pane: 'work:@1.%2' } : got;
+      };
+      const result = await act(f, action);
+      expect(result, action.kind).toMatchObject({ ok: false, reason: 'stale' });
+      expect(!result.ok && result.detail, action.kind).toMatch(/active pane/);
+    }
   });
 
   it('действия одной сессии идут по очереди и клавиши не перемешивают', async () => {

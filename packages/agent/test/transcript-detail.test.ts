@@ -163,6 +163,51 @@ describe('readDetail — Claude', () => {
     expect(output.includes('�')).toBe(false);
   });
 
+  it('несколько инструментов в одной строке: у каждого свой курсор и свои подробности', async () => {
+    const file = put('many.jsonl', [
+      {
+        type: 'assistant',
+        uuid: 'm1',
+        timestamp: at(1),
+        message: {
+          id: 'm-m1',
+          role: 'assistant',
+          model: 'm',
+          content: [
+            { type: 'text', text: 'Смотрю оба места.' },
+            { type: 'tool_use', id: 'tu-a', name: 'Bash', input: { command: 'ls src' } },
+            { type: 'tool_use', id: 'tu-b', name: 'Bash', input: { command: 'cat README.md' } },
+            { type: 'tool_use', id: 'tu-c', name: 'Read', input: { file_path: '/p/a.ts' } },
+          ],
+        },
+      },
+      result('r-b', 'tu-b', 'readme text', 2),
+      result('r-a', 'tu-a', 'a.ts\nb.ts', 3),
+      result('r-c', 'tu-c', 'file body', 4),
+    ]);
+    const page = (await readFeed(file, 'claude')) as FeedPage;
+    const tools = page.entries.filter((e) => e.kind === 'tool');
+    expect(tools).toHaveLength(3);
+    const cursors = tools.map((e) => e.cursor!);
+    expect(new Set(cursors).size).toBe(3);
+    // Первый инструмент и текст строки держат прежний курсор строки.
+    expect(cursors[0]).toBe(page.entries[0]!.cursor);
+    expect(cursors[0]).toMatch(/^\d+:\d+$/);
+    expect(await readDetail(file, 'claude', cursors[0]!)).toMatchObject({ ok: true, input: 'ls src', output: 'a.ts\nb.ts' });
+    expect(await readDetail(file, 'claude', cursors[1]!)).toMatchObject({
+      ok: true,
+      input: 'cat README.md',
+      output: 'readme text',
+    });
+    expect(await readDetail(file, 'claude', cursors[2]!)).toMatchObject({ ok: true, output: 'file body' });
+    // Курсор любого из них годится для прыжка: страница вокруг — та же строка целиком.
+    const around = (await readFeed(file, 'claude', { around: cursors[2]! })) as FeedPage;
+    expect(around.ok).toBe(true);
+    expect(around.entries.filter((e) => e.kind === 'tool').map((e) => e.cursor)).toEqual(cursors);
+    // Инструмента с таким номером в строке нет — курсор не на действии.
+    expect(await readDetail(file, 'claude', `${cursors[0]}#7`)).toMatchObject({ ok: false, reason: 'cursor-stale' });
+  });
+
   it('курсор не на действии, чужой файл и середина строки — cursor-stale', async () => {
     const file = put('stale.jsonl', [human('u0', 'привет', 0), call('a1', 'toolu_1', 'Bash', { command: 'ls' }, 1)]);
     const page = (await readFeed(file, 'claude')) as FeedPage;

@@ -69,8 +69,15 @@ const SEGMENT_RE = /^[\p{L}\p{N}_.@-]{1,64}$/u;
 const VERSION_RE = /^[\w.+-]{1,40}$/;
 const PANE_ID_RE = /%\d+$/;
 
-/** Список команд агента сессии. Не бросает: любой сбой — причиной отказа. */
-export async function sessionCommands(session: string, sources?: Partial<CommandsSources>): Promise<CommandsResult> {
+/** Список команд агента сессии. Не бросает: любой сбой — причиной отказа. Без `verify` —
+ *  только чтение: профиль, каталоги на диске и готовый результат сверки; клавиш в панель
+ *  не идёт. Сверку с экраном (она нажимает клавиши) запускает только `verify: true` — его
+ *  ставит запрос, прошедший проверку Origin, а не чтение по GET. */
+export async function sessionCommands(
+  session: string,
+  sources?: Partial<CommandsSources>,
+  opts: { verify?: boolean } = {},
+): Promise<CommandsResult> {
   const src = withDefaults(sources);
   try {
     const live = await sessionLive(session, src);
@@ -88,6 +95,7 @@ export async function sessionCommands(session: string, sources?: Partial<Command
 
     const known = await readCache(src.stateDir, live.agent, version);
     if (known) return { ok: true, commands: withExtras(base, known), verified: true };
+    if (opts.verify !== true) return { ok: true, commands: base, verified: false };
     // Агент занят или в его строке текст — сверка невозможна сейчас, а не вообще.
     if (live.screen.kind !== 'idle' || live.screen.input !== '') {
       return { ok: true, commands: base, verified: false };
