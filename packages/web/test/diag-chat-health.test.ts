@@ -55,4 +55,23 @@ describe('диагностика — сбои чата', () => {
     expect(root.querySelector('.th-diag__chat-row')!.textContent).toContain('codex');
     stop();
   });
+
+  it('у сессии видны последняя причина неузнанного экрана и её время', async () => {
+    noteUnknown('work', 'claude', '2.1.322', 'no footer line');
+    noteUnknown('work', 'claude', '2.1.322', 'no input box');
+    noteFailure('work', 'mode', 'claude', '2.1.322');
+    const stop = mountDiag(root);
+    await vi.waitFor(() => expect(root.querySelector('.th-diag__chat-row')).not.toBeNull());
+    const why = root.querySelector('.th-diag__chat-why')!;
+    expect(why.textContent).toBe(`${t('chat.term.why')} no input box · ${t('time.justNow')}`);
+    stop();
+  });
+
+  it('причины не было (агент старше) — строки причины нет', async () => {
+    noteUnknown('w', 'codex');
+    const stop = mountDiag(root);
+    await vi.waitFor(() => expect(root.querySelector('.th-diag__chat-row')).not.toBeNull());
+    expect(root.querySelector('.th-diag__chat-why')).toBeNull();
+    stop();
+  });
 });

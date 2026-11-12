@@ -19,7 +19,7 @@ const transport = {
   clientScope: null,
   capabilities: async () => ['feed', 'chat'],
   gradle: async () => null,
-  list: async () => [{ name: 'work', command: 'claude', path: '/r' }],
+  list: async () => [{ name: 'work', command: 'claude', path: '/r', title: '' }],
   dirs: async () => [],
   live: async () => current,
   act: async () => ({ ok: true, screen: { kind: 'idle' } }),
@@ -61,5 +61,29 @@ describe('чат: живая часть в оболочке', () => {
     expect(feedCalls.filter((c) => c.after !== undefined).length).toBeGreaterThan(before);
     chat.teardown();
     expect(host.querySelector('.th-live__controls')).toBeNull();
+  });
+});
+
+describe('чат: вид и строка «в терминале набрано» в оболочке', () => {
+  it('набранное в строке агента видно над полем; человек начал писать в поле — строка уходит', async () => {
+    current = { ok: true, agent: 'claude', tested: true, screen: { kind: 'idle', input: 'из терминала' }, modes: [], models: [] };
+    const chat = mountChat(host, 'work', transport);
+    await vi.advanceTimersByTimeAsync(10);
+    const line = chat.el.querySelector<HTMLElement>('.th-typed')!;
+    expect(line.hidden).toBe(false);
+    expect(line.querySelector('.th-typed__text')!.textContent).toBe('из терминала');
+    expect(line.compareDocumentPosition(chat.slots.composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    chat.composer!.setText('моё');
+    expect(line.hidden).toBe(true);
+    chat.teardown();
+  });
+
+  it('область чата несёт переменные вида из настроек терминала', async () => {
+    current = state('idle');
+    const chat = mountChat(host, 'work', transport);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(chat.el.style.getPropertyValue('--chat-fs')).toMatch(/^\d+px$/);
+    expect(chat.el.style.getPropertyValue('--chat-lh')).toBe('1');
+    chat.teardown();
   });
 });

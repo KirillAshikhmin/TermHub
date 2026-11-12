@@ -563,6 +563,17 @@ const ru: Dict = {
       output: 'Вывод',
       gone: 'Подробностей больше нет',
     },
+    typed: {
+      label: 'В терминале набрано:',
+    },
+    term: {
+      title: 'Терминал',
+      close: 'Закрыть окно терминала',
+      why: 'Причина:',
+      whyUnknown: 'экран агента не узнан',
+      whyMenu: 'Меню агента: {menu}',
+      whyManual: 'открыто вручную',
+    },
     slot: {
       status: 'Состояние агента',
       question: 'Вопрос агента',
@@ -1209,6 +1220,17 @@ const en: Dict = {
       input: 'Command',
       output: 'Output',
       gone: 'The details are gone',
+    },
+    typed: {
+      label: 'Typed in the terminal:',
+    },
+    term: {
+      title: 'Terminal',
+      close: 'Close the terminal window',
+      why: 'Reason:',
+      whyUnknown: 'agent screen not recognized',
+      whyMenu: 'Agent menu: {menu}',
+      whyManual: 'opened manually',
     },
     slot: {
       status: 'Agent state',

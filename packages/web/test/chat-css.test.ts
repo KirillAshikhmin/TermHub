@@ -77,3 +77,95 @@ describe('живая часть чата', () => {
     expect(getComputedStyle(win).display).toBe('none');
   });
 });
+
+describe('окно терминала — в границах области чата', () => {
+  const shell = (): { area: HTMLElement; win: HTMLElement; term: HTMLElement } => {
+    const area = el('main', 'th-chat');
+    document.body.append(area);
+    const slot = el('div', 'th-chat__slot th-chat__slot--terminal', area);
+    const win = el('div', 'th-chat-term', slot);
+    el('div', 'th-chat-term__head', win);
+    const body = el('div', 'th-chat-term__body', win);
+    const term = el('div', 'th-term', body);
+    return { area, win, term };
+  };
+
+  it('окно привязано к области чата, а не к окну браузера; терминал внутри не fixed и не во весь экран', () => {
+    const { area, win, term } = shell();
+    expect(getComputedStyle(area).position).toBe('relative');
+    expect(getComputedStyle(win).position).toBe('absolute');
+    expect(getComputedStyle(win.parentElement!).position).not.toMatch(/relative|absolute|fixed/);
+    expect(getComputedStyle(term).position).toBe('relative');
+    expect(getComputedStyle(term).height).not.toBe('100dvh');
+    expect(getComputedStyle(term).width).not.toBe('100%');
+  });
+
+  it('кнопка закрытия — не меньше 44 px', () => {
+    const { win } = shell();
+    const close = el('button', 'th-chat-term__close', win.querySelector<HTMLElement>('.th-chat-term__head')!);
+    expect(getComputedStyle(close).minWidth).toBe('44px');
+    expect(getComputedStyle(close).minHeight).toBe('44px');
+  });
+});
+
+describe('переписка по ширине и параметры вида', () => {
+  const area = (): HTMLElement => {
+    const root = el('main', 'th-chat');
+    document.body.append(root);
+    root.append(chat);
+    return root;
+  };
+
+  it('колонка переписки не ограничена по ширине и не центрируется; плашка человека остаётся справа', () => {
+    area();
+    for (const cls of ['th-feed__items', 'th-feed__local-list']) {
+      const col = el('div', cls, chat);
+      expect(getComputedStyle(col).maxWidth, cls).toMatch(/^(none|)$/);
+      expect(getComputedStyle(col).marginLeft, cls).not.toBe('auto');
+      expect(getComputedStyle(col).marginRight, cls).not.toBe('auto');
+    }
+    const human = el('div', 'th-feed__entry th-feed__entry--human', chat);
+    expect(getComputedStyle(human).alignSelf).toBe('flex-end');
+  });
+
+  it('размер, семейство и интервал берутся из переменных области чата', () => {
+    const root = area();
+    root.style.setProperty('--chat-fs', '18px');
+    root.style.setProperty('--chat-input-fs', '19px');
+    root.style.setProperty('--chat-mono', 'Menlo, monospace');
+    root.style.setProperty('--chat-font', 'Menlo, sans-serif');
+    const text = el('div', 'th-feed__text', el('div', 'th-feed__entry th-feed__entry--agent', chat));
+    const code = el('code', 'th-md__code', text);
+    const q = el('div', 'th-live-q', root);
+    const qBody = el('pre', 'th-live-q__body', q);
+    const out = el('pre', 'th-tool__output', chat);
+    const field = el('textarea', 'th-composer__field', el('div', 'th-composer', root));
+    expect(getComputedStyle(text).fontSize).toBe('18px');
+    expect(getComputedStyle(code).fontSize).toBe('18px');
+    expect(getComputedStyle(q).fontSize).toBe('18px');
+    expect(getComputedStyle(out).fontSize).toBe('18px');
+    expect(getComputedStyle(field).fontSize).toBe('19px');
+    expect(getComputedStyle(root).fontFamily).toBe('Menlo, sans-serif');
+    for (const node of [code, qBody, out]) expect(getComputedStyle(node).fontFamily).toBe('Menlo, monospace');
+    expect(css).toMatch(/\.th-feed--chat \.th-feed__text \{[^}]*line-height: calc\(1\.5 \* var\(--chat-lh, 1\)\)/);
+  });
+
+  it('фон области чата — фон терминала: контрастный выбор его меняет', () => {
+    const root = area();
+    const soft = getComputedStyle(root).backgroundColor;
+    document.documentElement.dataset.termBg = 'contrast';
+    const contrast = getComputedStyle(root).backgroundColor;
+    delete document.documentElement.dataset.termBg;
+    // светлая палитра (happy-dom): --term-bg и --term-bg-contrast
+    expect(soft).toBe('#f0f2f5');
+    expect(contrast).toBe('#ffffff');
+  });
+
+  it('лента без чата переменных вида не слушает', () => {
+    const plain = el('main', 'th-feed');
+    document.body.append(plain);
+    plain.style.setProperty('--chat-fs', '18px');
+    const text = el('div', 'th-feed__text', plain);
+    expect(getComputedStyle(text).fontSize).toBe('14.4px'); // 0.9rem ленты
+  });
+});

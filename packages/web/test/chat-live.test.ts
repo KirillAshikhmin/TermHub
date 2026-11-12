@@ -424,6 +424,53 @@ describe('окошко терминала', () => {
     await run(0);
     expect(mountedTerms[0]!.torn).toBe(true);
   });
+  it('закрытое кнопкой окно само не возвращается, пока экран не стал знакомым и снова неузнанным', async () => {
+    const fx = fixture(live({ kind: 'unknown' }));
+    await mount(fx);
+    expect(mountedTerms).toHaveLength(1);
+    q<HTMLButtonElement>('.th-chat-term__close')!.click();
+    expect(mountedTerms[0]!.torn).toBe(true);
+    expect(q('.th-live__term-btn')!.textContent).toBe(t('chat.live.showTerm'));
+    await run(3000); // экран всё ещё не узнан
+    expect(mountedTerms).toHaveLength(1);
+    fx.next(live(IDLE));
+    await run(1000);
+    fx.next(live({ kind: 'unknown' }));
+    await run(1000);
+    expect(mountedTerms).toHaveLength(2);
+    expect(mountedTerms[1]!.torn).toBe(false);
+  });
+
+  it('открытое вручную окно закрывается своей кнопкой и не держится дальше', async () => {
+    const fx = fixture(live(IDLE));
+    await mount(fx);
+    q<HTMLButtonElement>('.th-live__term-btn')!.click();
+    await run(0);
+    q<HTMLButtonElement>('.th-chat-term__close')!.click();
+    await run(2000);
+    expect(mountedTerms).toHaveLength(1);
+    expect(mountedTerms[0]!.torn).toBe(true);
+  });
+
+  it('шапка окна называет причину: текст распознавания, название меню, «открыто вручную», а без причины — «не узнан»', async () => {
+    const why = (): string => q('.th-chat-term__why')!.textContent ?? '';
+    const fx = fixture(live({ kind: 'unknown', why: 'no input box under the footer' }));
+    await mount(fx);
+    expect(why()).toBe(`${t('chat.term.why')} no input box under the footer`);
+    expect(healthRows()[0]).toMatchObject({ session: 'work', why: 'no input box under the footer' });
+    expect(healthRows()[0]!.whyAt).toBeGreaterThan(0);
+    fx.next(live({ kind: 'unknown' }));
+    await run(1000);
+    expect(why()).toBe(t('chat.term.whyUnknown'));
+    fx.next(live({ kind: 'menu', menu: 'resume' }));
+    await run(1000);
+    expect(why()).toBe(t('chat.term.whyMenu', { menu: 'resume' }));
+    fx.next(live(IDLE));
+    await run(1000);
+    q<HTMLButtonElement>('.th-live__term-btn')!.click();
+    await run(0);
+    expect(why()).toBe(t('chat.term.whyManual'));
+  });
 });
 
 describe('версия агента', () => {

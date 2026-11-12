@@ -29,6 +29,10 @@ export interface ComposerHandle {
   el: HTMLElement;
   focus(): void;
   setText(text: string): void;
+  /** Текст поля сейчас. */
+  text(): string;
+  /** Подписка на любую смену текста поля (набор, вставка, очистка); возвращает отписку. */
+  onText(fn: () => void): () => void;
   teardown(): void;
 }
 
@@ -167,10 +171,12 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
       files: attachments.filter((a) => a.state === 'done').map((a) => ({ name: a.name, path: a.path, image: a.image })),
     });
   };
+  const textListeners = new Set<() => void>();
   const changed = (): void => {
     syncSend();
     fit();
     save();
+    for (const fn of [...textListeners]) fn();
   };
   const setField = (text: string): void => {
     field.value = text;
@@ -698,6 +704,11 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     el: root,
     focus: () => field.focus(),
     setText: (text) => setField(text),
+    text: () => field.value,
+    onText: (fn) => {
+      textListeners.add(fn);
+      return () => textListeners.delete(fn);
+    },
     teardown: () => {
       disposed = true;
       vv?.removeEventListener('resize', onViewport);

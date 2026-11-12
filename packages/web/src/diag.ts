@@ -103,6 +103,12 @@ function chatHealthBlock(): HTMLElement {
     const who = [r.agent, r.version].filter(Boolean).join(' ');
     const kinds = FAILURE_KINDS.filter((k) => r.counts[k]).map((k) => `${t(`diag.chatKind.${k}`)} ×${r.counts[k]}`);
     item.textContent = `${r.session} · ${who} · ${kinds.join(', ')} · ${t('diag.chatLast', { time: formatRelativeTime(r.last, t) })}`;
+    if (typeof r.why === 'string' && r.why && typeof r.whyAt === 'number') {
+      const why = document.createElement('div');
+      why.className = 'th-diag__chat-why';
+      why.textContent = `${t('chat.term.why')} ${r.why} · ${formatRelativeTime(r.whyAt, t)}`;
+      item.append(why);
+    }
     box.append(item);
   }
   const reset = document.createElement('button');

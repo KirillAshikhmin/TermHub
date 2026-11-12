@@ -11,6 +11,8 @@
 
 import { mountComposer, type ComposerHandle } from './chat-composer';
 import { mountLive, type LiveHandle } from './chat-live';
+import { mountTyped } from './chat-typed';
+import { bindChatView } from './chat-view';
 import { mountFeed, type FeedHandle } from './feed';
 import { createPathLinker } from './chat-render';
 import { openCreateModal } from './dashboard';
@@ -73,6 +75,8 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
 
   const root = document.createElement('main');
   root.className = 'th-chat';
+  // Вид (шрифт, размер, интервал) — из настроек терминала, меняется на месте.
+  const unbindView = bindChatView(root);
 
   const offlineEl = document.createElement('div');
   offlineEl.className = 'th-chat__offline';
@@ -132,6 +136,10 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   const readOnly = !!transport.clientScope && !transport.clientScope.write;
   const composer: ComposerHandle | null = readOnly ? null : mountComposer(slots.composer, session, { transport, live, thread: feed });
 
+  // Текст, набранный в строке агента в терминале, виден над полем (и зрителю — без кнопки).
+  // Строка встаёт над рядом управления: тот остаётся вплотную к полю.
+  const typed = mountTyped(root.querySelector<HTMLElement>('.th-live__controls') ?? slots.composer, { live, field: composer });
+
   return {
     ...feed,
     el: root,
@@ -141,6 +149,8 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     composer,
     offline: () => isOffline,
     teardown: () => {
+      unbindView();
+      typed.teardown();
       composer?.teardown();
       live.teardown();
       feed.teardown();

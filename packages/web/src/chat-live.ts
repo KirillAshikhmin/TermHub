@@ -61,6 +61,13 @@ function button(cls: string, text: string, onClick: () => void): HTMLButtonEleme
 }
 
 /** Секунды работы — «1:05». */
+/** Причина, по которой распознавание не узнало экран (короткая английская строка агента).
+ *  Агент старше поля её не шлёт. */
+function whyOf(screen: ScreenState): string | undefined {
+  const why: unknown = screen.why;
+  return typeof why === 'string' && why.trim() ? why.trim() : undefined;
+}
+
 function clock(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -105,9 +112,17 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   controls.append(modeSel, modelBtn, ctxEl, compactBtn, termBtn);
   host.composer.before(controls);
 
-  const term: ChatTermHandle = mountChatTerm(host.terminal, session, transport);
   let manualTerm = false;
   let dismissedTerm = false;
+  // Закрыли кнопкой окна — то же, что «Скрыть терминал»: само окно не вернётся, пока
+  // экран не станет знакомым и снова неузнанным.
+  const term: ChatTermHandle = mountChatTerm(host.terminal, session, transport, {
+    onClose: () => {
+      manualTerm = false;
+      dismissedTerm = true;
+      syncTerminal();
+    },
+  });
 
   let notice: HTMLElement | null = null;
   const showNotice = (s: LiveState): void => {
@@ -196,6 +211,17 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   // ── Отрисовка ────────────────────────────────────────────────────────
   const needsTerminal = (k: Kind): boolean => k === 'unknown' || k === 'menu';
 
+  /** Почему открыто окно терминала — для его шапки. */
+  const termReason = (): string => {
+    const screen = state?.screen;
+    if (screen?.kind === 'menu') return screen.menu ? t('chat.term.whyMenu', { menu: screen.menu }) : t('chat.live.menu');
+    if (screen?.kind === 'unknown') {
+      const why = whyOf(screen);
+      return why ? `${t('chat.term.why')} ${why}` : t('chat.term.whyUnknown');
+    }
+    return manualTerm ? t('chat.term.whyManual') : '';
+  };
+
   const syncTerminal = (): void => {
     if (!state) {
       if (!manualTerm) term.hide();
@@ -205,6 +231,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       if (manualTerm || (needs && !dismissedTerm)) term.show();
       else term.hide();
     }
+    term.setReason(termReason());
     termBtn.textContent = term.visible() ? t('chat.live.hideTerm') : t('chat.live.showTerm');
   };
 
@@ -333,7 +360,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     if (next) {
       offline = false;
       if (!next.tested && next.version && !notice && versionNoticeDue(next.agent, next.version)) showNotice(next);
-      if (next.screen.kind === 'unknown' && prev?.screen.kind !== 'unknown') noteUnknown(session, next.agent, next.version);
+      if (next.screen.kind === 'unknown' && prev?.screen.kind !== 'unknown') noteUnknown(session, next.agent, next.version, whyOf(next.screen));
       // Закончил работу — расход и контекст изменились.
       if (prev?.screen.kind === 'working' && next.screen.kind !== 'working') void loadUsage();
     }

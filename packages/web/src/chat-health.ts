@@ -12,6 +12,9 @@ export interface HealthRow {
   counts: Partial<Record<FailureKind, number>>;
   /** Время последнего сбоя, мс. */
   last: number;
+  /** Последняя названная агентом причина неузнанного экрана и её время, мс. */
+  why?: string;
+  whyAt?: number;
 }
 
 const HEALTH_KEY = 'termhub.chatHealth';
@@ -36,20 +39,24 @@ function write(key: string, value: unknown): void {
   }
 }
 
-export function noteFailure(session: string, kind: FailureKind, agent: string, version?: string): void {
+export function noteFailure(session: string, kind: FailureKind, agent: string, version?: string, why?: string): void {
   const all = read<Record<string, HealthRow>>(HEALTH_KEY, {});
   const row: HealthRow = all[session] ?? { session, agent, counts: {}, last: 0 };
   row.agent = agent;
   if (version !== undefined) row.version = version;
   row.counts[kind] = (row.counts[kind] ?? 0) + 1;
   row.last = Date.now();
+  if (why) {
+    row.why = why;
+    row.whyAt = row.last;
+  }
   all[session] = row;
   write(HEALTH_KEY, all);
 }
 
-/** Экран, которого чат не узнал. */
-export function noteUnknown(session: string, agent: string, version?: string): void {
-  noteFailure(session, 'unknown', agent, version);
+/** Экран, которого чат не узнал; `why` — причина от распознавания, если агент её назвал. */
+export function noteUnknown(session: string, agent: string, version?: string, why?: string): void {
+  noteFailure(session, 'unknown', agent, version, why);
 }
 
 export function healthRows(): HealthRow[] {

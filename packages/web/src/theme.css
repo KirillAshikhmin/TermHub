@@ -4342,13 +4342,16 @@ main.th-feed {
    свёрнутыми строками. Горизонтальной прокрутки страницы нет: длинное
    переносится, код и таблицы едут в своих обёртках. */
 .th-chat {
-  position: relative; /* якорь для плавающей ⋮ (wireToolbar) */
+  position: relative; /* якорь для плавающей ⋮ (wireToolbar) и окна терминала */
   flex: 1;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  /* Вид — из настроек терминала (chat-view.ts ставит --chat-*; фон — выбор «мягкий /
+     контрастный» через data-term-bg на корне). */
+  background: var(--term-bg);
+  font-family: var(--chat-font, inherit);
 }
 .th-chat__thread {
   flex: 1;
@@ -4593,23 +4596,96 @@ main.th-feed {
   color: var(--text-dim);
   font-size: 0.8rem;
 }
-/* Окошко терминала в чате: невысокое, с панелью клавиш под экраном. */
+/* Окно терминала в чате: отдельное окно поверх области чата (якорь — .th-chat), со своей
+   шапкой и панелью клавиш под экраном. Не fixed: под боковую панель вкладок, шапку сессии
+   и полосу разделов оно не заходит. Место оболочки само высоты не занимает. */
 .th-chat-term {
+  position: absolute;
+  /* Верх области чата, не вся она: ряд управления и поле ввода остаются на виду. */
+  inset: 12px 12px auto;
+  height: min(70%, 640px);
+  z-index: 6;
   display: flex;
   flex-direction: column;
-  height: 42vh;
-  min-height: 220px;
-  margin: 6px 12px 0;
+  min-height: 0;
   border: 1px solid var(--border-strong);
-  border-radius: var(--r);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 .th-chat-term[hidden] {
   display: none;
 }
-.th-chat-term .th-term {
+.th-chat-term__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+}
+.th-chat-term__title {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.th-chat-term__why {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.th-chat-term__close {
+  flex: none;
+  margin-left: auto;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.th-chat-term__close:hover,
+.th-chat-term__close:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.th-chat-term__body {
+  position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Сам терминал — в теле окна, а не на весь экран (у .th-term по умолчанию fixed). */
+.th-chat-term .th-term {
+  position: relative;
+  left: auto;
+  top: auto;
+  width: auto;
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+/* Телефон: окно занимает область чата целиком. */
+@media (max-width: 600px) {
+  .th-chat-term {
+    inset: 0;
+    height: auto;
+    border: none;
+    border-radius: 0;
+  }
 }
 
 main.th-feed--chat {
@@ -4618,10 +4694,9 @@ main.th-feed--chat {
 .th-feed--chat .th-feed__list {
   padding: 12px 14px 18px;
 }
+/* Переписка идёт по всей ширине области чата: ни предела ширины, ни центрирования. */
 .th-feed--chat .th-feed__items {
   gap: 14px;
-  max-width: 860px;
-  margin: 0 auto;
   width: 100%;
 }
 /* Реплика человека — плашка справа, ширина по тексту, но не шире 85%. */
@@ -4640,8 +4715,29 @@ main.th-feed--chat {
   border: none;
 }
 .th-feed--chat .th-feed__text {
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--chat-fs, 0.95rem);
+  line-height: calc(1.5 * var(--chat-lh, 1));
+}
+/* Код, вывод действий и тело вопроса — шрифтом терминала из настроек вида. */
+.th-chat .th-md__code,
+.th-chat .th-md__inlinecode,
+.th-chat .th-tool__input,
+.th-chat .th-tool__output,
+.th-chat .th-diff__file,
+.th-chat .th-live-q__body {
+  font-family: var(--chat-mono, var(--font-mono));
+}
+.th-chat .th-md__code,
+.th-chat .th-tool__input,
+.th-chat .th-tool__output,
+.th-chat .th-diff__file,
+.th-chat .th-live-q__body {
+  font-size: var(--chat-fs, 0.8rem);
+  line-height: calc(1.45 * var(--chat-lh, 1));
+}
+.th-chat .th-live-q {
+  font-size: var(--chat-fs, inherit);
+  line-height: calc(1.5 * var(--chat-lh, 1));
 }
 .th-feed--chat .th-feed__entry--human .th-feed__text {
   white-space: pre-wrap;
@@ -4821,7 +4917,7 @@ main.th-feed--chat {
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-  background: var(--bg);
+  background: transparent;
 }
 .th-composer__row {
   display: flex;
@@ -4843,9 +4939,10 @@ main.th-feed--chat {
   background: var(--bg-elev);
   color: var(--text);
   font: inherit;
-  /* 16px — иначе iOS приближает страницу при фокусе. */
-  font-size: 16px;
-  line-height: 1.4;
+  /* Размер — из настроек вида; на тач-экране chat-view.ts не даёт ему опуститься ниже
+     16px — иначе iOS приближает страницу при фокусе. */
+  font-size: var(--chat-input-fs, 16px);
+  line-height: calc(1.4 * var(--chat-lh, 1));
 }
 .th-composer__field:focus {
   outline: none;
@@ -5043,10 +5140,58 @@ main.th-feed--chat {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 860px;
-  margin: 14px auto 0;
+  margin: 14px 0 0;
   width: 100%;
 }
 .th-feed__local-list:empty {
   display: none;
+}
+
+/* «В терминале набрано»: текст из строки агента над полем чата (chat-typed.ts). */
+.th-typed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 12px 0;
+  padding: 4px 6px 4px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r);
+  font-size: 0.8rem;
+  min-width: 0;
+}
+.th-typed__label {
+  flex: none;
+  color: var(--text-dim);
+}
+.th-typed__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--chat-mono, var(--font-mono));
+}
+.th-typed__take {
+  flex: none;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.th-typed__take:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (pointer: coarse) {
+  .th-typed__take {
+    min-height: 44px;
+  }
+}
+.th-diag__chat-why {
+  color: var(--text-dim);
+  font-size: 0.8rem;
 }
