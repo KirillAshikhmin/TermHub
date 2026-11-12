@@ -72,6 +72,14 @@ export function sniffImage(head: Uint8Array): string | null {
   return null;
 }
 
+/** Отказ отдать картинку: текст — одно из своих слов, без пути и системного кода. */
+class ImageRefusal extends Error {}
+
+/** Любой сбой файловой системы при чтении картинки — одним словом. */
+function unavailable(): never {
+  throw new ImageRefusal('Image unavailable');
+}
+
 /** Временные каталоги сессий агентов этого пользователя. Сегодня известен один: Claude Code
  *  держит временные файлы сессии в `/tmp/claude-<uid>/<каталог проекта>/<id сессии>/`
  *  (замер 12.11.2026: имена подкаталогов совпадают с именами файлов бесед). У Codex и
@@ -153,26 +161,30 @@ export class FileService {
    *  вызывающий. Порядок: вид пути → realpath → вложенность в разрешённый каталог →
    *  обычный файл → размер → сигнатура. Читается тот же дескриптор, что проверен. */
   private async openImage(file: string, within?: string): Promise<{ handle: FileHandle; size: number; mime: string }> {
-    if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file)) throw new Error('Not an absolute path');
-    if (!THUMB_EXT.has(path.extname(file).toLowerCase())) throw new Error('Not an image');
-    const real = await fsp.realpath(file);
-    const scopes = within === undefined ? await this.imageScopes() : [await fsp.realpath(within)];
-    if (!scopes.some((dir) => real.startsWith(dir + path.sep))) throw new Error('Path outside allowed directories');
+    if (typeof file !== 'string' || file.includes('\0') || !path.isAbsolute(file)) throw new ImageRefusal('Not an absolute path');
+    if (!THUMB_EXT.has(path.extname(file).toLowerCase())) throw new ImageRefusal('Not an image');
+    // Сбой файловой системы (нет файла, компонент пути — не каталог, нет прав) наружу идёт
+    // одним словом: системное сообщение несёт путь и выдаёт, что лежит на диске.
+    const real = await fsp.realpath(file).catch(unavailable);
+    const scopes = within === undefined ? await this.imageScopes() : [await fsp.realpath(within).catch(unavailable)];
+    if (!scopes.some((dir) => real.startsWith(dir + path.sep))) throw new ImageRefusal('Path outside allowed directories');
     // O_NOFOLLOW: последний компонент после realpath ссылкой быть не должен; O_NONBLOCK —
     // чтобы именованный канал под именем картинки не подвесил открытие.
-    const handle = await fsp.open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const handle = await fsp
+      .open(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
+      .catch(unavailable);
     try {
       const st = await handle.stat();
-      if (!st.isFile()) throw new Error('Not a file');
-      if (st.size > IMAGE_MAX_BYTES) throw new Error('Image is too large');
+      if (!st.isFile()) throw new ImageRefusal('Not a file');
+      if (st.size > IMAGE_MAX_BYTES) throw new ImageRefusal('Image is too large');
       const head = Buffer.alloc(SNIFF_BYTES);
       const { bytesRead } = await handle.read(head, 0, SNIFF_BYTES, 0);
       const mime = sniffImage(head.subarray(0, bytesRead));
-      if (!mime) throw new Error('Not an image');
+      if (!mime) throw new ImageRefusal('Not an image');
       return { handle, size: st.size, mime };
     } catch (err) {
       await handle.close().catch(() => undefined);
-      throw err;
+      throw err instanceof ImageRefusal ? err : new ImageRefusal('Image unavailable');
     }
   }
 
@@ -194,7 +206,7 @@ export class FileService {
   async readImage(file: string, within?: string): Promise<{ mime: string; size: number; data: Buffer }> {
     const { handle, size, mime } = await this.openImage(file, within);
     try {
-      const data = await this.readRange(handle, 0, size);
+      const data = await this.readRange(handle, 0, size).catch(unavailable);
       return { mime, size: data.length, data };
     } finally {
       await handle.close();
@@ -213,7 +225,7 @@ export class FileService {
     const want = Math.min(Math.max(Math.trunc(Number.isFinite(len) ? len : 0), 0), IMAGE_CHUNK_MAX);
     const { handle, size, mime } = await this.openImage(file, within);
     try {
-      const data = await this.readRange(handle, offset, Math.max(0, Math.min(want, size - offset)));
+      const data = await this.readRange(handle, offset, Math.max(0, Math.min(want, size - offset))).catch(unavailable);
       return { mime, size, data, eof: offset + data.length >= size };
     } finally {
       await handle.close();

@@ -777,13 +777,17 @@ describe('AgentServer — GET /api/files/image', () => {
         `${root}/../outside/secret.png`,
         path.join(root, 'page.png'),
         path.join(root, 'missing.png'),
+        path.join(root, 'page.png', 'x.png'),
         'shot.jpg',
         '',
       ]) {
         const res = await get(bad);
         expect(res.status, bad).toBe(400);
         expect(res.headers.get('content-type'), bad).toMatch(/^application\/json/);
-        expect(Object.keys((await res.json()) as object), bad).toEqual(['error']);
+        const body = (await res.json()) as { error: string };
+        expect(Object.keys(body), bad).toEqual(['error']);
+        // Текст отказа — одно из своих слов: ни системного кода, ни пути в нём нет.
+        expect(body.error, bad).toMatch(/^(Image unavailable|Not an image|Not an absolute path|Path outside allowed directories)$/);
       }
     } finally {
       await s.server.close();

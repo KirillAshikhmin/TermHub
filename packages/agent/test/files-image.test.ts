@@ -116,7 +116,10 @@ describe('FileService.readImage', () => {
 
   it('несуществующий файл, каталог и относительный путь — отказ', async () => {
     await fsp.mkdir(path.join(root, 'dir.png'));
-    await expect(files.readImage(path.join(root, 'missing.png'))).rejects.toThrow();
+    // Сбой файловой системы — своим словом: системного кода и пути в тексте нет.
+    await expect(files.readImage(path.join(root, 'missing.png'))).rejects.toThrow(/^Image unavailable$/);
+    await fsp.writeFile(path.join(root, 'plain.txt'), 'x');
+    await expect(files.readImage(path.join(root, 'plain.txt', 'x.png'))).rejects.toThrow(/^Image unavailable$/);
     await expect(files.readImage(path.join(root, 'dir.png'))).rejects.toThrow('Not a file');
     await expect(files.readImage('shot.png')).rejects.toThrow('Not an absolute path');
     await expect(files.readImage(`${root}/a\0.png`)).rejects.toThrow('Not an absolute path');

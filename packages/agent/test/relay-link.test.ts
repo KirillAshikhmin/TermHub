@@ -1154,19 +1154,42 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     expect(Buffer.concat([Buffer.from(head.data, 'base64'), Buffer.from(tail.data, 'base64')])).toEqual(PNG);
     expect((await image(owner, GUEST_SESSION, path.join(projectDir, 'notes.png'))).error).toBe('Not an image');
     expect((await image(owner, GUEST_SESSION, path.join(os.tmpdir(), 'nowhere.png'))).result).toBeUndefined();
+    // Хозяину отказ назван словами, но без системного сообщения и пути.
+    expect((await image(owner, GUEST_SESSION, path.join(projectDir, 'missing.png'))).error).toBe('Image unavailable');
+    expect((await image(owner, GUEST_SESSION, path.join(projectDir, 'notes.png', 'x.png'))).error).toBe('Image unavailable');
     owner.ws.close();
 
     // Гость с правом files: своя сессия — да; чужая сессия и чужой каталог — отказ.
     const viewer = await guestClient({ session: GUEST_SESSION, write: false, files: true });
     expect(((await image(viewer, GUEST_SESSION, mine)).result as { mime: string }).mime).toBe('image/png');
-    expect(await image(viewer, OTHER_SESSION, foreign)).toEqual({ id: 8, error: 'forbidden' });
-    expect(await image(viewer, GUEST_SESSION, foreign)).toEqual({ id: 8, error: 'Path outside allowed directories' });
-    expect(await image(viewer, '', mine)).toEqual({ id: 8, error: 'forbidden' });
+    // Гость: несуществующий путь, существующий файл вне сессии, каталог вместо файла и
+    // не-картинка вне сессии дают побайтово одинаковый отказ — по тексту нельзя узнать,
+    // что лежит на хосте за пределами его каталога.
+    fs.writeFileSync(path.join(otherDir, 'plain.txt'), 'secret');
+    fs.writeFileSync(path.join(otherDir, 'text.png'), 'not an image');
+    fs.mkdirSync(path.join(otherDir, 'dir.png'), { recursive: true });
+    const DENIED = { id: 8, error: 'image unavailable' };
+    for (const [session, file] of [
+      [GUEST_SESSION, path.join(otherDir, 'missing.png')],
+      [GUEST_SESSION, foreign],
+      [GUEST_SESSION, path.join(otherDir, 'plain.txt', 'x.png')],
+      [GUEST_SESSION, path.join(otherDir, 'dir.png')],
+      [GUEST_SESSION, path.join(otherDir, 'text.png')],
+      [GUEST_SESSION, path.join(otherDir, 'plain.txt')],
+      [GUEST_SESSION, path.join(projectDir, 'missing.png')],
+      [GUEST_SESSION, path.join(projectDir, 'notes.png')],
+      [GUEST_SESSION, 'relative.png'],
+      [OTHER_SESSION, foreign],
+      ['', mine],
+    ] as const) {
+      expect(await image(viewer, session, file), file).toEqual(DENIED);
+    }
     viewer.ws.close();
 
     // Гость без права files не получает ничего — даже с правом ввода.
     const writer = await guestClient({ session: GUEST_SESSION, write: true, files: false });
-    expect(await image(writer, GUEST_SESSION, mine)).toEqual({ id: 8, error: 'no files permission' });
+    expect(await image(writer, GUEST_SESSION, mine)).toEqual({ id: 8, error: 'image unavailable' });
+    expect(await image(writer, GUEST_SESSION, foreign)).toEqual({ id: 8, error: 'image unavailable' });
     writer.ws.close();
   });
 

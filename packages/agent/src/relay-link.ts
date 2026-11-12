@@ -1151,26 +1151,35 @@ export class RelayLink {
         this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
         return;
       }
-      if (s.scope && !s.scope.files) throw new Error('no files permission');
-      if (!this.files) throw new Error('file browser unavailable');
       if (String(req.action) === 'image') {
         // Картинка по абсолютному пути из сообщения чата (миниатюры), куском. Только чтение:
         // право write не нужно. Хозяину — корни сессий, каталог вложений и временный каталог
-        // агента; гостю — только каталог его сессии (вложения и временные файлы общие на
-        // все сессии хоста, гостю одной сессии они не принадлежат). Сами проверки пути и
-        // содержимого — в FileService.imageChunk.
-        if (s.scope && !this.ownsSession(s, String(req.session ?? ''), false)) throw new Error('forbidden');
-        const within = (await this.scopedDir(s)) ?? undefined;
-        const chunk = await this.files.imageChunk(
-          typeof req.path === 'string' ? req.path : '',
-          Number(req.offset ?? 0),
-          Math.min(Number(req.len ?? 0), MAX_FILE_CHUNK),
-          within,
-        );
-        const result = { mime: chunk.mime, size: chunk.size, data: chunk.data.toString('base64'), eof: chunk.eof };
-        this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
+        // агента; гостю — только каталог его сессии и только с правом files (вложения и
+        // временные файлы общие на все сессии хоста). Проверки пути и содержимого — в
+        // FileService.imageChunk.
+        try {
+          if (s.scope && !s.scope.files) throw new Error('no files permission');
+          if (!this.files) throw new Error('file browser unavailable');
+          if (s.scope && !this.ownsSession(s, String(req.session ?? ''), false)) throw new Error('forbidden');
+          const within = (await this.scopedDir(s)) ?? undefined;
+          const chunk = await this.files.imageChunk(
+            typeof req.path === 'string' ? req.path : '',
+            Number(req.offset ?? 0),
+            Math.min(Number(req.len ?? 0), MAX_FILE_CHUNK),
+            within,
+          );
+          const result = { mime: chunk.mime, size: chunk.size, data: chunk.data.toString('base64'), eof: chunk.eof };
+          this.sendFrameBytes(s, jsonFrame(FrameType.FileOpResult, 0, { id, result }));
+        } catch (err) {
+          // Гостю любой отказ называется одинаково: по различию текстов («нет файла», «вне
+          // каталога», «не картинка») он узнавал бы, что лежит на хосте вне его сессии.
+          if (s.scope) throw new Error('image unavailable');
+          throw err;
+        }
         return;
       }
+      if (s.scope && !s.scope.files) throw new Error('no files permission');
+      if (!this.files) throw new Error('file browser unavailable');
       if (String(req.action) !== 'stat-full' && s.scope && !s.scope.write) {
         throw new Error('no write permission');
       }
