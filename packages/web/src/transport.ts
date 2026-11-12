@@ -45,6 +45,10 @@ export interface TermChannelOpts {
    *  настройки не трогает живой терминал. Настройка агента старше просьбы, поэтому
    *  работающий режим — только тот, что пришёл в `onTerminalState`. */
   mode?: TerminalMode;
+  /** Зритель размера (окошко терминала в чате): агент открывает терминал так, что размер
+   *  окна сессии он не задаёт вовсе — ни подключением, ни просьбой. Едет тем же кадром
+   *  открытия, что и `mode`; заявку размера такой канал не шлёт никогда. */
+  passive?: boolean;
   /** Сырые байты вывода pty. */
   onData(bytes: Uint8Array): void;
   /** Звонок (BELL) от сессии. */
@@ -308,7 +312,8 @@ class LanTermChannel implements TermChannel {
     const resume = this.resumePending;
     this.modePending = false;
     this.resumePending = false;
-    this.ws.send(resizeFrame(cols, rows, mode, claim, resume));
+    const passive = this.opts.passive === true;
+    this.ws.send(resizeFrame(cols, rows, mode, passive ? false : claim, resume, passive));
   }
 
   close(): void {

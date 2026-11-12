@@ -124,13 +124,15 @@ interface TermEntry {
 
 /** Полезная нагрузка OPEN. Просьба о режиме едет именно здесь: терминал relay
  *  создаётся на OPEN, и к первому RESIZE решение агентом уже принято. */
-function openPayload(entry: TermEntry): { session: string; mode?: TerminalMode; resume?: true } {
+function openPayload(entry: TermEntry): { session: string; mode?: TerminalMode; resume?: true; passive?: true } {
   return {
     session: entry.session,
     ...(entry.opts.mode ? { mode: entry.opts.mode } : {}),
     // Пере-OPEN после обрыва: агент пришлёт только видимый экран, а не снимок с историей —
     // она у клиента уже есть и иначе удваивалась бы на каждом обрыве.
     ...(entry.everOpened ? { resume: true as const } : {}),
+    // Зритель размера (окошко чата): терминал открывается, не задавая размер окна сессии.
+    ...(entry.opts.passive ? { passive: true as const } : {}),
   };
 }
 
@@ -1528,7 +1530,7 @@ export class RelayTransport implements Transport {
     return {
       write: (bytes: Uint8Array): void => this.sendFrame(encodeFrame({ type: FrameType.Data, channel, payload: bytes })),
       resize: (cols: number, rows: number, claim?: boolean): void =>
-        this.sendFrame(jsonFrame(FrameType.Resize, channel, resizePayload(cols, rows, undefined, claim))),
+        this.sendFrame(jsonFrame(FrameType.Resize, channel, resizePayload(cols, rows, undefined, opts.passive ? false : claim))),
       close: (): void => {
         if (this.terminals.delete(channel) && this.state === 'streaming')
           this.sendFrame(jsonFrame(FrameType.Close, channel, {}));

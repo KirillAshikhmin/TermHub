@@ -67,6 +67,8 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     // Новая сессия открывается так, как её открывают с главной: вид решает вход в сессию.
     onSwitch: (name) => (location.hash = termHash(name)),
     onCreate: () => openCreateModal(transport),
+    // Шапка сессии — та же, что в виде «Терминал»: настройки и статус подключения.
+    tools: true,
   });
   let hideBar = (): void => {};
   const toolbar = document.createElement('div');
@@ -98,6 +100,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     onConnection: (ok) => {
       isOffline = !ok;
       offlineEl.hidden = ok;
+      sbar.setConn(ok ? 'connected' : 'reconnecting');
     },
     emptyState: (reason) => {
       const box = document.createElement('div');

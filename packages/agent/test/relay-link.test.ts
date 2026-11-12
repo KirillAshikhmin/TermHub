@@ -1169,6 +1169,19 @@ describe('RelayLink — вкладка Gradle через relay', () => {
     readOnly.ws.close();
   });
 
+  it('владелец, попросивший зрителя (`passive` в OPEN, окошко чата), открывает терминал зрителем', async () => {
+    const owner = await guestClient();
+    await openTerm(owner, { session: GUEST_SESSION, passive: true });
+    const other = await guestClient();
+    await openTerm(other, { session: GUEST_SESSION, passive: 'yes' }); // мусор — не просьба
+    other.ws.close();
+    expect(openedOpts).toEqual([
+      { passive: true, resume: false },
+      { passive: false, resume: false },
+    ]);
+    owner.ws.close();
+  });
+
   it('гость с правом ввода и владелец — не зрители; пере-OPEN несёт признак переподключения', async () => {
     const writer = await guestClient({ session: GUEST_SESSION, write: true, files: false });
     await openTerm(writer, { session: GUEST_SESSION, resume: true });

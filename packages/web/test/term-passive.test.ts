@@ -49,6 +49,30 @@ describe('terminal passive', () => {
     handle.teardown();
   });
 
+  it('просит агента открыть терминал зрителем: панель окошко не меняет ни подключением, ни позже', () => {
+    const { transport, opened } = termTransport();
+    const handle = mountTerminal(root, 'work', transport, { embedded: true, passive: true });
+    expect(opened[0]!.opts.passive).toBe(true);
+    handle.teardown();
+    const plain = termTransport();
+    const h2 = mountTerminal(root, 'work', plain.transport, { embedded: true });
+    expect(plain.opened[0]!.opts.passive).toBeUndefined();
+    h2.teardown();
+  });
+
+  it('открытие, закрытие и повторное открытие окошка: ни одной заявки размера, каждый канал — зрителем', () => {
+    const { transport, opened, claims } = termTransport();
+    for (let i = 0; i < 3; i += 1) {
+      const h = mountTerminal(root, 'work', transport, { embedded: true, passive: true });
+      opened[i]!.opts.onStatus?.('connected');
+      opened[i]!.opts.onTerminalState!({ cols: 236, rows: 34 });
+      FakeTerminal.instances.at(-1)!.type('x');
+      h.teardown();
+    }
+    expect(opened.map((o) => o.opts.passive)).toEqual([true, true, true]);
+    expect(claims).toEqual([false, false, false]);
+  });
+
   it('пассивное окошко несёт панель клавиш; обычный встроенный терминал — нет', () => {
     const a = termTransport();
     const h1 = mountTerminal(root, 'work', a.transport, { embedded: true, passive: true });

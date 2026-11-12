@@ -18,7 +18,7 @@ import { openCreateModal } from './dashboard';
 import { resetDocumentTitle, setSessionDocumentTitle } from './document-title';
 import { t } from './i18n';
 import { mountQuickKeys } from './quickkeys';
-import { mountSessionTabs, pickNeighbor } from './tabs';
+import { mountSessionTabs, pickNeighbor, sessionBarTools } from './tabs';
 import { correctMirrorMouse } from './mirror-mouse';
 import { createTerminalCopyController } from './term-copy';
 import { enterAction } from './term-keys';
@@ -37,9 +37,8 @@ import { enableTouchScroll } from './touch-scroll';
 import { enableTouchSelect } from './touch-select';
 import { playBell } from './sound';
 import { onTermPrefsChange, readTermPrefs, setTermPrefs, termFontFamily, termIsLight } from './term-prefs';
-import { openTermSettings } from './term-settings';
-import type { TerminalMode, TermChannel, TermConnState, Transport } from './transport';
-import { copyToClipboard, hasServerPicker, iconButton, openServerPicker, renderHoloBar, spinner, svgIcon, toast, wireToolbar } from './ui';
+import type { TerminalMode, TermChannel, Transport } from './transport';
+import { copyToClipboard, iconButton, renderHoloBar, spinner, toast, wireToolbar } from './ui';
 
 const KEYBOARD_LS_KEY = 'termhub.keyboard';
 // Потолок очереди ввода до подключения (см. sendData): не влезающий чанк отбрасывается целиком.
@@ -136,8 +135,11 @@ export function mountTerminal(
   // полосы разделов и панели клавиш; заголовком окна и размером экрана владеет сплит.
   const embedded = opts.embedded === true;
   // Зритель размера (окошко терминала в чате): подключается и вводит, но размер окна tmux
-  // не заявляет и не просит — единственный RESIZE, без которого агент не спавнит pty,
-  // уходит без заявки, дальше экран вписывается в контейнер масштабом (fitForeign).
+  // не задаёт вовсе. Агент по просьбе в кадре открытия подключает его зрителем (tmux
+  // `ignore-size`): ни подключение, ни RESIZE панель не меняют. Свой размер он называет
+  // без заявки (в режиме attach по нему рисуется его собственный pty), а экран вписывается
+  // в контейнер масштабом (fitForeign). Без этого окошко, подключившись последним,
+  // забирало размер панели себе — и сжимало её до своего контейнера.
   const passive = opts.passive === true;
   root.replaceChildren();
   if (!embedded) setSessionDocumentTitle(session, session);
@@ -217,27 +219,17 @@ export function mountTerminal(
     setAltScreen(false);
     paneSize = undefined;
     sentSize = ''; // новому терминалу агента размер ещё не называли
+    firstSizeDue = false;
     claimedFor = '';
     paneMovedSinceClaim = true;
   };
 
-  const dot = document.createElement('span');
-  dot.className = 'th-conn-dot';
-  dot.setAttribute('role', 'status');
-  // Глобус, окрашенный состоянием связи: он же открывает выбор сервера, когда тот есть.
-  dot.append(svgIcon('globe'));
+  // Шестерёнка и статус связи — общие с шапкой чата (sessionBarTools).
+  const { settings: viewBtn, conn: dot, setConn: setDot } = sessionBarTools(session);
   // «⋮» (показать свёрнутые панели) и ползунки (вид терминала) живут в шапке, а не поверх
   // вывода: плавающая кнопка в углу закрывала текст.
   const toggleSlot = document.createElement('span');
   toggleSlot.className = 'th-termbar__slot';
-  const viewBtn = document.createElement('button');
-  viewBtn.type = 'button';
-  viewBtn.className = 'th-termbar__view';
-  viewBtn.append(svgIcon('gear'));
-  viewBtn.title = t('termview.title');
-  viewBtn.setAttribute('aria-label', t('termview.title'));
-  viewBtn.addEventListener('mousedown', (e) => e.preventDefault());
-  viewBtn.addEventListener('click', () => openTermSettings({ session }));
   bar.append(...(tabs ? [tabs.el] : []), toggleSlot, viewBtn, dot);
   if (!embedded) screen.append(bar);
 
@@ -469,33 +461,6 @@ export function mountTerminal(
   let channel: TermChannel | null = null;
   let endedOverlay: HTMLElement | null = null;
 
-  // Кружок статуса — вход в выбор сервера (в LAN-режиме выбирать не из чего, там
-  // реестр пуст и кружок остаётся просто индикатором).
-  if (hasServerPicker()) {
-    dot.classList.add('is-clickable');
-    dot.setAttribute('role', 'button');
-    dot.tabIndex = 0;
-    dot.addEventListener('click', () => openServerPicker());
-    dot.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openServerPicker();
-      }
-    });
-  }
-
-  const setDot = (state: TermConnState): void => {
-    dot.classList.remove('is-connected', 'is-reconnecting', 'is-closed');
-    dot.classList.add(`is-${state}`);
-    const label =
-      state === 'connected'
-        ? t('term.statusConnected')
-        : state === 'reconnecting'
-          ? t('term.statusReconnecting')
-          : t('term.statusClosed');
-    dot.setAttribute('aria-label', label);
-    dot.title = label;
-  };
 
   // Два размера. `wanted` — под свой контейнер: его клиент просит у агента. `paneSize` —
   // размер панели, который называет агент в control mode: tmux там НЕ подгоняет вывод под
@@ -505,6 +470,8 @@ export function mountTerminal(
   // зеркалом (fitForeign), а действие здесь забирает размер себе (claimSize).
   let wanted = { cols: term.cols, rows: term.rows };
   let sentSize = '';
+  /** Контейнер разложен и виден: у спрятанного (`display: none`) ширина нулевая. */
+  const laidOut = (): boolean => host.clientWidth > 0;
   /** Когда человек последний раз что-то делал на этом экране (ввод, касание, клик). */
   let lastAction = -Infinity;
   const noteAction = (): void => {
@@ -516,9 +483,13 @@ export function mountTerminal(
   const activeHere = (): boolean => performance.now() - lastAction < ACTIVE_WINDOW_MS;
   /** `claim` — забирать ли размер окна себе; по умолчанию — если здесь работают. */
   const sendResize = (claim = activeHere()): void => {
-    if (passive && sentSize !== '') return; // после первого RESIZE просьб размера нет
+    // Контейнера не видно (вкладка сессии спрятана, окно ещё не разложено): его размер —
+    // не размер экрана человека, и панель по нему сжалась бы до нижних пределов.
+    if (!laidOut()) return;
+    const size = `${wanted.cols}x${wanted.rows}`;
+    if (passive && sentSize === size) return; // зритель ту же просьбу не повторяет
     if (passive) claim = false;
-    sentSize = `${wanted.cols}x${wanted.rows}`;
+    sentSize = size;
     channel?.resize(wanted.cols, wanted.rows, claim);
   };
   /** Размер панели не наш: его держит другой клиент — тот, с которым работали последним. */
@@ -572,7 +543,7 @@ export function mountTerminal(
       const dims = fit.proposeDimensions();
       // Контейнер ещё не измерить — остаётся прежняя просьба: брать её с экрана нельзя,
       // он может держать чужой размер панели.
-      if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)) wanted = { cols: dims.cols, rows: dims.rows };
+      if (laidOut() && dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)) wanted = { cols: dims.cols, rows: dims.rows };
       const use = paneSize ?? wanted;
       if (term.cols !== use.cols || term.rows !== use.rows) term.resize(use.cols, use.rows);
     } catch {
@@ -583,6 +554,18 @@ export function mountTerminal(
     // Экран держит размер панели, а контейнер сменился: onResize не сработает, просим сами.
     // Первый RESIZE подключения шлёт onStatus (он обязан быть первым кадром) — не здесь.
     if (connected && sentSize !== '' && sentSize !== `${wanted.cols}x${wanted.rows}`) sendResize();
+    // Подключились спрятанными — первый RESIZE ждал показа: уходит теперь, с набранным следом.
+    else if (connected && sentSize === '' && firstSizeDue && laidOut()) openWithSize();
+  };
+  /** Первый кадр подключения: без него агент не спавнит pty. Из спрятанного контейнера
+   *  не уходит — ждёт показа (doFit по смене раскладки). */
+  let firstSizeDue = false;
+  const openWithSize = (): void => {
+    firstSizeDue = true;
+    sendResize();
+    if (sentSize === '') return;
+    firstSizeDue = false;
+    flushPending(); // набранное до подключения — только после RESIZE
   };
 
   // ── Очередь ввода до подключения ─────────────────────────────────────
@@ -600,7 +583,8 @@ export function mountTerminal(
     markBellSeen(session);
     updateAppBadge(unseenBellCount());
     if (readOnly) return;
-    if (connected) {
+    // Подключены, но первый RESIZE ещё ждёт показа контейнера — ввод копится за ним.
+    if (connected && !firstSizeDue) {
       claimSize(); // ввод здесь — значит, работают здесь
       channel?.write(bytes);
       return;
@@ -646,6 +630,7 @@ export function mountTerminal(
   channel = transport.openTerm(session, {
     cols: term.cols,
     rows: term.rows,
+    ...(passive ? { passive: true } : {}),
     // Снимок просьбы на момент открытия: переключатель после этого меняет только
     // то, что уедет в следующий терминал.
     mode: openedMode,
@@ -693,8 +678,7 @@ export function mountTerminal(
         banner.classList.remove('is-shown');
         doFit();
         // ПЕРВЫЙ кадр обязан быть RESIZE — иначе агент не спавнит pty.
-        sendResize();
-        flushPending(); // набранное до подключения — только после RESIZE
+        openWithSize();
         // Фокус (и клавиатуру) на connect — только если клавиатура включена.
         if (keyboardEnabled) term.focus();
       } else if (state === 'reconnecting') {
@@ -1036,7 +1020,7 @@ export function mountTerminal(
       resendTimer = undefined;
       if (disposed || !connected) return;
       doFit();
-      sendResize();
+      if (sentSize !== '') sendResize(); // первый кадр подключения — только openWithSize
     }, 350);
   };
   const scheduleFit = (): void => {

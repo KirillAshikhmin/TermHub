@@ -178,3 +178,9 @@ export function stubResizeObserver(): void {
     disconnect(): void {}
   };
 }
+
+/** happy-dom раскладку не считает: ширина любого элемента — ноль, а терминал с нулевой
+ *  шириной считает себя спрятанным и размер агенту не шлёт. Ставит «видимую» ширину. */
+export function stubLayout(width = 800): void {
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width });
+}

@@ -729,6 +729,18 @@ describe('wireTerminalWs и режим подключения', () => {
     ]);
   });
 
+  it('окошко-зритель (`passive` в первом RESIZE) открывает терминал зрителем; без поля и на мусоре — нет', () => {
+    const seen: Array<boolean | undefined> = [];
+    for (const passive of [true, undefined, 'yes']) {
+      const { opts, attach } = captureAttach();
+      const { ws, emit } = makeFakeWs();
+      wireTerminalWs({ attach })(ws as never, 'sess');
+      emit('message', msg(jsonFrame(FrameType.Resize, 0, { cols: 80, rows: 24, claim: false, passive })));
+      seen.push(opts.passive);
+    }
+    expect(seen).toEqual([true, false, false]);
+  });
+
   it('нестроковая просьба режима отбрасывается так же, как на relay-пути', () => {
     const { opts, attach } = captureAttach();
     const { ws, emit } = makeFakeWs();

@@ -26,6 +26,7 @@ export function resizeFrame(
   mode?: TerminalMode,
   claim?: boolean,
   resume?: boolean,
+  passive?: boolean,
 ): Uint8Array {
   // `resume` — экран этого клиента уже жил (переподключение): агент пришлёт не снимок с
   // историей, а только видимый экран — иначе история удваивалась бы на каждом обрыве.
@@ -33,6 +34,8 @@ export function resizeFrame(
   return jsonFrame(FrameType.Resize, LAN_CHANNEL, {
     ...resizePayload(cols, rows, mode, claim),
     ...(resume ? { resume: true } : {}),
+    // Зритель размера: агент открывает терминал, не задающий размер окна сессии.
+    ...(passive ? { passive: true } : {}),
   });
 }
 

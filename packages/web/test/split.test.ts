@@ -5,7 +5,7 @@ import { setLang } from '../src/i18n';
 import { parseSplit, splitHash } from '../src/routes';
 import { mountSplit } from '../src/split';
 import { mountTerminal } from '../src/term';
-import { FakeTerminal, stubResizeObserver, termTransport } from './term-harness';
+import { FakeTerminal, stubLayout, stubResizeObserver, termTransport } from './term-harness';
 
 vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')).FakeTerminal }));
 
@@ -17,6 +17,7 @@ describe('сплит-вид', () => {
     localStorage.clear();
     FakeTerminal.instances.length = 0;
     stubResizeObserver();
+    stubLayout();
     document.body.replaceChildren();
     root = document.createElement('div');
     document.body.append(root);

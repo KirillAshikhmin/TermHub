@@ -185,3 +185,68 @@ describe('вкладка ленты', () => {
     ws.teardown();
   });
 });
+
+describe('вид меняет только человек', () => {
+  /** Транспорт, у которого команда панели меняется между опросами списка. */
+  function shifting(first: string): { transport: Transport; set: (command: string) => void } {
+    let command = first;
+    const transport = {
+      mode: 'lan',
+      clientScope: null,
+      capabilities: async () => ['feed', 'chat'],
+      list: async () => [{ name: 'work', command, path: '/p' }],
+    } as unknown as Transport;
+    return { transport, set: (c) => { command = c; } };
+  }
+  const mount = (transport: Transport): ReturnType<typeof mountWorkspace> => {
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    return mountWorkspace(root, 'work', transport);
+  };
+
+  it('открыта терминалом, в панели появился агент: повтор маршрута и новый список вид не меняют', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, set } = shifting('zsh');
+      const ws = mount(transport);
+      ws.show('term');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(spies.term).toHaveBeenCalledTimes(1);
+      set('claude');
+      await vi.advanceTimersByTimeAsync(5000); // кэш списка сессий истёк
+      ws.show('term'); // роутер повторяет событие маршрута
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(location.hash).toBe('');
+      expect(spies.chat).not.toHaveBeenCalled();
+      expect(spies.termTeardown).not.toHaveBeenCalled();
+      ws.teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('открыта чатом, заголовок и команда панели сменились: чат остаётся чатом, ленту вместо него не ставят', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, set } = shifting('claude');
+      const ws = mount(transport);
+      ws.show('term');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(location.hash).toBe('#/sfeed/work');
+      ws.show('feed');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(spies.chat).toHaveBeenCalledTimes(1);
+      set('zsh');
+      await vi.advanceTimersByTimeAsync(5000);
+      ws.show('feed');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(location.hash).toBe('#/sfeed/work');
+      expect(spies.chat).toHaveBeenCalledTimes(1);
+      expect(spies.feed).not.toHaveBeenCalled();
+      expect(spies.term).not.toHaveBeenCalled();
+      ws.teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

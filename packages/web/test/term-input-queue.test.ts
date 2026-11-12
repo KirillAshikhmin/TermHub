@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { bellUnseen, observeBells } from '../src/bell-seen';
 import { mountTerminal } from '../src/term';
-import { FakeTerminal, stubResizeObserver, termTransport } from './term-harness';
+import { FakeTerminal, stubLayout, stubResizeObserver, termTransport } from './term-harness';
 
 // xterm подменён: проверяем, что уходит в транспорт, а не рендер (см. term-harness).
 vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')).FakeTerminal }));
@@ -20,6 +20,7 @@ describe('очередь ввода до подключения', () => {
     localStorage.clear();
     FakeTerminal.instances.length = 0;
     stubResizeObserver();
+    stubLayout();
     root = document.createElement('div');
     document.body.append(root);
   });
@@ -155,6 +156,7 @@ describe('фокус терминала', () => {
     localStorage.clear();
     FakeTerminal.instances.length = 0;
     stubResizeObserver();
+    stubLayout();
     root = document.createElement('div');
     document.body.append(root);
   });

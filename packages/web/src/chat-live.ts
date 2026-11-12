@@ -41,6 +41,10 @@ export interface LiveHandle {
 export type StateListener = (state: LiveState | null, changed: boolean) => void;
 
 const POLL_MS = 1000;
+/** Сколько кадров подряд должно разойтись с показанным, чтобы вид сменился: экран в миг
+ *  перерисовки или смены состояния на один кадр читается неузнанным (и наоборот), и по
+ *  одиночному кадру окно терминала открывалось и сворачивалось — интерфейс «скакал». */
+const SETTLE_FRAMES = 2;
 const USAGE_MS = 30_000;
 
 type Kind = ScreenState['kind'];
@@ -114,8 +118,18 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
 
   let manualTerm = false;
   let dismissedTerm = false;
+  // Эпизод неузнанного экрана: начинается, когда экран неузнан (или показывает меню)
+  // SETTLE_FRAMES кадров подряд, кончается, когда он столько же кадров подряд узнан.
+  // Окно открывается и сворачивается только на границах эпизода.
+  let episode = false;
+  /** Кадров подряд, разошедшихся с текущим видом (эпизод или нет). */
+  let streak = 0;
+  /** Сбой «экран не узнан» за этот эпизод уже записан. */
+  let episodeNoted = false;
+  /** Причина, с которой окно открыто само: одиночный узнанный кадр её не стирает. */
+  let autoReason = '';
   // Закрыли кнопкой окна — то же, что «Скрыть терминал»: само окно не вернётся, пока
-  // экран не станет знакомым и снова неузнанным.
+  // эпизод не кончится и не начнётся новый.
   const term: ChatTermHandle = mountChatTerm(host.terminal, session, transport, {
     onClose: () => {
       manualTerm = false;
@@ -214,23 +228,18 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   /** Почему открыто окно терминала — для его шапки. */
   const termReason = (): string => {
     const screen = state?.screen;
-    if (screen?.kind === 'menu') return screen.menu ? t('chat.term.whyMenu', { menu: screen.menu }) : t('chat.live.menu');
-    if (screen?.kind === 'unknown') {
+    if (screen?.kind === 'menu') autoReason = screen.menu ? t('chat.term.whyMenu', { menu: screen.menu }) : t('chat.live.menu');
+    else if (screen?.kind === 'unknown') {
       const why = whyOf(screen);
-      return why ? `${t('chat.term.why')} ${why}` : t('chat.term.whyUnknown');
+      autoReason = why ? `${t('chat.term.why')} ${why}` : t('chat.term.whyUnknown');
     }
+    if (episode && autoReason) return autoReason;
     return manualTerm ? t('chat.term.whyManual') : '';
   };
 
   const syncTerminal = (): void => {
-    if (!state) {
-      if (!manualTerm) term.hide();
-    } else {
-      const needs = needsTerminal(state.screen.kind);
-      if (!needs) dismissedTerm = false;
-      if (manualTerm || (needs && !dismissedTerm)) term.show();
-      else term.hide();
-    }
+    if (manualTerm || (state && episode && !dismissedTerm)) term.show();
+    else term.hide();
     term.setReason(termReason());
     termBtn.textContent = term.visible() ? t('chat.live.hideTerm') : t('chat.live.showTerm');
   };
@@ -354,13 +363,40 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     for (const fn of [...listeners]) fn(state, changed);
   };
 
-  const apply = (next: LiveState | null): void => {
+  /** Новый кадр экрана. Кадр, разошедшийся с текущим видом (неузнанный вне эпизода,
+   *  узнанный внутри), сначала только считается: вид меняет SETTLE_FRAMES таких подряд,
+   *  а до того на экране остаётся прежнее состояние. `sure` — кадр, которого человек сам
+   *  добивался (меню моделей по нажатию): ждать второго незачем. */
+  const apply = (next: LiveState | null, sure = false): void => {
     const prev = state;
+    const needs = !!next && needsTerminal(next.screen.kind);
+    if (needs === episode) streak = 0;
+    else {
+      streak += 1;
+      if (streak < SETTLE_FRAMES && !sure) {
+        // Одиночный кадр: состояние на экране прежнее, связь при этом есть.
+        if (next && offline) {
+          offline = false;
+          render();
+        }
+        return;
+      }
+      streak = 0;
+      episode = needs;
+      // Граница эпизода: закрытое кнопкой окно получает право открыться в следующем.
+      dismissedTerm = false;
+      episodeNoted = false;
+      autoReason = '';
+    }
     state = next;
     if (next) {
       offline = false;
       if (!next.tested && next.version && !notice && versionNoticeDue(next.agent, next.version)) showNotice(next);
-      if (next.screen.kind === 'unknown' && prev?.screen.kind !== 'unknown') noteUnknown(session, next.agent, next.version, whyOf(next.screen));
+      // Сбой — один на эпизод, а не на каждый опрос и не на одиночный кадр.
+      if (episode && next.screen.kind === 'unknown' && !episodeNoted) {
+        episodeNoted = true;
+        noteUnknown(session, next.agent, next.version, whyOf(next.screen));
+      }
       // Закончил работу — расход и контекст изменились.
       if (prev?.screen.kind === 'working' && next.screen.kind !== 'working') void loadUsage();
     }
@@ -418,7 +454,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     }
     if (disposed) return res;
     if (res.ok) {
-      if (state) apply({ ...state, screen: res.screen });
+      // Меню моделей человек открыл сам — окно встаёт сразу, без второго кадра.
+      if (state) apply({ ...state, screen: res.screen }, action.kind === 'model' && res.screen.kind === 'menu');
     } else if (res.reason === 'stale') {
       void poll();
     } else if (res.reason === 'unsupported' && state) {

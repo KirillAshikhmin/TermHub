@@ -139,3 +139,77 @@ describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app', '$1', 'проект
   }, 25000);
 
 });
+
+describe.skipIf(!tmuxAvailable)('TerminalBridge — зритель владельца (окошко терминала в чате)', () => {
+  const socketName = `termhub-test-${crypto.randomBytes(4).toString('hex')}`;
+  const sessionName = 'viewer';
+  let root: string;
+  let server: AgentServer;
+  let base: string;
+
+  const tmux = (args: string[]): string => execFileSync('tmux', ['-L', socketName, ...args], { encoding: 'utf8' });
+  const paneSize = (): string => tmux(['display-message', '-p', '-t', `=${sessionName}:`, '#{pane_width}x#{pane_height}']).trim();
+
+  beforeAll(async () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'termhub-bridge-viewer-'));
+    tmux(['new-session', '-d', '-s', sessionName, '-c', root]);
+    const sessions = new SessionService({ roots: [root], socketName });
+    server = new AgentServer({ config: fixtureConfig({ sessionRoots: [root] }), sessions });
+    server.attachTerminalWs(wireTerminalWs({ socketName }));
+    base = `http://127.0.0.1:${await server.listen()}`;
+  });
+
+  afterAll(async () => {
+    await server.close();
+    try {
+      tmux(['kill-server']);
+    } catch {
+      // сервер мог уже не работать
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  async function connect(onState: (s: { cols?: number; rows?: number }) => void = () => {}): Promise<WebSocket> {
+    const res = await fetch(`${base}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: 'secret' }),
+    });
+    const cookie = /termhub=[^;]+/.exec(res.headers.get('set-cookie') ?? '')![0];
+    const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/term?name=${sessionName}`, { headers: { cookie } });
+    ws.on('message', (data: Buffer) => {
+      const frame = decodeFrame(new Uint8Array(data));
+      if (frame.type === FrameType.TerminalState) onState(JSON.parse(new TextDecoder().decode(frame.payload)) as { cols?: number; rows?: number });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+    return ws;
+  }
+
+  it('окно сессии не меняется: ни подключением зрителя, ни его просьбами размера', async () => {
+    const owner = await connect();
+    owner.send(jsonFrame(FrameType.Resize, CHANNEL, { cols: 100, rows: 30 }));
+    expect(await waitFor(() => paneSize() === '100x30', 15000), `панель: ${paneSize()}`).toBe(true);
+    // Окошко чата того же владельца: подключается позже, контейнер у него крошечный.
+    const seen: string[] = [];
+    const viewer = await connect((s) => {
+      if (s.cols !== undefined) seen.push(`${s.cols}x${s.rows}`);
+    });
+    viewer.send(jsonFrame(FrameType.Resize, CHANNEL, { cols: 20, rows: 7, claim: false, passive: true }));
+    // Зритель узнаёт размер панели владельца — по нему и рисует свой экран.
+    expect(await waitFor(() => seen.includes('100x30'), 15000), `зритель видел: ${seen.join(',')}`).toBe(true);
+    viewer.send(jsonFrame(FrameType.Resize, CHANNEL, { cols: 40, rows: 10, claim: false, passive: true }));
+    await delay(1000);
+    expect(paneSize()).toBe('100x30');
+    // Закрыли и открыли окошко заново — панель по-прежнему владельца.
+    viewer.close();
+    const again = await connect();
+    again.send(jsonFrame(FrameType.Resize, CHANNEL, { cols: 20, rows: 7, claim: false, passive: true }));
+    await delay(1500);
+    expect(paneSize()).toBe('100x30');
+    again.close();
+    owner.close();
+  }, 60000);
+});

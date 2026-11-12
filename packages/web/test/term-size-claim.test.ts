@@ -31,6 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const host = (): HTMLElement => root.querySelector<HTMLElement>('.th-term__host')!;
@@ -46,11 +47,45 @@ describe('заявка размера окна', () => {
   });
 
   it('терминал смонтирован невидимым (другая вкладка сессии): открытие — не действие', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback): number => {
+      fn(0);
+      return 0;
+    });
     visibleWidth = 0;
+    const { transport, opened, claims, frames } = termTransport();
+    const handle = mountTerminal(root, 'work', transport);
+    opened[0]!.opts.onStatus?.('connected');
+    // Размер из контейнера, которого не видно, не уходит вовсе — ни первым кадром, ни
+    // досылкой: панель сжалась бы до нижних пределов (20×7 на живой сессии).
+    window.dispatchEvent(new Event('resize'));
+    vi.advanceTimersByTime(1000);
+    expect(claims).toEqual([]);
+    FakeTerminal.instances[0]!.type('ls');
+    expect(frames).toEqual([]);
+    // Вкладку показали: первый RESIZE уходит теперь, набранное — строго после него.
+    visibleWidth = 800;
+    window.dispatchEvent(new Event('resize'));
+    vi.advanceTimersByTime(1000);
+    expect(frames[0]).toEqual({ kind: 'resize', text: '80x24' });
+    expect(frames.filter((f) => f.kind === 'data').map((f) => f.text)).toEqual(['ls']);
+    handle.teardown();
+  });
+
+  it('видимый терминал спрятали (ушли на другую вкладку сессии): досылка размера молчит', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback): number => {
+      fn(0);
+      return 0;
+    });
     const { transport, opened, claims } = termTransport();
     const handle = mountTerminal(root, 'work', transport);
     opened[0]!.opts.onStatus?.('connected');
-    expect(claims).toEqual([false]);
+    expect(claims).toHaveLength(1);
+    visibleWidth = 0;
+    window.dispatchEvent(new Event('resize'));
+    vi.advanceTimersByTime(1000);
+    expect(claims).toHaveLength(1);
     handle.teardown();
   });
 

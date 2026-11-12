@@ -326,7 +326,7 @@ describe('модель', () => {
     expect(healthRows()).toEqual([]);
     // выбрали в меню — состояние свежее: модель названа новая, окошко свернулось
     fx.next(live({ kind: 'idle', mode: 'manual' }, { model: 'sonnet', models: [{ id: 'sonnet', label: 'Sonnet' }] }));
-    await run(1000);
+    await run(2000); // узнан два опроса подряд
     expect(q('.th-live__model')!.textContent).toContain('Sonnet');
     expect(mountedTerms[0]!.torn).toBe(true);
   });
@@ -402,10 +402,11 @@ describe('окошко терминала', () => {
   it('menu открывает окошко без записи сбоя; экран узнан — окошко сворачивается', async () => {
     const fx = fixture(live({ kind: 'menu', menu: 'resume' }));
     await mount(fx);
+    await run(1000);
     expect(mountedTerms).toHaveLength(1);
     expect(healthRows()).toEqual([]);
     fx.next(live(IDLE));
-    await run(1000);
+    await run(2000);
     expect(mountedTerms[0]!.torn).toBe(true);
   });
 
@@ -427,6 +428,7 @@ describe('окошко терминала', () => {
   it('закрытое кнопкой окно само не возвращается, пока экран не стал знакомым и снова неузнанным', async () => {
     const fx = fixture(live({ kind: 'unknown' }));
     await mount(fx);
+    await run(1000);
     expect(mountedTerms).toHaveLength(1);
     q<HTMLButtonElement>('.th-chat-term__close')!.click();
     expect(mountedTerms[0]!.torn).toBe(true);
@@ -434,9 +436,9 @@ describe('окошко терминала', () => {
     await run(3000); // экран всё ещё не узнан
     expect(mountedTerms).toHaveLength(1);
     fx.next(live(IDLE));
-    await run(1000);
+    await run(2000);
     fx.next(live({ kind: 'unknown' }));
-    await run(1000);
+    await run(2000);
     expect(mountedTerms).toHaveLength(2);
     expect(mountedTerms[1]!.torn).toBe(false);
   });
@@ -456,6 +458,7 @@ describe('окошко терминала', () => {
     const why = (): string => q('.th-chat-term__why')!.textContent ?? '';
     const fx = fixture(live({ kind: 'unknown', why: 'no input box under the footer' }));
     await mount(fx);
+    await run(1000);
     expect(why()).toBe(`${t('chat.term.why')} no input box under the footer`);
     expect(healthRows()[0]).toMatchObject({ session: 'work', why: 'no input box under the footer' });
     expect(healthRows()[0]!.whyAt).toBeGreaterThan(0);
@@ -466,10 +469,105 @@ describe('окошко терминала', () => {
     await run(1000);
     expect(why()).toBe(t('chat.term.whyMenu', { menu: 'resume' }));
     fx.next(live(IDLE));
-    await run(1000);
+    await run(2000);
     q<HTMLButtonElement>('.th-live__term-btn')!.click();
     await run(0);
     expect(why()).toBe(t('chat.term.whyManual'));
+  });
+});
+
+describe('вид не скачет', () => {
+  const UNKNOWN: ScreenState = { kind: 'unknown', why: 'footer not found' };
+  const termShown = (): boolean => !q('.th-chat-term')!.hidden;
+
+  it('одиночный неузнанный кадр между узнанными окно не открывает и состояние на экране не трогает', async () => {
+    const fx = fixture(live(IDLE));
+    const h = await mount(fx);
+    const seen: string[] = [];
+    h.subscribe((s, changed) => seen.push(`${s?.screen.kind ?? 'null'}:${changed}`));
+    fx.next(live(UNKNOWN));
+    await run(1000);
+    expect(termShown()).toBe(false);
+    expect(mountedTerms).toHaveLength(0);
+    expect(h.state()!.screen.kind).toBe('idle');
+    expect(q('.th-live__state')!.textContent).toBe(t('chat.live.idle'));
+    expect(q('.th-live__mode')!.hidden).toBe(false);
+    fx.next(live(IDLE));
+    await run(3000);
+    expect(mountedTerms).toHaveLength(0);
+    expect(healthRows()).toEqual([]);
+    expect(seen.filter((x) => x.endsWith(':true'))).toEqual([]);
+  });
+
+  it('два неузнанных опроса подряд открывают окно; один узнанный его не сворачивает, два подряд — сворачивают', async () => {
+    const fx = fixture(live(IDLE));
+    await mount(fx);
+    fx.next(live(UNKNOWN));
+    await run(1000);
+    expect(termShown()).toBe(false);
+    await run(1000);
+    expect(termShown()).toBe(true);
+    expect(mountedTerms).toHaveLength(1);
+    // Мигнул узнанный кадр (список фоновых агентов пропал и вернулся) — окно на месте.
+    fx.next(live(IDLE));
+    await run(1000);
+    fx.next(live(UNKNOWN));
+    await run(1000);
+    expect(termShown()).toBe(true);
+    expect(mountedTerms).toHaveLength(1);
+    expect(mountedTerms[0]!.torn).toBe(false);
+    expect(q('.th-chat-term__why')!.textContent).toBe(`${t('chat.term.why')} footer not found`);
+    fx.next(live(IDLE));
+    await run(1000);
+    expect(termShown()).toBe(true);
+    await run(1000);
+    expect(termShown()).toBe(false);
+    expect(mountedTerms[0]!.torn).toBe(true);
+  });
+
+  it('меню два опроса подряд открывает окно так же', async () => {
+    const fx = fixture(live(IDLE));
+    await mount(fx);
+    fx.next(live({ kind: 'menu', menu: 'resume' }));
+    await run(1000);
+    expect(termShown()).toBe(false);
+    await run(1000);
+    expect(termShown()).toBe(true);
+  });
+
+  it('сбой «экран не узнан» пишется один раз на эпизод: ни на каждый опрос, ни на мигание внутри него', async () => {
+    const fx = fixture(live(UNKNOWN));
+    await mount(fx);
+    await run(4000);
+    fx.next(live(IDLE));
+    await run(1000);
+    fx.next(live(UNKNOWN));
+    await run(3000);
+    fx.next(live({ kind: 'menu', menu: 'resume' }));
+    await run(1000);
+    fx.next(live(UNKNOWN));
+    await run(2000);
+    expect(healthRows()[0]!.counts.unknown).toBe(1);
+    // Эпизод кончился и начался новый — второй сбой.
+    fx.next(live(IDLE));
+    await run(2000);
+    fx.next(live(UNKNOWN));
+    await run(2000);
+    expect(healthRows()[0]!.counts.unknown).toBe(2);
+  });
+
+  it('закрытое кнопкой окно не возвращается на том же эпизоде, даже если мигнул узнанный кадр', async () => {
+    const fx = fixture(live(UNKNOWN));
+    await mount(fx);
+    await run(1000);
+    expect(mountedTerms).toHaveLength(1);
+    q<HTMLButtonElement>('.th-chat-term__close')!.click();
+    fx.next(live(IDLE));
+    await run(1000);
+    fx.next(live(UNKNOWN));
+    await run(5000);
+    expect(mountedTerms).toHaveLength(1);
+    expect(termShown()).toBe(false);
   });
 });
 

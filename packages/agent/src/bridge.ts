@@ -329,9 +329,9 @@ export function wireTerminalWs(opts: {
         return; // битый фрейм — игнорируем
       }
       if (frame.type === FrameType.Resize) {
-        let body: { mode?: unknown; claim?: unknown; resume?: unknown };
+        let body: { mode?: unknown; claim?: unknown; resume?: unknown; passive?: unknown };
         try {
-          body = frameJson<{ mode?: unknown; claim?: unknown; resume?: unknown }>(frame);
+          body = frameJson<typeof body>(frame);
         } catch {
           return;
         }
@@ -359,6 +359,9 @@ export function wireTerminalWs(opts: {
             // Та же проверка, что у relay в doOpen: чужой JSON не обязан класть сюда строку.
             requestedMode: typeof dims.mode === 'string' ? dims.mode : undefined,
             resume: dims.resume === true,
+            // Окошко терминала в чате: клиент сам просит открыть его зрителем — размер окна
+            // сессии оно не задаёт ни подключением, ни просьбой (см. SessionLinkOptions.passive).
+            passive: dims.passive === true,
             onData: (b) => send(encodeFrame({ type: FrameType.Data, channel: LAN_CHANNEL, payload: b })),
             onBell: (s) => send(jsonFrame(FrameType.Bell, LAN_CHANNEL, { session: s })),
             onMode: (m) => {

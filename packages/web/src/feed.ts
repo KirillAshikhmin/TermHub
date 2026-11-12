@@ -611,6 +611,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
 
   /** Один запрос к агенту. `null` — отказ уже показан (или ответ устарел),
    *  `'stale'` — курсор протух и хвост стоит взять заново. */
+  let answered = false;
   const ask = async (opts: FeedOptions): Promise<FeedPage | 'stale' | null> => {
     let res: FeedResult;
     try {
@@ -624,8 +625,11 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       return null;
     }
     if (disposed) return null;
-    if (offline) {
+    // Первый ответ тоже называется: шапке чата нужен статус «подключено», а не только
+    // возврат после обрыва.
+    if (offline || !answered) {
       offline = false;
+      answered = true;
       chat?.onConnection?.(true);
     }
     if (res.ok) {

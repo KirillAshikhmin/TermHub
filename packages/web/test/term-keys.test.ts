@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mountTerminal } from '../src/term';
 import { enterAction } from '../src/term-keys';
-import { FakeTerminal, stubResizeObserver, termTransport } from './term-harness';
+import { FakeTerminal, stubLayout, stubResizeObserver, termTransport } from './term-harness';
 
 // xterm подменён: проверяем обвязку обработчика клавиш, а не рендер (см. term-harness).
 vi.mock('@xterm/xterm', async () => ({ Terminal: (await import('./term-harness')).FakeTerminal }));
@@ -52,6 +52,7 @@ describe('обвязка в term.ts: Enter — ровно одно действ�
     localStorage.clear();
     FakeTerminal.instances.length = 0;
     stubResizeObserver();
+    stubLayout();
     root = document.createElement('div');
     document.body.append(root);
   });

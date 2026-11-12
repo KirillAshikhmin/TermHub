@@ -7,8 +7,8 @@ import type { SessionInfo } from '@termhub/protocol';
 import type { TFn } from './i18n';
 import { t } from './i18n';
 import { setSessionDocumentTitle } from './document-title';
-import type { Transport } from './transport';
-import { iconButton, renderMenu, sortSelect, svgIcon, toast } from './ui';
+import type { TermConnState, Transport } from './transport';
+import { hasServerPicker, iconButton, openServerPicker, renderMenu, sortSelect, svgIcon, toast } from './ui';
 import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { activity } from './activity';
@@ -54,6 +54,55 @@ export function pickNeighbor(names: string[], removed: string): string | null {
   return names[i - 1] ?? rest[0]!;
 }
 
+/** Кнопки шапки сессии, не привязанные к самому терминалу: шестерёнка настроек и статус
+ *  подключения. Одни на терминал и на чат — вторую разметку не заводить. */
+export function sessionBarTools(session: string): {
+  settings: HTMLButtonElement;
+  conn: HTMLElement;
+  setConn: (state: TermConnState) => void;
+} {
+  const settings = document.createElement('button');
+  settings.type = 'button';
+  settings.className = 'th-termbar__view';
+  settings.append(svgIcon('gear'));
+  settings.title = t('termview.title');
+  settings.setAttribute('aria-label', t('termview.title'));
+  settings.addEventListener('mousedown', (e) => e.preventDefault());
+  settings.addEventListener('click', () => openTermSettings({ session }));
+
+  const conn = document.createElement('span');
+  conn.className = 'th-conn-dot';
+  conn.setAttribute('role', 'status');
+  // Глобус, окрашенный состоянием связи: он же открывает выбор сервера, когда тот есть
+  // (в LAN-режиме выбирать не из чего — там он остаётся просто индикатором).
+  conn.append(svgIcon('globe'));
+  if (hasServerPicker()) {
+    conn.classList.add('is-clickable');
+    conn.setAttribute('role', 'button');
+    conn.tabIndex = 0;
+    conn.addEventListener('click', () => openServerPicker());
+    conn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openServerPicker();
+      }
+    });
+  }
+  const setConn = (state: TermConnState): void => {
+    conn.classList.remove('is-connected', 'is-reconnecting', 'is-closed');
+    conn.classList.add(`is-${state}`);
+    const label =
+      state === 'connected'
+        ? t('term.statusConnected')
+        : state === 'reconnecting'
+          ? t('term.statusReconnecting')
+          : t('term.statusClosed');
+    conn.setAttribute('aria-label', label);
+    conn.title = label;
+  };
+  return { settings, conn, setConn };
+}
+
 /** Верхняя панель сессии (как на терминале): «назад» + вкладки сессий. Переиспользуется
  *  на session-scoped Проводнике/Репозитории, чтобы панель сессий была на любой вкладке.
  *  onSwitch — навигация при клике на таб (тип экрана задаёт вызывающий). */
@@ -62,7 +111,9 @@ export function mountSessionBar(opts: {
   current: string;
   onSwitch: (name: string) => void;
   onCreate: () => void;
-}): { el: HTMLElement; toggleSlot: HTMLElement; teardown: () => void } {
+  /** Шестерёнка настроек и статус подключения — как в шапке терминала (вид «Чат»). */
+  tools?: boolean;
+}): { el: HTMLElement; toggleSlot: HTMLElement; setConn: (state: TermConnState) => void; teardown: () => void } {
   const bar = document.createElement('div');
   bar.className = 'th-termbar';
   bar.append(iconButton('back', t('term.back'), () => (location.hash = '#/')));
@@ -88,7 +139,13 @@ export function mountSessionBar(opts: {
   const toggleSlot = document.createElement('span');
   toggleSlot.className = 'th-termbar__slot';
   bar.append(tabs.el, toggleSlot);
-  return { el: bar, toggleSlot, teardown: tabs.teardown };
+  let setConn: (state: TermConnState) => void = () => {};
+  if (opts.tools) {
+    const tools = sessionBarTools(opts.current);
+    bar.append(tools.settings, tools.conn);
+    setConn = tools.setConn;
+  }
+  return { el: bar, toggleSlot, setConn, teardown: tabs.teardown };
 }
 
 /** Минимум, который нужен табу от сессии (SessionInfo подходит структурно). */

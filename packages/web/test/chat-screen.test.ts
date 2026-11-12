@@ -32,7 +32,7 @@ function fixture(
     clientScope,
     capabilities: async () => ['feed', 'chat'],
     gradle: async () => null,
-    list: async () => [{ name: 'work', command: 'claude', path: '/root/a' }],
+    list: async () => [{ name: 'work', command: 'claude', path: '/root/a', title: '' }],
     dirs: async () => [{ root: '/root/a', dirs: [] }],
     feed: async (_s: string, opts: FeedOptions = {}) => {
       feedCalls.push(opts);
@@ -72,6 +72,55 @@ const AGENT: FeedEntry = {
 };
 const TOOL: FeedEntry = { id: 't', at: 1_700_000_002_000, kind: 'tool', tool: 'Bash', text: 'Bash npm test /root/a/run.sh', cursor: '1:20', detail: true };
 const PLAIN_TOOL: FeedEntry = { id: 't2', at: 1_700_000_003_000, kind: 'tool', tool: 'Read', text: 'Read x.ts', cursor: '1:30' };
+
+describe('шапка сессии в виде «Чат»', () => {
+  it('та же, что у терминала: шестерёнка настроек и статус подключения стоят в шапке', async () => {
+    const { transport } = fixture(() => page({ entries: [HUMAN] }));
+    const chat = mountChat(host, 'work', transport);
+    const bar = host.querySelector('.th-termbar')!;
+    const gear = bar.querySelector<HTMLButtonElement>('.th-termbar__view')!;
+    const conn = bar.querySelector<HTMLElement>('.th-conn-dot')!;
+    expect(gear.getAttribute('aria-label')).toBe(t('termview.title'));
+    await flush();
+    expect(conn.classList.contains('is-connected')).toBe(true);
+    expect(conn.getAttribute('aria-label')).toBe(t('term.statusConnected'));
+    chat.teardown();
+  });
+
+  it('шестерёнка открывает настройки, и смена размера шрифта в них меняет чат сразу', async () => {
+    const { transport } = fixture(() => page({ entries: [HUMAN] }));
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    const before = chat.el.style.getPropertyValue('--chat-fs');
+    host.querySelector<HTMLButtonElement>('.th-termbar__view')!.click();
+    const win = document.querySelector('.th-termview')!;
+    expect(win).not.toBeNull();
+    win.querySelectorAll<HTMLButtonElement>('.th-termview__stepper button')[1]!.click();
+    expect(chat.el.style.getPropertyValue('--chat-fs')).not.toBe(before);
+    chat.teardown();
+  });
+
+  it('связь с агентом пропала — статус говорит «переподключение»; вернулась — снова «установлено»', async () => {
+    let fail = false;
+    const { transport } = fixture(() => {
+      if (fail) throw new Error('offline');
+      return page({ entries: [HUMAN], live: true });
+    });
+    const chat = mountChat(host, 'work', transport);
+    await flush();
+    const conn = host.querySelector<HTMLElement>('.th-conn-dot')!;
+    fail = true;
+    chat.feed.refresh();
+    await flush();
+    expect(conn.classList.contains('is-reconnecting')).toBe(true);
+    expect(conn.title).toBe(t('term.statusReconnecting'));
+    fail = false;
+    chat.feed.refresh();
+    await flush();
+    expect(conn.classList.contains('is-connected')).toBe(true);
+    chat.teardown();
+  });
+});
 
 describe('оболочка чата', () => {
   it('переписка: человек — своя запись без подписи «кто», агент — markdown с кодом, копированием и ссылками', async () => {

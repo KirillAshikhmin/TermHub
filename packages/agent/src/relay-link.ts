@@ -1413,9 +1413,9 @@ export class RelayLink {
       this.sendFrameBytes(s, jsonFrame(FrameType.Error, channel, { code: 'too-many-terminals', message: 'too many terminals' }));
       return;
     }
-    let req: { session?: unknown; mode?: unknown; resume?: unknown };
+    let req: { session?: unknown; mode?: unknown; resume?: unknown; passive?: unknown };
     try {
-      req = frameJson<{ session?: unknown; mode?: unknown; resume?: unknown }>(frame);
+      req = frameJson<typeof req>(frame);
     } catch {
       return;
     }
@@ -1464,8 +1464,9 @@ export class RelayLink {
         awaitFirstResize: true,
         // Экран клиента уже жил (пере-OPEN после обрыва) — ему нужен экран, а не история.
         resume: req.resume === true,
-        // Гость без права ввода — зритель: размер окна сессии он не задаёт.
-        passive: s.scope !== undefined && !s.scope.write,
+        // Гость без права ввода — зритель: размер окна сессии он не задаёт. Зрителем
+        // открывает терминал и тот, кто сам об этом просит (окошко терминала в чате).
+        passive: (s.scope !== undefined && !s.scope.write) || req.passive === true,
         onExit: () => {
           this.sendFrameBytes(s, jsonFrame(FrameType.Close, channel, { session }));
           s.terminals.delete(channel);

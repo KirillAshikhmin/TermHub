@@ -233,6 +233,15 @@ describe('RelayTransport — способ подключения термина�
     expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work' });
   });
 
+  it('зритель размера (окошко чата) просит открыть терминал зрителем: `passive` в OPEN', () => {
+    const { transport, ws, agentDec, firstEncrypted } = streaming();
+
+    transport.openTerm('work', { ...noopOpts(), passive: true });
+
+    const open = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(frameJson<Record<string, unknown>>(open)).toEqual({ session: 'work', passive: true });
+  });
+
   it('пере-OPEN терминала, который уже открывался, помечен: экран клиента жил, история ему не нужна', () => {
     vi.useFakeTimers();
     const { transport, ws, agentIdentity, agentEnc, agentDec, firstEncrypted } = streaming();

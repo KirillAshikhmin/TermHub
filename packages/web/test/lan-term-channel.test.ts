@@ -105,6 +105,17 @@ describe('LAN-канал: просьба о способе подключени�
     channel.close();
   });
 
+  it('зритель размера (окошко чата): каждый RESIZE помечен `passive` и заявки не несёт', () => {
+    const channel = new LanTransport().openTerm('work', opts({ passive: true }));
+    const ws = sockets[0]!;
+    ws.triggerOpen();
+    channel.resize(80, 24, false);
+    channel.resize(100, 30, true); // заявку зритель не шлёт, что бы ни просил экран
+    expect(payload(ws, 0)).toEqual({ cols: 80, rows: 24, claim: false, passive: true });
+    expect(payload(ws, 1)).toEqual({ cols: 100, rows: 30, claim: false, passive: true });
+    channel.close();
+  });
+
   it('после обрыва просьба уходит снова: агент создаёт терминал заново на каждом подключении', () => {
     vi.useFakeTimers();
     const channel = new LanTransport().openTerm('work', opts({ mode: 'attach' }));
