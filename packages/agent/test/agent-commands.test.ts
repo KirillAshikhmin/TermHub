@@ -370,6 +370,21 @@ describe('sessionCommands — сверка с экраном агента', () =
     expect(res.verified).toBe(true);
     expect(sim.sent.length).toBeGreaterThan(0);
   });
+  it('команда панели сменилась посреди сверки — экран чужой: клавиш больше нет, результат не сохранён', async () => {
+    const sim = new Sim(['help', 'zeta']);
+    const src = sim.sources();
+    const capture = src.capture!;
+    src.capture = async (session) => {
+      const got = await capture(session);
+      return sim.sent.length > 0 ? { ...got, command: 'zsh' } : got;
+    };
+    const res = await listVerified('work', src);
+    if (!res.ok) throw new Error(res.detail);
+    expect(res.verified).toBe(false);
+    expect(sim.sent).toEqual(['/']);
+    expect(fs.existsSync(cacheFile())).toBe(false);
+  });
+
   it('действие, пришедшее во время сверки, шлёт первую клавишу только после возврата пустой строки', async () => {
     const sim = new Sim(full());
     // Запрос чата приходит, когда сверка уже сняла свой экран («строка пуста») и вот-вот

@@ -69,6 +69,9 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     slash: 'idle',
     queued: 'working',
     // Замер таска 25 и снимки живой проверки.
+    // Составной: кадр Claude, оставшийся на экране после выхода, под ним оболочка. Экран
+    // читается как строка ввода — отказывает проверка процесса панели в `look`.
+    'exited-resume': 'idle',
     'queued-far': 'working',
     'queued-two': 'working',
     'queued-multiline': 'working',
@@ -2103,5 +2106,40 @@ describe('строка ввода узнаётся сама; подвал под
     expect(readScreen(tall, codex).kind).toBe('unknown');
     // Подсказка меню в подвале.
     expect(readScreen(codexTyped('note', ['  enter select · esc back']), codex).kind).toBe('unknown');
+  });
+});
+
+describe('Codex: указатель списка — не строка ввода (ревью, B2)', () => {
+  const codex = profileOf('codex');
+  const HINT = ['', '  use the arrows to move', ''];
+
+  it('указатель на пронумерованном варианте не первым: варианты стоят вплотную над ним', () => {
+    expect(readScreen(['  Pick one', '', '  1. Yes', '› 2. No', ...HINT], codex).kind).toBe('unknown');
+    expect(readScreen(['  Pick one', '', '  1. Yes', '  2. No', '› 3. Maybe', ...HINT], codex).kind).toBe('unknown');
+  });
+
+  it('указатель на пункте списка без номеров: над ним вплотную стоят другие пункты', () => {
+    expect(readScreen(['  Pick one', '', '  first item', '› second item', '  third item', ...HINT], codex).kind).toBe('unknown');
+  });
+
+  it('указатель на «1.» с пояснением перед «2.»', () => {
+    const lines = ['  Pick one', '', '› 1. Yes', '     explained on a second line', '  2. No', ...HINT];
+    expect(readScreen(lines, codex).kind).toBe('unknown');
+  });
+
+  it('оформление: у строки ввода знак «›» нарисован отдельно от текста, у пункта списка — одним куском с ним', () => {
+    const item = ['  Pick one', '', '\x1b[1;36m› first item\x1b[0m', '  second item', ...HINT];
+    expect(readScreen(item, codex).kind).toBe('unknown');
+    const input = ['', '\x1b[1m›\x1b[0m first line', '  second line', ...HINT];
+    expect(readScreen(input, codex)).toMatchObject({ kind: 'idle', input: 'first line\nsecond line' });
+  });
+
+  it('настоящая строка ввода, текст которой начинается с цифры и точки, узнаётся', () => {
+    expect(readScreen(['• done', '', '› 1. сделай то-то', ...HINT], codex)).toMatchObject({ kind: 'idle', input: '1. сделай то-то' });
+    expect(readScreen(['• done', '', '› 1. сделай то-то', '  и ещё вот это', ...HINT], codex)).toMatchObject({
+      kind: 'idle',
+      input: '1. сделай то-то\nи ещё вот это',
+    });
+    expect(readScreen(['• done', '', '› план:', '  1. первое', '  2. второе', ...HINT], codex)).toMatchObject({ kind: 'idle' });
   });
 });

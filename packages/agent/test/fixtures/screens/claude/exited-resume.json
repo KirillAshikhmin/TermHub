@@ -1,0 +1,10 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 100,
+  "rows": 32,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "Composite: the idle capture scrolled up by four rows, with the lines Claude prints on exit and a shell prompt under its last frame. The pane runs the shell, not the agent."
+}

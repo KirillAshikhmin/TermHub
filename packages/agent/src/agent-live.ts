@@ -136,7 +136,10 @@ export function sessionAct(session: string, action: ChatAction, sources?: Partia
         const result = await run(ctx, action);
         // Экран другой панели действие не подтверждает: успех по нему был бы догадкой.
         if (result.ok && ctx.moved) {
-          return fail('stale', 'the active pane of the session changed during the action: its outcome is not confirmed');
+          return fail(
+            'stale',
+            'the active pane of the session or the program in it changed during the action: its outcome is not confirmed',
+          );
         }
         return result;
       } catch (err) {
@@ -194,7 +197,8 @@ interface Ctx {
   invite: PendingInvite | undefined;
   /** Строки экрана, по которым он распознан. */
   lines: string[];
-  /** Посреди действия активной оказалась другая панель: его исход не подтверждён. */
+  /** Посреди действия активной оказалась другая панель или в панели сменилась команда:
+   *  исход действия не подтверждён. */
   moved: boolean;
   /** Отметка «клавиша отправки запроса ушла» — её читает память ключей идемпотентности. */
   sent?: { submitted: boolean };
@@ -214,6 +218,9 @@ async function look(session: string, src: LiveSources): Promise<Ctx | ChatFailur
   let file: string | undefined;
   if (found.ok) {
     if (found.agent === 'opencode') return fail('unknown-format', 'chat is not available for opencode sessions');
+    // Запись определителя пережила агента: файл беседы верен, а в панели уже не он. Кадр
+    // агента при этом остаётся на экране, и по нему клавиши ушли бы в оболочку.
+    if (!found.live) return fail('no-agent', `the agent that wrote the transcript no longer runs in ${shot.pane}`);
     agent = found.agent;
     file = found.files.at(-1);
   } else if (found.reason === 'no-transcript' && found.agent === 'codex') {
@@ -235,6 +242,9 @@ async function look(session: string, src: LiveSources): Promise<Ctx | ChatFailur
     return { ok: false, reason: found.reason, detail: found.detail };
   }
   const profile = profileOf(agent);
+  if (!profile.command.test(shot.command)) {
+    return fail('no-agent', `the pane ${shot.pane} runs «${shot.command}», not ${profile.name}`);
+  }
   return {
     ok: true,
     session,
@@ -255,11 +265,12 @@ function claudeCommand(command: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(command) || /^claude\b/.test(command);
 }
 
-/** Экран той же панели заново. Активной стала другая панель — экран «не узнан»:
- *  сверять чужой экран и слать по нему клавиши нельзя. */
+/** Экран той же панели заново. Активной стала другая панель или в панели сменилась
+ *  команда (агент вышел, осталась оболочка) — экран «не узнан»: сверять чужой экран и
+ *  слать по нему клавиши нельзя. */
 async function peek(ctx: Ctx): Promise<ScreenState> {
   const shot = await ctx.src.capture(ctx.session);
-  if (shot.pane !== ctx.pane) {
+  if (shot.pane !== ctx.pane || shot.command !== ctx.command) {
     ctx.moved = true;
     return UNKNOWN;
   }
@@ -275,7 +286,7 @@ interface Seen {
 /** То же, что `peek`, но со строками экрана и приглашением «вопрос ждёт». */
 async function peekSeen(ctx: Ctx): Promise<Seen> {
   const shot = await ctx.src.capture(ctx.session);
-  if (shot.pane !== ctx.pane) {
+  if (shot.pane !== ctx.pane || shot.command !== ctx.command) {
     ctx.moved = true;
     return { screen: UNKNOWN, invite: undefined, lines: [] };
   }

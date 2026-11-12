@@ -29,6 +29,9 @@ interface Row {
   text: string;
   dim: Set<number>;
   lit: Set<number>;
+  /** Строка с оформлением, в которой между первым знаком и вторым нет ни одной
+   *  управляющей последовательности: знак нарисован одним куском с текстом за ним. */
+  glued: boolean;
   /** Сколько раз в строке задан цвет текста: реплику беседы от сообщения очереди у Claude
    *  отличает только смена цвета после знака. У строки без оформления — ноль. */
   inks: number;
@@ -72,12 +75,19 @@ function strip(line: string): Row {
   let faint = false;
   let back = false;
   let inks = 0;
+  let styled = false;
+  /** Длина текста в момент последней управляющей последовательности. */
+  let seamAt = -1;
+  let seam = false;
   let i = 0;
   while (i < line.length) {
     if (line.charCodeAt(i) === 0x1b) {
       ESCAPE.lastIndex = i;
       const found = ESCAPE.exec(line);
       if (found) {
+        styled = true;
+        seamAt = text.length;
+        if (seamAt === 1) seam = true;
         if (found[2] === 'm') {
           faint = nextFaint(found[1] ?? '', faint);
           back = nextBack(found[1] ?? '', back);
@@ -92,7 +102,7 @@ function strip(line: string): Row {
     text += line[i];
     i++;
   }
-  return { text: text.replace(/\s+$/u, ''), dim, lit, inks };
+  return { text: text.replace(/\s+$/u, ''), dim, lit, inks, glued: styled && !seam && text.length > 1 };
 }
 
 /** Задаёт ли SGR-последовательность цвет текста: 30–37, 90–97 и `38;…`; сброс (39, 0) —
@@ -696,10 +706,19 @@ function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string
     first--;
   }
   if (first < 0) return 'no input frame';
-  // Варианты под указателем («› 1. …», «  2. …») — список меню, а не набранный текст.
-  const pointed = optionOf(rows[first]!.text, profile);
-  if (pointed?.key === '1' && first < end && optionOf(rows[first + 1]!.text, profile)?.key === '2') {
-    return 'dialog not recognized';
+  // Тем же знаком Codex рисует указатель списков и меню. Строку ввода от пункта списка
+  // отличают три вещи. Над строкой ввода всегда пустая строка (или верх экрана): пункт, над
+  // которым вплотную стоят другие, — список. Знак строки ввода нарисован отдельно от текста
+  // (за ним смена оформления), указатель списка — одним куском с пунктом. И пронумерованный
+  // пункт под указателем, у которого ниже стоит ещё один пронумерованный, — варианты меню,
+  // а не набранный текст (с пояснениями между ними или без).
+  if (first > 0 && !blank(rows[first - 1])) return 'dialog not recognized';
+  if (rows[first]!.glued) return 'dialog not recognized';
+  if (optionOf(rows[first]!.text, profile)) {
+    for (let i = first + 1; i <= end; i++) {
+      const below = optionOf(rows[i]!.text, profile);
+      if (below && !below.selected) return 'dialog not recognized';
+    }
   }
   const footer = block.join('  ');
   return { top: first, first, last: end, footer, items: itemsOf(footer, profile), lines: block.map((text) => text.trim()) };

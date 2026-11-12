@@ -313,12 +313,17 @@ async function reconcile(src: CommandsSources, session: string, profile: AgentPr
   const first = await src.capture(session);
   const screen = readScreen(first.lines, profile);
   if (screen.kind !== 'idle' || screen.input !== '') return null;
+  if (!profile.command.test(first.command)) return null;
   const pane = first.pane;
+  /** Панель или команда в ней сменились: экран чужой, клавиш больше нет — и стирающих тоже. */
+  let lost = false;
   const press = (keys: string): Promise<void> => src.send(session, encoder.encode(keys), pane);
-  /** Снимок той же панели; другая панель — экран чужой, дальше по нему не идём. */
+  /** Снимок той же панели с той же командой; иначе экран чужой, дальше по нему не идём. */
   const look = async (): Promise<PaneShot | null> => {
     const shot = await src.capture(session);
-    return shot.pane === pane ? shot : null;
+    if (shot.pane === pane && shot.command === first.command) return shot;
+    lost = true;
+    return null;
   };
   const until = async (ok: (shot: PaneShot) => boolean, ms: number): Promise<PaneShot | null> => {
     for (let i = Math.ceil(ms / STEP_MS); i > 0; i--) {
@@ -377,7 +382,7 @@ async function reconcile(src: CommandsSources, session: string, profile: AgentPr
   } catch {
     complete = false;
   }
-  const isClean = typed ? await restore(src, profile, press, until, look) : true;
+  const isClean = !typed ? true : lost ? false : await restore(src, profile, press, until, look);
   return { seen: [...seen.values()], complete, clean: isClean };
 }
 

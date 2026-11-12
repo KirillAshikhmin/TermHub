@@ -1453,3 +1453,43 @@ describe('отправка ждущему Codex со строкой состоя
     expect(f.sent).toEqual(['paste:Действуй', '\r']);
   });
 });
+
+describe('в панели должен идти процесс агента (ревью, B1)', () => {
+  it('запись определителя, пережившая агента (live: false), — «агента нет», ни вставки, ни клавиш', async () => {
+    const found: TranscriptResult = { ok: true, agent: 'claude', files: ['/nowhere/talk.jsonl'], complete: true, live: false };
+    const f = fake('claude', 'exited-resume', undefined, { found, command: 'zsh' });
+    expect(await sessionLive('work', f.src)).toMatchObject({ ok: false, reason: 'no-agent' });
+    expect(await act(f, { kind: 'prompt', text: 'rm -rf x\nsecond line' })).toMatchObject({ ok: false, reason: 'no-agent' });
+    // Та же запись при живом процессе агента в панели — тоже отказ: определитель сказал «не жив».
+    const alive = fake('claude', 'idle', undefined, { found, command: '2.1.322' });
+    expect(await act(alive, { kind: 'prompt', text: 'x' })).toMatchObject({ ok: false, reason: 'no-agent' });
+    expect([...f.sent, ...alive.sent]).toEqual([]);
+  });
+
+  it('команда панели — оболочка или иная не агентская: кадр агента на экране чат не обманывает', async () => {
+    for (const command of ['zsh', '-zsh', 'bash', 'fish', 'sh', 'vim', 'python3']) {
+      const f = fake('claude', 'exited-resume', undefined, { command });
+      expect(await act(f, { kind: 'prompt', text: 'echo hi' }), command).toMatchObject({ ok: false, reason: 'no-agent' });
+      expect(await act(f, { kind: 'take-input' }), command).toMatchObject({ ok: false, reason: 'no-agent' });
+      expect(f.sent, command).toEqual([]);
+    }
+    const codex = fake('codex', 'idle', undefined, { command: 'zsh' });
+    expect(await act(codex, { kind: 'prompt', text: 'echo hi' })).toMatchObject({ ok: false, reason: 'no-agent' });
+    expect(codex.sent).toEqual([]);
+    // Живые агенты: Claude зовёт процесс номером версии, Codex — «codex» (замер 12.11.2026).
+    expect(await sessionLive('work', fake('claude', 'idle', undefined, { command: '2.1.322' }).src)).toMatchObject({ ok: true });
+    expect(await sessionLive('work', fake('codex', 'idle', undefined, { command: 'codex' }).src)).toMatchObject({ ok: true });
+  });
+
+  it('команда панели сменилась посреди действия — экран неузнан, клавиша отправки не идёт', async () => {
+    const f = fake('claude', 'idle', (sent) => (sent.startsWith('paste:') ? claudeInput('hello') : undefined), { command: '2.1.322' });
+    const capture = f.src.capture!;
+    f.src.capture = async (session) => {
+      const got = await capture(session);
+      return f.sent.length > 0 ? { ...got, command: 'zsh' } : got;
+    };
+    const result = await act(f, { kind: 'prompt', text: 'hello' });
+    expect(result).toMatchObject({ ok: false });
+    expect(f.sent).toEqual(['paste:hello']);
+  });
+});

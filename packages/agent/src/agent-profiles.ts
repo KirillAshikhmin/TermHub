@@ -211,6 +211,9 @@ export interface AgentProfile {
   name: string;
   /** Версии, на которых профиль проверен снимками, включительно. */
   tested: { min: string; max: string };
+  /** Команда панели (`pane_current_command`), под которой идёт агент. Другая — в панели
+   *  не агент (оболочка после его выхода), каким бы ни был кадр на экране. */
+  command: RegExp;
   keys: {
     submit: string;
     interrupt: string;
@@ -269,6 +272,9 @@ const CLAUDE: AgentProfile = {
   agent: 'claude',
   name: 'Claude Code',
   tested: { min: '2.1.322', max: '2.1.322' },
+  // Claude зовёт свой процесс номером версии (замер: и пока идёт команда оболочки);
+  // установка через npm идёт под node.
+  command: /^(?:\d+\.\d+\.\d+|claude|node)$/,
   keys: {
     submit: '\r',
     interrupt: '\x1b',
@@ -439,6 +445,8 @@ const CODEX: AgentProfile = {
   agent: 'codex',
   name: 'Codex',
   tested: { min: '0.167.0', max: '0.167.2' },
+  // «codex» (замер 0.167.2: и пока идёт команда оболочки); обёртка npm идёт под node.
+  command: /^(?:codex|node)$/,
   keys: {
     submit: '\r',
     interrupt: '\x1b',
