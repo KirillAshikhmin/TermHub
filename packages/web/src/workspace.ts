@@ -5,6 +5,7 @@
 // живой workspace, пока не сменилась сессия/транспорт.
 
 import { whenCap } from './capabilities';
+import { mountChat } from './chat';
 import { mountFeed, type FeedHandle } from './feed';
 import { takeFeedJump } from './feed-search-all';
 import { mountFiles } from './files';
@@ -13,10 +14,14 @@ import type { GradleTab } from './gradle';
 import { mountGradleTab } from './gradle';
 import { mountRepo } from './repo';
 import type { RemoteRoute } from './remote';
-import { termHash } from './routes';
+import { sfeedHash, termHash } from './routes';
 import { mountTerminal } from './term';
 import type { Transport } from './transport';
 import { detectGradle, knownGradle } from './ui';
+import { effectiveView, sessionInfo, wantsChat } from './view-pref';
+
+/** Сколько ждём список сессий при входе: не ответил — открываем терминал, как раньше. */
+const ENTRY_WAIT_MS = 1500;
 
 type WsTab = 'term' | 'files' | 'repo' | 'gradle' | 'feed';
 
@@ -58,7 +63,7 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
     const cursor = takeFeedJump(session);
     if (cursor) void feedView?.jumpTo(cursor);
   };
-  const ensure = (tab: WsTab): WsView => {
+  const ensure = (tab: WsTab, chat = false): WsView => {
     const cached = views.get(tab);
     if (cached) return cached;
     const el = document.createElement('div');
@@ -71,7 +76,7 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
     } else if (tab === 'files') v = { el, clean: mountFiles(el, transport, session) };
     else if (tab === 'repo') v = { el, clean: mountRepo(el, transport, session) };
     else if (tab === 'feed') {
-      feedView = mountFeed(el, session, transport);
+      feedView = chat ? mountChat(el, session, transport) : mountFeed(el, session, transport);
       v = { el, clean: feedView.teardown };
     }
     else {
@@ -91,18 +96,58 @@ export function mountWorkspace(root: HTMLElement, session: string, transport: Tr
   // Номер последнего показа: пока ответ детекта в пути, пользователь может уйти
   // на другую вкладку — опоздавший ответ не должен перетягивать её на себя.
   let showSeq = 0;
+  // Вход в сессию — первый показ после монтажа рабочего пространства. Только он выбирает
+  // вид: сессия с агентом открывается чатом, прочие — терминалом, а выбор человека старше.
+  // Дальнейшие переходы на вкладку терминала — осознанные, их вид не подменяется.
+  let entered = false;
   const show = (tab: WsTab): void => {
     const seq = (showSeq += 1);
+    const entry = !entered;
+    entered = true;
+    if (tab === 'term' && entry) {
+      // Терминал до решения не монтируется: у сессии, открытой чатом, лишний pty-клиент
+      // ни к чему. Решение — по кэшу возможностей и списка сессий, а не по сети заново.
+      let giveUp = 0;
+      void Promise.race([
+        whenCap('chat', transport).then(async (chatCap) => {
+          if (!chatCap) return 'term' as const;
+          const info = await sessionInfo(transport, session);
+          return info ? effectiveView(session, info, ['chat']) : ('term' as const);
+        }),
+        new Promise<'term'>((resolve) => {
+          giveUp = window.setTimeout(() => resolve('term'), ENTRY_WAIT_MS);
+        }),
+      ]).then((view) => {
+        window.clearTimeout(giveUp);
+        if (!alive || seq !== showSeq) return;
+        if (view === 'chat') location.replace(sfeedHash(session));
+        else showNow(tab);
+      });
+      return;
+    }
+    showNow(tab);
+  };
+  const showNow = (tab: WsTab): void => {
+    const seq = showSeq;
     // Ленты у старого агента нет вовсе (ADR 0018), и прямая ссылка на неё уводит на
     // терминал, а не показывает пустой экран. Пересечение считается на подключении,
     // но после перезагрузки обмен может быть ещё в пути — тогда ждём его ответа.
     if (tab === 'feed') {
-      void whenCap('feed', transport).then((ok) => {
+      // Экран вкладки — чат или прежняя лента: чат там, где агент опознан и объявлена
+      // возможность `chat`. Решение принимается один раз, при первом монтаже вида.
+      const mounted = views.has('feed');
+      void Promise.all([
+        whenCap('feed', transport),
+        mounted ? Promise.resolve(false) : whenCap('chat', transport),
+        mounted ? Promise.resolve(null) : sessionInfo(transport, session),
+      ]).then(([ok, chatCap, info]) => {
         if (!alive || seq !== showSeq) return;
-        if (ok) {
-          reveal(ensure('feed'));
-          jumpIfAsked();
-        } else toTerm();
+        if (!ok) {
+          toTerm();
+          return;
+        }
+        reveal(ensure('feed', wantsChat(session, info, chatCap ? ['chat'] : [])));
+        jumpIfAsked();
       });
       return;
     }

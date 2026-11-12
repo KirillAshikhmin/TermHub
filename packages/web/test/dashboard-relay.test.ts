@@ -49,6 +49,26 @@ class ScriptedTransport implements Transport {
     return Promise.resolve({ ok: false, reason: 'no-transcript', detail: '' });
   }
 
+  feedDetail(): Promise<never> {
+    return Promise.reject(new Error('chat not scripted'));
+  }
+
+  live(): Promise<never> {
+    return Promise.reject(new Error('chat not scripted'));
+  }
+
+  act(): Promise<never> {
+    return Promise.reject(new Error('chat not scripted'));
+  }
+
+  commands(): Promise<never> {
+    return Promise.reject(new Error('chat not scripted'));
+  }
+
+  pasteFile(_blob: Blob, _name: string): Promise<string> {
+    return Promise.resolve('');
+  }
+
   create(req: CreateSessionInput): Promise<string> {
     return Promise.resolve(req.name);
   }

@@ -12,14 +12,18 @@ import type {
   DeviceInfo,
   DeviceScope,
   DirGroup,
+  DetailResult,
   FeedOptions,
   FeedResult,
   FileStat,
   ShareInfo,
 } from './api';
+import type { ActResult, ChatAction, CommandsResult, LiveResult } from '@termhub/protocol/chat';
 import { dataFrame, decodeFrame, FrameType, parseError, parseTerminalState, resizeFrame } from './ws-frames';
 
 export type { CaffeinateState, CreateSessionInput, DeviceInfo, DeviceScope, DirGroup, FileStat, ShareInfo };
+export type { DetailResult } from './api';
+export type { ActResult, ChatAction, ChatCommand, CommandsResult, LiveResult, LiveState, ScreenState, ToolDetail } from '@termhub/protocol/chat';
 export type { FeedEntry, FeedFailure, FeedFailureReason, FeedOptions, FeedPage, FeedResult } from './api';
 export type { FileContent, FileEntry, TerminalMode, TerminalState };
 
@@ -100,6 +104,18 @@ export interface Transport {
    *  Вкладка ленты существует только при `hasCap('feed')`, поэтому старого агента,
    *  не знающего маршрута и кадра, этот вызов не касается. */
   feed(session: string, opts?: FeedOptions): Promise<FeedResult>;
+  /** Подробности действия по курсору его записи (чат; возможность `chat`): команда и
+   *  вывод, diff. Отказ — значением, как у ленты. LAN — `GET /api/feed?detail=`,
+   *  relay — кадр Feed с полем `detail`. */
+  feedDetail(session: string, cursor: string): Promise<DetailResult>;
+  /** Экран агента в панели (чат; возможность `chat`). Только чтение, своя сессия — и гостю.
+   *  Отказ — значением `{ok:false}`, исключение — сбой связи (relay: срок 10 с). */
+  live(session: string): Promise<LiveResult>;
+  /** Действие человека: запрос, ответ на вопрос, остановка, режим, модель, сжатие.
+   *  Требует права ввода; отказ — значением. */
+  act(session: string, action: ChatAction): Promise<ActResult>;
+  /** Команды агента сессии для подсказок по «/». */
+  commands(session: string): Promise<CommandsResult>;
   /** VAPID public key агента для web-push (оба режима: LAN — REST, relay — E2E). */
   vapidKey(): Promise<string>;
   /** Отправить push-подписку агенту (оба режима). */
@@ -121,6 +137,9 @@ export interface Transport {
   /** Картинка из буфера обмена — файлом на хост; ответ — путь, который вставляют в
    *  терминал (term-paste.ts). Агент старше этой функции отвечает ошибкой. */
   pasteImage(blob: Blob): Promise<string>;
+  /** Любой файл (вложение чата, до 50 МиБ) на хост; ответ — путь. `name` агент
+   *  использует только для расширения. Агент старше этой функции отвечает ошибкой. */
+  pasteFile(blob: Blob, name: string): Promise<string>;
   /** Операции VCS (git/svn/hg) над папкой в пределах корня (оба режима). action —
    *  log|show|status|diff|commit; params — {root, path, rev?, file?, files?, message?}. */
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T>;
@@ -355,6 +374,22 @@ export class LanTransport implements Transport {
     return api.feed(session, opts);
   }
 
+  feedDetail(session: string, cursor: string): Promise<DetailResult> {
+    return api.feedDetail(session, cursor);
+  }
+
+  live(session: string): Promise<LiveResult> {
+    return api.live(session);
+  }
+
+  act(session: string, action: ChatAction): Promise<ActResult> {
+    return api.act(session, action);
+  }
+
+  commands(session: string): Promise<CommandsResult> {
+    return api.commands(session);
+  }
+
   vapidKey(): Promise<string> {
     return api.vapidKey();
   }
@@ -392,6 +427,10 @@ export class LanTransport implements Transport {
 
   pasteImage(blob: Blob): Promise<string> {
     return api.pasteImage(blob);
+  }
+
+  pasteFile(blob: Blob, name: string): Promise<string> {
+    return api.pasteFile(blob, name);
   }
 
   repo<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {

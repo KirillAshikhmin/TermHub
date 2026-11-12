@@ -14,6 +14,8 @@
 //   • страница бывает короче запрошенного лимита, не достигнув края.
 // Транспорт (LAN/relay) экрану не виден: он зовёт transport.feed() и читает значение.
 
+import { renderChatMarkdown, linkifyPaths, type PathLinker } from './chat-render';
+import { mountToolDetail } from './chat-tool';
 import { openCreateModal } from './dashboard';
 import { formatDate } from './format';
 import { t } from './i18n';
@@ -131,24 +133,38 @@ function failureText(res: { reason: string; detail: string }): string {
   return res.detail ? `${base}: ${res.detail}` : base;
 }
 
+/** Режим «переписка внутри чата»: каркас сессии (полоса сессий, Holo-бар) держит чат,
+ *  а лента даёт только список — с оформлением, раскрытием действий и ссылками. */
+export interface FeedChatOptions {
+  /** Куда вести пути из текста; `ready` закрывается, когда корни известны. */
+  linker: PathLinker & { ready: Promise<void> };
+  /** Связь с агентом пропала (`false`) или вернулась (`true`): переписка остаётся на экране. */
+  onConnection?: (ok: boolean) => void;
+  /** Пустой экран без беседы: узел вместо строки ошибки (приглашение написать запрос,
+   *  «агент не запущен»). null — оставить обычный отказ. */
+  emptyState?: (reason: 'no-transcript' | 'no-agent') => HTMLElement | null;
+}
+
 /** Монтирует ленту сессии в host. */
-export function mountFeed(host: HTMLElement, session: string, transport: Transport): FeedHandle {
+export function mountFeed(host: HTMLElement, session: string, transport: Transport, chat?: FeedChatOptions): FeedHandle {
   host.replaceChildren();
 
   // ── Каркас: полоса сессий + Holo-бар + тело вкладки ──────────────────
-  const sbar = mountSessionBar({
-    transport,
-    current: session,
-    onSwitch: (name) => (location.hash = sfeedHash(name)),
-    onCreate: () => openCreateModal(transport),
-  });
+  const sbar = chat
+    ? null
+    : mountSessionBar({
+        transport,
+        current: session,
+        onSwitch: (name) => (location.hash = sfeedHash(name)),
+        onCreate: () => openCreateModal(transport),
+      });
   let hideBar = (): void => {};
   const toolbar = document.createElement('div');
   toolbar.className = 'th-holowrap th-slide th-slide--top';
-  toolbar.append(renderHoloBar({ active: 'feed', session, transport, onHide: () => hideBar() }));
+  if (!chat) toolbar.append(renderHoloBar({ active: 'feed', session, transport, onHide: () => hideBar() }));
 
   const main = document.createElement('main');
-  main.className = 'th-feed';
+  main.className = chat ? 'th-feed th-feed--chat' : 'th-feed';
 
   // ── Шапка: чья беседа, работает ли агент, тумблер мышления ───────────
   const head = document.createElement('div');
@@ -214,13 +230,15 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   const fab = document.createElement('button');
   fab.type = 'button';
   fab.className = 'th-fab th-feed__fab';
-  fab.setAttribute('aria-label', t('feed.toBottom'));
-  fab.title = t('feed.toBottom');
+  fab.setAttribute('aria-label', chat ? t('chat.toLast') : t('feed.toBottom'));
+  fab.title = chat ? t('chat.toLast') : t('feed.toBottom');
   fab.append(svgIcon('down'));
   fab.hidden = true;
   main.append(head, searchSlot, listEl, fab);
-  host.append(sbar.el, toolbar, main);
-  hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main, toggleMount: sbar.toggleSlot }).hide;
+  if (sbar) {
+    host.append(sbar.el, toolbar, main);
+    hideBar = wireToolbar({ toolbars: [toolbar], floatMount: main, toggleMount: sbar.toggleSlot }).hide;
+  } else host.append(main);
 
   // ── Состояние окна ленты ─────────────────────────────────────────────
   let items: FeedEntry[] = [];
@@ -242,6 +260,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   let staleRetried = false;
   let disposed = false;
   let highlightTimer = 0;
+  // Последний запрос не дошёл (обрыв связи): в чате опрос продолжается и без `live`,
+  // чтобы состояние обновилось само, как только связь вернётся.
+  let offline = false;
 
   const nearBottom = (): boolean => listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight <= NEAR_BOTTOM;
   const paintFab = (): void => {
@@ -253,8 +274,16 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   };
   fab.addEventListener('click', toBottom);
 
-  const showNotice = (text: string): void => {
+  const showNotice = (text: string, reason?: string): void => {
     noticeEl.hidden = false;
+    // В чате у пустой беседы свои слова: приглашение написать запрос и «агент не запущен».
+    if (chat?.emptyState && items.length === 0 && (reason === 'no-transcript' || reason === 'no-agent')) {
+      const node = chat.emptyState(reason);
+      if (node) {
+        noticeEl.replaceChildren(node);
+        return;
+      }
+    }
     // Пустому экрану нужна та же дорога назад, что у Проводника и Репозитория, —
     // сообщение и «Повторить». Но когда беседа уже загружена, сбой одного запроса
     // её не стирает: экран остаётся читаемым, а отказ говорит строкой.
@@ -323,6 +352,14 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       const dup = entry.tool && (entry.text === entry.tool || entry.text.startsWith(`${entry.tool} `));
       what.textContent = dup ? entry.text.slice(entry.tool!.length).trimStart() : entry.text;
       box.append(what);
+      if (chat) {
+        linkifyPaths(what, chat.linker);
+        // Раскрытие — только у действий, у которых агент назвал подробности.
+        if (entry.detail && entry.cursor) {
+          const cursor = entry.cursor;
+          mountToolDetail(box, entry, () => transport.feedDetail(session, cursor));
+        }
+      }
       return box;
     }
 
@@ -337,7 +374,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
         box.classList.add('th-feed__entry--summary');
         const text = document.createElement('div');
         text.className = 'th-feed__text th-feed__md';
-        text.append(renderMarkdown(entry.text));
+        text.append(chat ? renderChatMarkdown(entry.text, chat.linker) : renderMarkdown(entry.text));
         box.append(text);
         if (entry.truncated) {
           const cut = document.createElement('div');
@@ -358,6 +395,9 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
 
     const meta = document.createElement('div');
     meta.className = 'th-feed__meta';
+    // В чате подписи «кто» нет: реплику человека отличает плашка справа, ответ агента —
+    // отсутствие плашки. Время остаётся подсказкой.
+    if (chat && entry.at) box.title = formatDate(entry.at);
     const who = document.createElement('span');
     who.className = 'th-feed__who';
     who.textContent =
@@ -377,9 +417,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     if (entry.kind === 'human') text.textContent = entry.text;
     else {
       text.classList.add('th-feed__md');
-      text.append(renderMarkdown(entry.text));
+      text.append(chat ? renderChatMarkdown(entry.text, chat.linker) : renderMarkdown(entry.text));
     }
-    box.append(meta, text);
+    if (chat && entry.kind !== 'thinking') box.append(text);
+    else box.append(meta, text);
     if (entry.truncated) {
       const cut = document.createElement('div');
       cut.className = 'th-feed__cut';
@@ -483,10 +524,18 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     try {
       res = await transport.feed(session, { limit: LIMIT, ...opts });
     } catch {
-      if (!disposed) showNotice(t('feed.loadError'));
+      if (!disposed) {
+        offline = true;
+        chat?.onConnection?.(false);
+        showNotice(t('feed.loadError'));
+      }
       return null;
     }
     if (disposed) return null;
+    if (offline) {
+      offline = false;
+      chat?.onConnection?.(true);
+    }
     if (res.ok) {
       staleRetried = false;
       clearNotice();
@@ -500,7 +549,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       showNotice(failureText({ reason: 'lookup-failed', detail: res.detail }));
       return null;
     }
-    showNotice(failureText(res));
+    showNotice(failureText(res), res.reason);
     return null;
   };
 
@@ -818,9 +867,19 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   };
   const timer = window.setInterval(() => {
     // Запросы не копим: пока очередь не пуста, следующего продолжения не просим.
-    if (disposed || queueDepth > 0 || !live || !shown()) return;
-    void loadNewer();
+    if (disposed || queueDepth > 0 || !(live || offline) || !shown()) return;
+    // Первая загрузка не удалась — продолжать нечего, берём хвост заново.
+    void (offline && items.length === 0 ? enqueue(tailJob) : loadNewer());
   }, POLL_MS);
+  // Корни проводника приехали позже первых записей — пути в них становятся ссылками.
+  if (chat) {
+    void chat.linker.ready.then(() => {
+      if (disposed) return;
+      for (const el of itemsEl.querySelectorAll<HTMLElement>('.th-feed__md, .th-feed__tooltext')) {
+        linkifyPaths(el, chat.linker);
+      }
+    });
+  }
 
   paintHeader();
   paintEdge();
@@ -865,7 +924,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       window.clearInterval(timer);
       window.clearTimeout(highlightTimer);
       window.clearTimeout(searchTimer);
-      sbar.teardown();
+      sbar?.teardown();
       host.replaceChildren();
     },
   };

@@ -32,7 +32,18 @@ import { openRelaySocket } from './relay-socket';
 import { b64, unb64 } from './b64';
 import { parseTerminalState, resizePayload } from './ws-frames';
 import { feedQuery } from './api';
-import type { CaffeinateState, DeviceInfo, DeviceScope, FeedOptions, FeedResult, FileStat, ShareInfo } from './api';
+import type { ActResult, ChatAction, CommandsResult, LiveResult } from '@termhub/protocol/chat';
+
+import type {
+  CaffeinateState,
+  DetailResult,
+  DeviceInfo,
+  DeviceScope,
+  FeedOptions,
+  FeedResult,
+  FileStat,
+  ShareInfo,
+} from './api';
 import type {
   CreateSessionInput,
   DirGroup,
@@ -161,7 +172,7 @@ interface PendingCaps {
  *  запроса, и очередь из нескольких разъехалась бы на первом же таймауте — опоздавший
  *  ответ достался бы соседу. Запрос в полёте поэтому тоже один. */
 interface PendingFeed {
-  resolve: (result: FeedResult) => void;
+  resolve: (result: unknown) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -309,6 +320,13 @@ export class RelayTransport implements Transport {
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
   private fileOpReqId = 0;
+  /** Запросы чата (Live/Act/Commands): корреляция по `id`, очереди «один в полёте» нет —
+   *  ответ опоздавшему запросу чужим не достаётся, потому что id у него свой. */
+  private pendingChat = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  private chatReqId = 0;
   private pendingGradle = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
@@ -761,6 +779,24 @@ export class RelayTransport implements Transport {
         else pending.resolve(r.result);
         return;
       }
+      case FrameType.LiveResult:
+      case FrameType.ActResult:
+      case FrameType.CommandsResult: {
+        let r: { id?: number } & Record<string, unknown>;
+        try {
+          r = frameJson(frame);
+        } catch {
+          return;
+        }
+        if (typeof r.id !== 'number') return;
+        const pending = this.pendingChat.get(r.id);
+        if (!pending) return; // опоздавший ответ: запрос уже сдался по сроку
+        this.pendingChat.delete(r.id);
+        clearTimeout(pending.timer);
+        const { id: _id, ...body } = r;
+        pending.resolve(body);
+        return;
+      }
       case FrameType.FileOpResult: {
         let r: { id?: number; result?: unknown; error?: string };
         try {
@@ -947,6 +983,7 @@ export class RelayTransport implements Transport {
     for (const map of [
       this.pendingRepo,
       this.pendingFileOp,
+      this.pendingChat,
       this.pendingGradle,
       this.pendingDirs,
       this.pendingFilesList,
@@ -1105,6 +1142,33 @@ export class RelayTransport implements Transport {
     });
   }
 
+  /** Запрос чата: кадр с id, ответ тем же id, срок — LIST_TIMEOUT_MS. Тело ответа
+   *  приходит без id — это уже готовый результат (значение, в том числе отказ). */
+  private chatCall<T>(type: FrameType, label: string, payload: Record<string, unknown>): Promise<T> {
+    if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
+    const id = ++this.chatReqId;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingChat.delete(id);
+        reject(new Error(`${label} timeout`));
+      }, LIST_TIMEOUT_MS);
+      this.pendingChat.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      this.sendFrame(jsonFrame(type, CONTROL_CHANNEL, { id, ...payload }));
+    });
+  }
+
+  live(session: string): Promise<LiveResult> {
+    return this.chatCall<LiveResult>(FrameType.Live, 'live', { session });
+  }
+
+  act(session: string, action: ChatAction): Promise<ActResult> {
+    return this.chatCall<ActResult>(FrameType.Act, 'act', { session, action });
+  }
+
+  commands(session: string): Promise<CommandsResult> {
+    return this.chatCall<CommandsResult>(FrameType.Commands, 'commands', { session });
+  }
+
   gradle<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {
     if (!this.isStreaming) return Promise.reject(new Error('relay not streaming'));
     const id = ++this.gradleReqId;
@@ -1183,7 +1247,16 @@ export class RelayTransport implements Transport {
 
   /** Картинка из буфера — теми же кусками, что загрузка файла; путь на хосте приходит
    *  ответом на последний кусок. */
-  async pasteImage(blob: Blob): Promise<string> {
+  pasteImage(blob: Blob): Promise<string> {
+    return this.pasteBlob(blob);
+  }
+
+  /** Любой файл — тем же путём; имя едет с каждым куском (агенту нужно только расширение). */
+  pasteFile(blob: Blob, name: string): Promise<string> {
+    return this.pasteBlob(blob, name);
+  }
+
+  private async pasteBlob(blob: Blob, name?: string): Promise<string> {
     const CHUNK = 256 * 1024;
     const upload = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`.padEnd(12, '0');
     let offset = 0;
@@ -1193,6 +1266,7 @@ export class RelayTransport implements Transport {
       const res = await this.fileOp<{ path?: string } | undefined>('paste-chunk', {
         upload,
         type: blob.type,
+        ...(name ? { name } : {}),
         offset,
         last,
         data: b64(buf),
@@ -1372,7 +1446,17 @@ export class RelayTransport implements Transport {
   /** Страница ленты кадром Feed; ответ — FeedResult тем же телом, что отдаёт
    *  `GET /api/feed`, поэтому разбирать его нечем: он и есть результат. */
   feed(session: string, opts: FeedOptions = {}): Promise<FeedResult> {
-    return new Promise<FeedResult>((resolve, reject) => {
+    return this.feedFrame<FeedResult>(feedQuery(session, opts));
+  }
+
+  /** Подробности действия: тот же кадр и та же очередь «один в полёте», что у страницы —
+   *  ответ тоже приезжает кадром FeedResult без id, а долг по таймауту общий. */
+  feedDetail(session: string, cursor: string): Promise<DetailResult> {
+    return this.feedFrame<DetailResult>(feedQuery(session, { detail: cursor }));
+  }
+
+  private feedFrame<T>(query: Record<string, string | number>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
       const send = (): void => {
         if (!this.isStreaming) {
           reject(new Error('relay not streaming'));
@@ -1387,7 +1471,7 @@ export class RelayTransport implements Transport {
         }, LIST_TIMEOUT_MS);
         this.pendingFeed = {
           resolve: (result): void => {
-            resolve(result);
+            resolve(result as T);
             this.startNextFeed();
           },
           reject: (err): void => {
@@ -1396,7 +1480,7 @@ export class RelayTransport implements Transport {
           },
           timer,
         };
-        this.sendFrame(jsonFrame(FrameType.Feed, CONTROL_CHANNEL, feedQuery(session, opts)));
+        this.sendFrame(jsonFrame(FrameType.Feed, CONTROL_CHANNEL, query));
       };
       // Очередь не обгоняют: пока в полёте запрос или кто-то ждёт в очереди — в хвост.
       if (this.pendingFeed || this.feedQueue.length > 0) this.feedQueue.push(send);

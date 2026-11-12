@@ -28,6 +28,10 @@ vi.mock('../src/term', () => ({
 // Проводник в этом тесте не нужен — его монтаж потянул бы транспорт файлов.
 vi.mock('../src/files', () => ({ mountFiles: vi.fn(() => () => {}) }));
 
+// Первый показ терминала — вход в сессию: вид решается по кэшу возможностей и списка
+// сессий, поэтому терминал встаёт на следующем витке, а не синхронно.
+const entered = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe("workspace.show('term')", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -46,7 +50,7 @@ describe("workspace.show('term')", () => {
     expect(document.title).toBe('TermHub');
   });
 
-  it('показ вкладки сессии фокусирует терминал — после показа и независимо от тумблера ⌨', () => {
+  it('показ вкладки сессии фокусирует терминал — после показа и независимо от тумблера ⌨', async () => {
     // Тумблер ⌨ выключен: это режим поля ввода (inputmode=none в term.ts), а не условие
     // фокуса — workspace на него не смотрит.
     localStorage.setItem('termhub.keyboard', '0');
@@ -54,6 +58,7 @@ describe("workspace.show('term')", () => {
     const ws = mountWorkspace(root, 'work', { mode: 'lan', clientScope: null } as unknown as Transport);
 
     ws.show('term');
+    await entered();
     expect(term.handle.focus).toHaveBeenCalledTimes(1);
 
     ws.show('files');
@@ -64,10 +69,11 @@ describe("workspace.show('term')", () => {
     ws.teardown();
   });
 
-  it("повторный show('term') на уже активной вкладке фокус не трогает — повтор события маршрута не крадёт его у compose-бара", () => {
+  it("повторный show('term') на уже активной вкладке фокус не трогает — повтор события маршрута не крадёт его у compose-бара", async () => {
     const root = document.createElement('div');
     const ws = mountWorkspace(root, 'work', { mode: 'lan', clientScope: null } as unknown as Transport);
     ws.show('term');
+    await entered();
     ws.show('term');
     expect(term.handle.focus).toHaveBeenCalledTimes(1);
     // Ушли на другую вкладку и вернулись — фокус снова: до этого show вид не был активен.
@@ -77,10 +83,11 @@ describe("workspace.show('term')", () => {
     ws.teardown();
   });
 
-  it('показ других вкладок терминал не фокусирует', () => {
+  it('показ других вкладок терминал не фокусирует', async () => {
     const root = document.createElement('div');
     const ws = mountWorkspace(root, 'work', { mode: 'lan', clientScope: null } as unknown as Transport);
     ws.show('term');
+    await entered();
     ws.show('files');
     expect(term.handle.focus).toHaveBeenCalledTimes(1);
     ws.teardown();

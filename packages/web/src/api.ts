@@ -1,6 +1,7 @@
 // Обёртка над REST агента: cookie-сессия (same-origin), единый разбор ошибок,
 // 401 на защищённых маршрутах → редирект на экран входа.
 
+import type { ActResult, ChatAction, CommandsResult, LiveResult, ToolDetail } from '@termhub/protocol/chat';
 import { parseCaps } from '@termhub/protocol/capabilities';
 import type { FileContent, FileEntry, SessionInfo } from '@termhub/protocol';
 
@@ -98,6 +99,9 @@ export interface FeedEntry {
   truncated?: true;
   /** Место записи `<inode>:<offset>` — им же прыгают к ней через `around`. */
   cursor?: string;
+  /** У действия есть подробности (команда и вывод, diff): их тянут отдельным запросом
+   *  `feed` с `detail=<cursor>`. Только у `kind: 'tool'`; у старого агента поля нет. */
+  detail?: true;
 }
 
 /** Почему ленты нет. Первые пять — слова самой ленты; `forbidden` приходит не от неё,
@@ -139,6 +143,10 @@ export interface FeedFailure {
 /** Ответ на запрос страницы: отказ — такое же значение, как страница. */
 export type FeedResult = FeedPage | FeedFailure;
 
+/** Подробности действия (`feed` с `detail`): тело `ToolDetail` с `ok:true` либо отказ
+ *  ленты. Форма провода — `@termhub/protocol/chat`. */
+export type DetailResult = ({ ok: true } & ToolDetail) | FeedFailure;
+
 /** Курсоры взаимоисключающие; при нескольких сразу агент берёт `around`, затем
  *  `before`, затем `after`. Лимит по умолчанию 200, максимум 1000. */
 export interface FeedOptions {
@@ -148,6 +156,8 @@ export interface FeedOptions {
   around?: string;
   /** Вместо страницы ленты вернуть расход сессии (usage.ts; возможность `usage`). */
   usage?: true;
+  /** Вместо страницы вернуть подробности действия по курсору его записи (чат). */
+  detail?: string;
 }
 
 /** Запрос страницы на проводе: один перечень опций на оба транспорта — LAN раскладывает
@@ -162,6 +172,7 @@ export function feedQuery(session: string, opts: FeedOptions): Record<string, st
   if (opts.after) query.after = opts.after;
   if (opts.around) query.around = opts.around;
   if (opts.usage) query.usage = 1;
+  if (opts.detail) query.detail = opts.detail;
   return query;
 }
 
@@ -231,6 +242,23 @@ export interface DiagInfo {
     | { configured: true; url: string; connected: boolean; agentId: string; clients: number; dial?: string };
 }
 
+/** Файл на хост: тело — сам файл, ответ — путь. Тип и (необязательно) имя едут параметрами:
+ *  имя агент использует только для расширения. */
+async function pasteBlob(blob: Blob, name?: string): Promise<string> {
+  let res: Response;
+  const q = `type=${encodeURIComponent(blob.type)}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+  try {
+    res = await fetch(`/api/paste-image?${q}`, { method: 'POST', credentials: 'same-origin', body: blob });
+  } catch (err) {
+    throw new ApiError(0, err instanceof Error ? err.message : 'network error');
+  }
+  const body = (await res.json().catch(() => ({}))) as { path?: unknown; error?: unknown };
+  if (!res.ok || typeof body.path !== 'string') {
+    throw new ApiError(res.status, typeof body.error === 'string' ? body.error : res.statusText);
+  }
+  return body.path;
+}
+
 export const api = {
   login: (password: string) => request<void>('POST', '/api/login', { body: { password }, redirectOnAuth: false }),
   sessions: () => request<SessionInfo[]>('GET', '/api/sessions'),
@@ -256,6 +284,17 @@ export const api = {
     for (const [key, value] of Object.entries(feedQuery(session, opts))) q.set(key, String(value));
     return request<FeedResult>('GET', `/api/feed?${q}`);
   },
+  /** Подробности действия: тот же маршрут ленты с `detail` (ADR чата). */
+  feedDetail: (session: string, cursor: string) => {
+    const q = new URLSearchParams();
+    for (const [key, value] of Object.entries(feedQuery(session, { detail: cursor }))) q.set(key, String(value));
+    return request<DetailResult>('GET', `/api/feed?${q}`);
+  },
+  /** Экран агента в панели. Отказ — телом `ok:false` при HTTP 200, как у ленты. */
+  live: (session: string) => request<LiveResult>('GET', `/api/live?session=${encodeURIComponent(session)}`),
+  act: (session: string, action: ChatAction) => request<ActResult>('POST', '/api/act', { body: { session, action } }),
+  commands: (session: string) =>
+    request<CommandsResult>('GET', `/api/commands?session=${encodeURIComponent(session)}`),
   caffeinate: () => request<CaffeinateState>('GET', '/api/caffeinate'),
   setCaffeinate: (active: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { active } }),
   setLidAwake: (lid: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { lid } }),
@@ -308,23 +347,9 @@ export const api = {
       xhr.send(file);
     }),
   /** Картинка из буфера: тело — сам файл, ответ — путь на хосте (см. term-paste.ts). */
-  pasteImage: async (blob: Blob): Promise<string> => {
-    let res: Response;
-    try {
-      res = await fetch(`/api/paste-image?type=${encodeURIComponent(blob.type)}`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: blob,
-      });
-    } catch (err) {
-      throw new ApiError(0, err instanceof Error ? err.message : 'network error');
-    }
-    const body = (await res.json().catch(() => ({}))) as { path?: unknown; error?: unknown };
-    if (!res.ok || typeof body.path !== 'string') {
-      throw new ApiError(res.status, typeof body.error === 'string' ? body.error : res.statusText);
-    }
-    return body.path;
-  },
+  pasteImage: (blob: Blob): Promise<string> => pasteBlob(blob),
+  /** Любой файл на хост (вложение чата): тот же маршрут, имя — подсказка для расширения. */
+  pasteFile: (blob: Blob, name: string): Promise<string> => pasteBlob(blob, name),
   share: (scope?: DeviceScope) => request<ShareInfo>('POST', '/api/share', { body: { scope } }),
   devices: () => request<DeviceInfo[]>('GET', '/api/devices'),
   revoke: (fingerprint: string) => request<void>('DELETE', `/api/devices/${encodeURIComponent(fingerprint)}`),

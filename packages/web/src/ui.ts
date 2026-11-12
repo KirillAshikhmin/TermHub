@@ -16,6 +16,7 @@ import type { Transport } from './transport';
 import { openDevicesModal, openShareDialog } from './sharing';
 import { whenCap } from './capabilities';
 import { sfeedHash, sgradleHash, termHash } from './routes';
+import { chatCapable, effectiveView, sessionInfo, setSessionViewPref, type SessionView } from './view-pref';
 
 const ICONS: Record<string, string> = {
   terminal: '<path d="M4 6l6 6-6 6M12 18h8"/>',
@@ -419,6 +420,42 @@ export function knownGradle(transport: Transport, session: string): GradleProjec
   return known && gradleFresh(known.at) ? known.value : undefined;
 }
 
+/** Переключатель «Терминал / Чат» внутри плашки сессии: заменяет подпись плашки. Нажатие
+ *  запоминает выбор по сессии и ведёт на нужный адрес; плашка сама (мимо кнопок) ведёт
+ *  в тот вид, в котором сессию сейчас открывают. */
+function mountViewSwitch(
+  tab: HTMLElement,
+  session: string,
+  active: 'term' | 'files' | 'repo' | 'gradle' | 'feed',
+  view: SessionView,
+): void {
+  const sw = document.createElement('span');
+  sw.className = 'th-viewsw';
+  sw.setAttribute('role', 'group');
+  sw.setAttribute('aria-label', t('chat.view.label'));
+  const current = active === 'term' ? 'term' : active === 'feed' ? 'chat' : null;
+  for (const v of ['term', 'chat'] as const) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'th-viewsw__opt';
+    b.dataset.view = v;
+    b.textContent = t(`chat.view.${v}`);
+    b.setAttribute('aria-pressed', String(current === v));
+    b.addEventListener('click', (e) => {
+      // Кнопка живёт внутри ссылки на плашку: без этого клик ушёл бы ещё и в её переход.
+      e.preventDefault();
+      e.stopPropagation();
+      setSessionViewPref(session, v);
+      if (tab instanceof HTMLAnchorElement) tab.href = v === 'chat' ? sfeedHash(session) : termHash(session);
+      location.hash = v === 'chat' ? sfeedHash(session) : termHash(session);
+    });
+    sw.append(b);
+  }
+  tab.querySelector('.th-holotab__label')?.replaceWith(sw);
+  // Плашка мимо кнопок — в текущий вид сессии.
+  if (tab instanceof HTMLAnchorElement) tab.href = view === 'chat' ? sfeedHash(session) : termHash(session);
+}
+
 /** Android-Holo таб-бар рабочего пространства сессии: Сессия / Проводник / Репозиторий
  *  (+ Gradle у Gradle-проекта, + Лента у агента с возможностью `feed`) и «⋮» справа
  *  (сворачивает тулбар). Активный таб подчёркнут снизу цветной полосой во всю ширину.
@@ -467,16 +504,25 @@ export function renderHoloBar(opts: {
   hide.addEventListener('click', opts.onHide);
   bar.append(hide);
   const transport = opts.transport;
-  // Лента — не пятая вкладка, а маленькая кнопка ВНУТРИ плашки «Терминал», справа
-  // от подписи: ряд остаётся из четырёх, а лента из него достижима. Её нет вовсе,
-  // если возможность `feed` объявили не обе стороны (ADR 0018); пересечение считается
-  // на подключении, но после перезагрузки обмен бывает ещё в пути — тогда кнопка
-  // встаёт по его ответу. Файловой области лента не касается: гостю без файлов она
-  // видна (§8). На экране ленты (`active: 'feed'`) не подсвечен ни один таб, и
-  // «Терминал» первым же и есть дорога назад.
+  // Лента — не пятая вкладка. Там, где возможен чат (Claude или Codex в панели и
+  // возможность `chat` у обеих сторон), в плашке «Терминал» стоит переключатель вида
+  // «Терминал / Чат»; во всех остальных сессиях — прежняя маленькая кнопка ленты
+  // внутри плашки (если есть возможность `feed`, ADR 0018). Пересечение возможностей
+  // считается на подключении, но после перезагрузки обмен бывает ещё в пути — тогда
+  // элемент встаёт по его ответу. Файловой области это не касается: гостю без файлов
+  // чат и лента видны (§8). На экране чата подсвечена позиция «Чат», а не вкладка.
   if (transport) {
-    void whenCap('feed', transport).then((ok) => {
-      if (!ok) return;
+    void Promise.all([
+      whenCap('feed', transport),
+      whenCap('chat', transport),
+      sessionInfo(transport, opts.session),
+    ]).then(([feedOk, chatOk, info]) => {
+      const caps = [...(feedOk ? ['feed'] : []), ...(chatOk ? ['chat'] : [])];
+      if (info && chatCapable(info, caps)) {
+        mountViewSwitch(termTab, opts.session, opts.active, effectiveView(opts.session, info, caps));
+        return;
+      }
+      if (!feedOk) return;
       const feed = document.createElement('button');
       feed.type = 'button';
       feed.className = 'th-holotab__feed';

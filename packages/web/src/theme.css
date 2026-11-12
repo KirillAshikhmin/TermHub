@@ -4287,3 +4287,287 @@ main.th-feed {
 
 .th-feed__head { flex-wrap: wrap; }
 .th-feed__toggle-wrap + .th-feed__toggle-wrap { margin-left: 0; }
+
+/* ── Переключатель вида «Терминал / Чат» в плашке сессии ───────────────
+   Заменяет подпись плашки: две позиции, активная подсвечена. Плашка с ним шире
+   соседей и без значка — на узком экране ряд остаётся читаемым. */
+.th-holotab--term:has(.th-viewsw) {
+  flex: 1.7;
+}
+.th-holotab--term:has(.th-viewsw) .th-holotab__icon {
+  display: none;
+}
+.th-viewsw {
+  display: inline-flex;
+  min-width: 0;
+  padding: 2px;
+  gap: 2px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+}
+.th-viewsw__opt {
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-full);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.th-viewsw__opt[aria-pressed='true'] {
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+.th-viewsw__opt:hover {
+  color: var(--text);
+}
+@media (max-width: 600px) {
+  .th-viewsw__opt {
+    padding: 0 7px;
+    font-size: 0.74rem;
+  }
+}
+
+/* ── Чат: оболочка вокруг переписки ────────────────────────────────────
+   Колонка на всю высоту: состояние, переписка (забирает остаток), вопрос,
+   терминал, поле ввода. Переписка — прежняя лента в режиме `th-feed--chat`:
+   человек плашкой справа, ответ агента во всю ширину без плашки, действия
+   свёрнутыми строками. Горизонтальной прокрутки страницы нет: длинное
+   переносится, код и таблицы едут в своих обёртках. */
+.th-chat {
+  position: relative; /* якорь для плавающей ⋮ (wireToolbar) */
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.th-chat__thread {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.th-chat__slot:empty {
+  display: none;
+}
+.th-chat__slot {
+  flex: none;
+  min-width: 0;
+}
+.th-chat__offline {
+  flex: none;
+  padding: 6px 12px;
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: 0.8rem;
+  text-align: center;
+}
+.th-chat__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 16px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.th-chat__empty-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+}
+.th-chat__empty-hint {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+main.th-feed--chat {
+  background: transparent;
+}
+.th-feed--chat .th-feed__list {
+  padding: 12px 14px 18px;
+}
+.th-feed--chat .th-feed__items {
+  gap: 14px;
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
+}
+/* Реплика человека — плашка справа, ширина по тексту, но не шире 85%. */
+.th-feed--chat .th-feed__entry--human {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 9px 13px;
+  border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  background: var(--accent-tint);
+  border: none;
+}
+/* Ответ агента — во всю ширину, без плашки и рамки. */
+.th-feed--chat .th-feed__entry--agent {
+  padding: 0 2px;
+  background: transparent;
+  border: none;
+}
+.th-feed--chat .th-feed__text {
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.th-feed--chat .th-feed__entry--human .th-feed__text {
+  white-space: pre-wrap;
+}
+/* Действия — свёрнутые строки между абзацами; подряд идущие прижаты друг к другу. */
+.th-feed--chat .th-feed__entry--tool {
+  padding: 0;
+  font-size: 0.8rem;
+}
+.th-feed--chat .th-feed__entry--tool.is-cont {
+  margin-top: -10px;
+}
+.th-feed--chat .th-feed__entry--tool.is-expandable {
+  display: block;
+  border-radius: var(--r-sm);
+}
+.th-tool__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.th-tool__head:hover {
+  background: var(--bg-hover);
+}
+.th-tool__head::after {
+  content: '▸';
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  transition: transform var(--t);
+}
+.th-feed__entry--tool.is-open > .th-tool__head::after {
+  transform: rotate(90deg);
+}
+.th-tool__panel {
+  margin: 4px 0 2px 6px;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 0.8rem;
+  min-width: 0;
+}
+.th-tool__label {
+  margin: 0 0 3px;
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+.th-tool__input,
+.th-tool__output {
+  margin: 0 0 8px;
+  max-height: 320px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+.th-tool__loading,
+.th-tool__pending,
+.th-tool__none,
+.th-tool__truncated {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+.th-tool__error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--danger);
+}
+.th-diff__file {
+  margin: 0 0 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.th-diff__path {
+  margin-bottom: 3px;
+  color: var(--text-dim);
+}
+.th-diff__line {
+  display: flex;
+  white-space: pre;
+  min-width: max-content;
+}
+.th-diff__sign {
+  flex: none;
+  width: 1.4em;
+  text-align: center;
+  user-select: none;
+}
+.th-diff__line.is-add {
+  background: rgba(56, 211, 168, 0.16);
+}
+.th-diff__line.is-del {
+  background: var(--danger-tint);
+}
+.th-diff__line.is-add .th-diff__sign {
+  color: var(--accent);
+}
+.th-diff__line.is-del .th-diff__sign {
+  color: var(--danger);
+}
+.th-path {
+  color: var(--accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+/* Кнопка копирования в углу блока кода. */
+.th-feed--chat .th-md__pre {
+  position: relative;
+}
+.th-md__copy {
+  position: sticky;
+  float: right;
+  top: 0;
+  margin: -4px -6px 0 8px;
+  padding: 2px 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.th-md__copy:hover {
+  color: var(--text);
+}
+@media (max-width: 600px) {
+  .th-feed--chat .th-feed__entry--human {
+    max-width: 92%;
+  }
+}
+/* Подсветка находки сильнее фона записи и в чате: правила чата выше сняли бы её. */
+.th-feed--chat .th-feed__entry.is-hit {
+  background: rgba(56, 211, 168, 0.35);
+  border-radius: var(--r-sm);
+}
+:root[data-theme='light'] .th-feed--chat .th-feed__entry.is-hit {
+  background: rgba(22, 183, 144, 0.3);
+}
