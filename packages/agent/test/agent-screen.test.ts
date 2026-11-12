@@ -361,6 +361,8 @@ describe('Claude Code', () => {
       queued: 1,
       queue: [{ text: 'queued message one' }],
       queueEdit: 'all',
+      // Подпись «ctrl+x ctrl+s to send now» под очередью, строка ввода пуста.
+      queueSend: true,
       agentCount: 2,
     });
   });

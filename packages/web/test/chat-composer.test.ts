@@ -995,6 +995,26 @@ describe('сообщение в очереди агента: «Изменить�
     expect(labels(fx.locals[0]!)).toHaveLength(2);
   });
 
+  it('экран называет «отправить сейчас» — кнопка у последнего сообщения очереди шлёт send-now', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['первое', 'второе']);
+    fx.screen.value = working({ queued: 2, queue: [{ text: 'первое' }, { text: 'второе' }], queueSend: true });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toEqual([]);
+    expect(labels(fx.locals[1]!)).toEqual([t('chat.composer.queueSendNow')]);
+    fx.locals[1]!.actions[0]!.run();
+    await flush();
+    expect(fx.acts.at(-1)).toEqual({ kind: 'send-now', queued: 2 });
+    // Чужое сообщение в очереди — кнопка у него.
+    const other = mount();
+    other.screen.value = working({ queued: 1, queue: [{ text: 'из терминала' }], queueSend: true });
+    other.emit();
+    expect(labels(other.locals[0]!)).toEqual([t('chat.composer.queueSendNow')]);
+    other.composer.teardown();
+  });
+
   it('сообщение очереди агента, отправленное не из этого чата, стоит в переписке, пока экран его рисует', async () => {
     fx = mount();
     fx.screen.value = working({ queued: 1, queue: [{ text: 'набрано в терминале', cut: true }] });

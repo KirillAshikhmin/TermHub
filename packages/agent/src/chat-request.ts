@@ -93,6 +93,10 @@ export function parseAction(value: unknown): ChatAction | null {
       if (raw.queued === undefined) return { kind: 'unqueue' };
       if (typeof raw.queued !== 'number' || !Number.isInteger(raw.queued) || raw.queued < 0) return null;
       return { kind: 'unqueue', queued: raw.queued };
+    case 'send-now':
+      if (raw.queued === undefined) return { kind: 'send-now' };
+      if (typeof raw.queued !== 'number' || !Number.isInteger(raw.queued) || raw.queued < 0) return null;
+      return { kind: 'send-now', queued: raw.queued };
     case 'interrupt':
     case 'compact':
     case 'take-input':

@@ -1344,6 +1344,38 @@ describe('sessionAct — прерывание, режим, модель, сжа�
   });
 });
 
+describe('sessionAct — отправить очередь сейчас (Claude: «ctrl+x ctrl+s to send now»)', () => {
+  const CTRL_X = '\x18';
+  const CTRL_S = '\x13';
+
+  it('Claude: две клавиши по порядку; успех — очередь на экране стала короче', async () => {
+    const f = fake('claude', 'queued-two', (sent) => (sent === CTRL_S ? 'working' : undefined));
+    expect(await act(f, { kind: 'send-now', queued: 2 })).toMatchObject({ ok: true, screen: { kind: 'working' } });
+    expect(f.sent).toEqual([CTRL_X, CTRL_S]);
+  });
+
+  it('очередь не стала короче — отказ: отправилась ли она, не подтверждено', async () => {
+    const f = fake('claude', 'queued-two', () => undefined);
+    expect(await act(f, { kind: 'send-now' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([CTRL_X, CTRL_S]);
+  });
+
+  it('экран подписи не показывает или очередь уже другая — клавиши не идут', async () => {
+    const idle = fake('claude', 'working', () => undefined);
+    expect(await act(idle, { kind: 'send-now' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(idle.sent).toEqual([]);
+    const other = fake('claude', 'queued-two', () => undefined);
+    expect(await act(other, { kind: 'send-now', queued: 1 })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(other.sent).toEqual([]);
+  });
+
+  it('Codex такой клавиши не называет — unsupported', async () => {
+    const f = fake('codex', 'queue-edit-two', () => undefined);
+    expect(await act(f, { kind: 'send-now' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(f.sent).toEqual([]);
+  });
+});
+
 describe('sessionAct — возврат сообщения из очереди агента (замер 12.11.2026)', () => {
   const SHIFT_LEFT = '\x1b[1;2D';
   const UP = '\x1b[A';

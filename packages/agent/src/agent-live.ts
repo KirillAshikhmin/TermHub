@@ -392,6 +392,8 @@ async function run(ctx: Ctx, action: ChatAction): Promise<ActResult> {
       return takeInput(ctx);
     case 'unqueue':
       return unqueue(ctx, action);
+    case 'send-now':
+      return sendNow(ctx, action);
     default:
       return fail('unsupported', 'unknown action');
   }
@@ -543,6 +545,28 @@ async function takeInput(ctx: Ctx): Promise<ActResult> {
   const cleared = await clearInput(ctx);
   if (!cleared) return fail('stale', 'agent input line did not clear');
   return { ok: true, screen: cleared, taken };
+}
+
+/** Отправить очередь агента сейчас. Клавиши идут только по экрану, который сам их называет
+ *  (`queueSend`): очередь под подписью, строка ввода пуста. Успех — экран со строкой ввода,
+ *  где очередь стала короче; иначе, отправилась ли она, не подтверждено. */
+async function sendNow(ctx: Ctx, action: Extract<ChatAction, { kind: 'send-now' }>): Promise<ActResult> {
+  const { screen, profile } = ctx;
+  const keys = profile.keys.sendNow;
+  if (keys === undefined) return fail('unsupported', 'agent has no key to send its queue now');
+  if (!atInput(screen)) return fail('stale', 'agent is not at its input line');
+  const count = (s: ScreenState): number => Math.max(s.queued ?? 0, s.queue?.length ?? 0);
+  const had = count(screen);
+  if (screen.queueSend !== true || had === 0) {
+    return fail('stale', 'the agent screen shows no queue that can be sent now');
+  }
+  if (action.queued !== undefined && action.queued !== had) {
+    return fail('stale', 'the agent queue has changed: it holds a different number of messages');
+  }
+  for (const key of keys) await press(ctx, key);
+  const sent = await until(ctx, (s) => atInput(s) && count(s) < had);
+  if (!sent.met) return fail('stale', 'the agent queue did not get shorter: whether it was sent is not confirmed');
+  return done(sent.screen);
 }
 
 /** Возврат сообщения из очереди агента. Клавиша идёт только по экрану, который сам её

@@ -422,7 +422,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   const inQueue: Queued[] = [];
   /** Сообщения очереди агента, отправленные не из этого чата (набраны в терминале, с
    *  другого устройства): показаны в переписке, пока экран агента их рисует. */
-  const foreign = new Map<string, LocalMessage>();
+  const foreign = new Map<string, { msg: LocalMessage; shown: string }>();
   /** Идёт возврат из очереди. Клавиша возврата вынимает сообщение раньше, чем приходит
    *  ответ на действие, и опрос экрана посреди него видит пустую очередь — сверка приняла
    *  бы снятое сообщение за доставленное. Пока действие в пути, очередь не сверяется; отказ
@@ -455,17 +455,25 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
       strangers.add(id);
       // Пока идёт своя отправка, её сообщение уже на экране агента, но ещё не в `inQueue`.
       if (foreign.has(id) || sending) return;
-      const msg = thread.addLocal(d.cut ? `${d.text}\n…` : d.text, 'queued');
-      msg.set('queued', { delivered: true });
-      foreign.set(id, msg);
+      foreign.set(id, { msg: thread.addLocal(d.cut ? `${d.text}\n…` : d.text, 'queued'), shown: '' });
     });
-    for (const [id, msg] of foreign) {
-      if (strangers.has(id)) continue;
-      msg.remove();
-      foreign.delete(id);
-    }
     const scope = screen.queueEdit;
     const last = inQueue[inQueue.length - 1];
+    // «Отправить сейчас» — у последнего сообщения очереди: клавиша агента шлёт её всю.
+    const sendAct = { label: t('chat.composer.queueSendNow'), run: () => void sendQueueNow() };
+    const canSend = screen.queueSend === true;
+    const lastStranger = last ? undefined : [...strangers].pop();
+    for (const [id, item] of foreign) {
+      if (!strangers.has(id)) {
+        item.msg.remove();
+        foreign.delete(id);
+        continue;
+      }
+      const shown = canSend && id === lastStranger ? 'send' : 'plain';
+      if (shown === item.shown) continue;
+      item.shown = shown;
+      item.msg.set('queued', { delivered: true, actions: shown === 'send' ? [sendAct] : [] });
+    }
     const reachable =
       scope === 'last'
         ? !!last && drawn.length > 0 && sameQueued(drawn[drawn.length - 1]!, last.text)
@@ -475,19 +483,48 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     for (const item of inQueue) {
       const mine = reachable && item === last;
       const all = mine && scope === 'all' && inQueue.length > 1;
-      const key = `${mine ? (all ? 'all' : 'one') : ''}\u0000${item.note ?? ''}`;
+      const send = canSend && item === last;
+      const key = `${mine ? (all ? 'all' : 'one') : ''}\u0000${send ? 'send' : ''}\u0000${item.note ?? ''}`;
       if (key === item.shown) continue;
       item.shown = key;
       item.msg.set('queued', {
         delivered: true,
         ...(item.note ? { note: item.note } : {}),
-        actions: mine
-          ? [
-              { label: t(all ? 'chat.composer.queueEditAll' : 'chat.composer.queueEdit'), run: () => void unqueue(true) },
-              { label: t(all ? 'chat.composer.queueCancelAll' : 'chat.composer.queueCancel'), run: () => void unqueue(false) },
-            ]
-          : [],
+        actions: [
+          ...(send ? [sendAct] : []),
+          ...(mine
+            ? [
+                { label: t(all ? 'chat.composer.queueEditAll' : 'chat.composer.queueEdit'), run: () => void unqueue(true) },
+                { label: t(all ? 'chat.composer.queueCancelAll' : 'chat.composer.queueCancel'), run: () => void unqueue(false) },
+              ]
+            : []),
+        ],
       });
+    }
+  };
+  /** Отправить очередь агента сейчас, не дожидаясь конца его хода. Сообщения остаются в
+   *  переписке: очередь на экране опустеет — сверка снимет с них пометку «в очереди». */
+  const sendQueueNow = async (): Promise<void> => {
+    if (sending || disposed) return;
+    const screen = live.state()?.screen;
+    if (screen?.queueSend !== true) return;
+    sending = true;
+    syncSend();
+    let note: string | undefined;
+    try {
+      const res = await live.act({ kind: 'send-now', queued: Math.max(screen.queued ?? 0, screen.queue?.length ?? 0) });
+      if (!res.ok) note = t('chat.composer.sendNowFailed', { reason: failText(res) });
+    } catch {
+      note = t('chat.composer.noConnection');
+    } finally {
+      sending = false;
+      if (!disposed) {
+        syncSend();
+        const last = inQueue[inQueue.length - 1];
+        if (last) last.note = note;
+        syncQueue();
+        thread.refresh();
+      }
     }
   };
   /** Вернуть сообщение из очереди агента: `keep` — текст встаёт в поле ввода («Изменить»),

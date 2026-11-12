@@ -914,6 +914,9 @@ function readBox(
         : queueEnd >= 0 && edit.sign.test(rows[queueEnd]!.text);
     if (named) queueEdit = edit.scope;
   }
+  // «Отправить сейчас» называет подпись, под которой стоит очередь; строка ввода пуста.
+  const queueSend =
+    profile.keys.sendNow !== undefined && under >= 0 && !!queue && queue.length > 0 && input === '' && !invite;
   return {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),
@@ -925,6 +928,7 @@ function readBox(
     ...(queued > 0 ? { queued } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     ...(queueEdit === undefined ? {} : { queueEdit }),
+    ...(queueSend ? { queueSend: true } : {}),
     ...(model === undefined ? {} : { model }),
     ...backgroundOf(box, profile),
     ...(invite ? { pending: true } : {}),
