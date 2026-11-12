@@ -5,10 +5,12 @@
 // страница называет последний известный (term-mode.ts) и текущую просьбу клиента.
 
 import { api } from './api';
+import { healthRows, resetHealth, type FailureKind } from './chat-health';
 import type { DiagInfo } from './api';
 import { t } from './i18n';
 import { lastTerminalMode, terminalModeName, terminalModeRequest } from './term-mode';
 import { relayTransportInUse } from './relay-transport-state';
+import { formatRelativeTime } from './time';
 import { iconButton, openModal, renderHeader, spinner } from './ui';
 import type { Transport } from './transport';
 
@@ -74,6 +76,47 @@ function diagRow(key: string, value: string): HTMLElement {
   return row;
 }
 
+const FAILURE_KINDS: FailureKind[] = ['unknown', 'mode', 'model', 'unsupported'];
+
+/** Сбои чата по сессиям — со счётчика на устройстве (chat-health.ts), поэтому видны и
+ *  через relay, где /api/diag нет. */
+function chatHealthBlock(): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'th-diag__card th-diag__chat';
+  const head = document.createElement('div');
+  head.className = 'th-diag__chat-head';
+  const title = document.createElement('strong');
+  title.textContent = t('diag.chatTitle');
+  head.append(title);
+  box.append(head);
+  const rows = healthRows();
+  if (rows.length === 0) {
+    const none = document.createElement('div');
+    none.className = 'th-diag__note';
+    none.textContent = t('diag.chatNone');
+    box.append(none);
+    return box;
+  }
+  for (const r of rows) {
+    const item = document.createElement('div');
+    item.className = 'th-diag__chat-row';
+    const who = [r.agent, r.version].filter(Boolean).join(' ');
+    const kinds = FAILURE_KINDS.filter((k) => r.counts[k]).map((k) => `${t(`diag.chatKind.${k}`)} ×${r.counts[k]}`);
+    item.textContent = `${r.session} · ${who} · ${kinds.join(', ')} · ${t('diag.chatLast', { time: formatRelativeTime(r.last, t) })}`;
+    box.append(item);
+  }
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'th-btn th-diag__chat-reset';
+  reset.textContent = t('diag.chatReset');
+  reset.addEventListener('click', () => {
+    resetHealth();
+    box.replaceWith(chatHealthBlock());
+  });
+  head.append(reset);
+  return box;
+}
+
 function browserTransportName(via: 'ws' | 'poll' | 'rtc'): string {
   if (via === 'rtc') return t('diag.transportRtc');
   if (via === 'poll') return t('diag.transportPoll');
@@ -131,7 +174,7 @@ function fillDiag(main: HTMLElement): () => void {
     rows.push([t('diag.roots'), d.roots.join('\n')]);
 
     for (const [k, v] of rows) card.append(diagRow(k, v));
-    main.append(card);
+    main.append(card, chatHealthBlock());
   };
 
   const load = (): void => {
@@ -154,7 +197,7 @@ function fillDiag(main: HTMLElement): () => void {
         const p = document.createElement('p');
         p.className = 'th-diag__note';
         p.textContent = t('diag.unavailable');
-        main.append(p);
+        main.append(p, chatHealthBlock());
       },
     );
   };

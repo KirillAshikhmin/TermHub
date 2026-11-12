@@ -187,7 +187,7 @@ describe('оболочка чата', () => {
     chat.teardown();
   });
 
-  it('места для следующих тасков есть и названы: статус, вопрос, терминал, поле ввода — пустые', async () => {
+  it('места оболочки есть и названы: статус, вопрос, терминал, поле ввода; поле ввода пусто (его строит другой таск)', async () => {
     const { transport } = fixture(() => page({ entries: [HUMAN] }));
     const chat = mountChat(host, 'work', transport);
     await flush();
@@ -195,7 +195,7 @@ describe('оболочка чата', () => {
       const slot = host.querySelector<HTMLElement>(`[data-slot="${name}"]`)!;
       expect(slot).not.toBeNull();
       expect(chat.slots[name]).toBe(slot);
-      expect(slot.childElementCount).toBe(0);
+      if (name === 'composer') expect(slot.childElementCount).toBe(0);
     }
     // порядок сверху вниз: состояние, переписка, вопрос, терминал, поле ввода
     const order = [...host.querySelector('.th-chat')!.children].map((c) => (c as HTMLElement).dataset.slot ?? c.className);

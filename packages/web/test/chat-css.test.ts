@@ -66,3 +66,14 @@ describe('оболочка и действия', () => {
     expect(getComputedStyle(out).whiteSpace).toBe('pre');
   });
 });
+
+describe('живая часть чата', () => {
+  it('кнопка варианта вопроса — не ниже 44 px; окошко терминала без hidden виден, с hidden — нет', () => {
+    const opt = el('button', 'th-live-q__opt', chat);
+    expect(getComputedStyle(opt).minHeight).toBe('44px');
+    const win = el('div', 'th-chat-term', chat);
+    expect(getComputedStyle(win).display).toBe('flex');
+    win.hidden = true;
+    expect(getComputedStyle(win).display).toBe('none');
+  });
+});

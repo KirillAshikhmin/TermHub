@@ -130,11 +130,15 @@ export function mountTerminal(
   root: HTMLElement,
   session: string,
   transport: Transport,
-  opts: { embedded?: boolean } = {},
+  opts: { embedded?: boolean; passive?: boolean } = {},
 ): TerminalHandle {
   // Встроенный терминал (панель сплит-вида): только сам экран — без шапки с вкладками,
   // полосы разделов и панели клавиш; заголовком окна и размером экрана владеет сплит.
   const embedded = opts.embedded === true;
+  // Зритель размера (окошко терминала в чате): подключается и вводит, но размер окна tmux
+  // не заявляет и не просит — единственный RESIZE, без которого агент не спавнит pty,
+  // уходит без заявки, дальше экран вписывается в контейнер масштабом (fitForeign).
+  const passive = opts.passive === true;
   root.replaceChildren();
   if (!embedded) setSessionDocumentTitle(session, session);
   let disposed = false;
@@ -512,6 +516,8 @@ export function mountTerminal(
   const activeHere = (): boolean => performance.now() - lastAction < ACTIVE_WINDOW_MS;
   /** `claim` — забирать ли размер окна себе; по умолчанию — если здесь работают. */
   const sendResize = (claim = activeHere()): void => {
+    if (passive && sentSize !== '') return; // после первого RESIZE просьб размера нет
+    if (passive) claim = false;
     sentSize = `${wanted.cols}x${wanted.rows}`;
     channel?.resize(wanted.cols, wanted.rows, claim);
   };
@@ -554,7 +560,7 @@ export function mountTerminal(
   let paneMovedSinceClaim = true;
   const claimSize = (): void => {
     noteAction();
-    if (!connected || readOnly || !foreignSize()) return;
+    if (!connected || readOnly || passive || !foreignSize()) return;
     const ask = `${wanted.cols}x${wanted.rows}`;
     if (ask === claimedFor && !paneMovedSinceClaim) return;
     claimedFor = ask;
@@ -998,6 +1004,10 @@ export function mountTerminal(
     // Плавающая «⋮» (в теле терминала) — видна только когда тулбар свёрнут. ResizeObserver
     // на host сам пере-fit'ит терминал по кадрам анимации высоты панелей.
     hideToolbar = wireToolbar({ toolbars, floatMount: body, toggleMount: toggleSlot, collapsedControls: readOnly ? [] : [floatingKeyboard], onChange: doFit }).hide;
+  } else if (passive && !readOnly) {
+    // Окошко в чате — единственное место, где вводят в экран, которого чат не узнал:
+    // нужны Esc, стрелки и Enter. Остальное (поиск, compose) окошку ни к чему.
+    screen.append(panel);
   }
 
   // ── Подгонка под видимую область (клавиатура телефона) ───────────────

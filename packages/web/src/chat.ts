@@ -9,6 +9,7 @@
 // Переписка занимает всё свободное место и прокручивается сама; остальное — по высоте
 // содержимого, поле ввода всегда у нижнего края.
 
+import { mountLive, type LiveHandle } from './chat-live';
 import { mountFeed, type FeedHandle } from './feed';
 import { createPathLinker } from './chat-render';
 import { openCreateModal } from './dashboard';
@@ -21,13 +22,13 @@ import { setSessionViewPref } from './view-pref';
 
 /** Места оболочки. Имя места — и ключ здесь, и `data-slot` в разметке. */
 export interface ChatSlots {
-  /** Полоса состояния агента (таск 05): что делает, «Стоп», режим, модель, контекст. */
+  /** Полоса состояния агента: что делает, очередь, «Стоп» (`chat-live.ts`). */
   status: HTMLElement;
-  /** Карточка вопроса или запроса разрешения (таск 05). */
+  /** Карточка вопроса или запроса разрешения (`chat-live.ts`). */
   question: HTMLElement;
-  /** Окошко живого терминала для неузнанного экрана (таск 06). */
+  /** Окошко живого терминала для неузнанного экрана (`chat-live.ts`, `chat-term.ts`). */
   terminal: HTMLElement;
-  /** Поле ввода (таск 05). */
+  /** Поле ввода (таск 06). Ряд управления (режим, модель, контекст) встаёт перед ним. */
   composer: HTMLElement;
 }
 
@@ -36,6 +37,9 @@ export interface ChatHandle extends FeedHandle {
   /** Переписка (прежняя лента) — для тех, кому нужен именно её экран. */
   feed: FeedHandle;
   slots: ChatSlots;
+  /** Состояние агента с экрана панели: `state()`, `act(action)`, `subscribe(fn)`. Поле
+   *  ввода узнаёт по нему, что агент делает, и шлёт действия через него же. */
+  live: LiveHandle;
   /** Связь с агентом сейчас потеряна (переписка на экране остаётся). */
   offline(): boolean;
 }
@@ -115,13 +119,21 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     },
   });
 
+  // Живая часть: смена состояния агента сразу тянет приращение переписки. Агента нет
+  // (opencode, оболочка) — запрос живого экрана отвечает отказом, и полосы не видно.
+  const live = mountLive(slots, session, transport, (_state, changed) => {
+    if (changed) feed.refresh();
+  });
+
   return {
     ...feed,
     el: root,
     feed,
     slots,
+    live,
     offline: () => isOffline,
     teardown: () => {
+      live.teardown();
       feed.teardown();
       sbar.teardown();
       host.replaceChildren();

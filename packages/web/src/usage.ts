@@ -24,6 +24,8 @@ export interface UsagePage {
   last: number;
   /** Проверки Guardian потока Codex: отдельные потоки, в `total` и `today` не входят. */
   reviews?: { count: number; total: UsageTotals; today: UsageTotals };
+  /** Занятость контекста по последнему ответу; `limit` — только если предел известен. */
+  context?: { used: number; limit?: number };
 }
 
 /** Память процессов сессии в байтах едет и с расходом, и с отказом: у сессии без агента

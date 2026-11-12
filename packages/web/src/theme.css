@@ -4391,6 +4391,227 @@ main.th-feed {
   font-size: 0.85rem;
 }
 
+/* ── Чат: живая часть (chat-live.ts) ─────────────────────────────────── */
+.th-live__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  font-size: 0.85rem;
+}
+.th-live__bar[hidden] {
+  display: none;
+}
+.th-live__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--text-faint);
+}
+.th-live__dot.is-idle {
+  background: var(--accent);
+}
+.th-live__dot.is-working {
+  background: var(--claude);
+}
+.th-live__dot.is-question,
+.th-live__dot.is-permission {
+  background: #d29922;
+}
+.th-live__dot.is-offline {
+  background: var(--danger);
+}
+.th-live__state {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.th-live__queued {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--accent-tint);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.th-live__stop {
+  flex: none;
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--r-full);
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-weight: 600;
+  cursor: pointer;
+}
+.th-live__stop:disabled,
+.th-live__model:disabled,
+.th-live__compact:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.th-live__notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--summary-tint);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+.th-live__notice-text {
+  flex: 1;
+}
+.th-live__notice-close {
+  flex: none;
+  min-width: 32px;
+  min-height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.th-live__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 12px 0;
+  font-size: 0.8rem;
+}
+.th-live__controls[hidden],
+.th-live__controls [hidden] {
+  display: none;
+}
+.th-live__mode,
+.th-live__model,
+.th-live__compact,
+.th-live__term-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.th-live__ctx {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.th-live-q {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 12px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--bg-elev);
+}
+.th-live-q__title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.th-live-q__body {
+  margin: 0;
+  max-height: 30vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--bg-elev-2);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.th-live-q__opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.th-live-q__opt,
+.th-live-q__submit,
+.th-live-q__send {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.th-live-q__opt.is-pointer {
+  border-color: var(--accent);
+}
+.th-live-q__opt[aria-pressed='true'] {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.th-live-q__submit {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  text-align: center;
+  font-weight: 600;
+}
+.th-live-q__opt:disabled,
+.th-live-q__submit:disabled,
+.th-live-q__send:disabled,
+.th-live-q__input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.th-live-q__free {
+  display: flex;
+  gap: 6px;
+}
+.th-live-q__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.th-live-q__readonly {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+/* Окошко терминала в чате: невысокое, с панелью клавиш под экраном. */
+.th-chat-term {
+  display: flex;
+  flex-direction: column;
+  height: 42vh;
+  min-height: 220px;
+  margin: 6px 12px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.th-chat-term[hidden] {
+  display: none;
+}
+.th-chat-term .th-term {
+  flex: 1;
+  min-height: 0;
+}
+
 main.th-feed--chat {
   background: transparent;
 }
@@ -4570,4 +4791,21 @@ main.th-feed--chat {
 }
 :root[data-theme='light'] .th-feed--chat .th-feed__entry.is-hit {
   background: rgba(22, 183, 144, 0.3);
+}
+
+/* Сбои чата в сведениях о подключении. */
+.th-diag__chat {
+  margin-top: 12px;
+}
+.th-diag__chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.th-diag__chat-row {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }

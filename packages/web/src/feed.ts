@@ -65,6 +65,8 @@ export interface FeedHandle {
   loadOlder(): Promise<boolean | null>;
   /** Перенести ленту к записи по её курсору и подсветить. */
   jumpTo(cursor: string): Promise<void>;
+  /** Запросить приращение сейчас, не дожидаясь опроса (чат зовёт на смену состояния агента). */
+  refresh(): void;
   teardown(): void;
 }
 
@@ -918,6 +920,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     entries: () => [...items],
     loadOlder,
     jumpTo,
+    refresh: () => void loadNewer(),
     teardown: () => {
       disposed = true;
       window.clearInterval(usageTimer);
