@@ -106,6 +106,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'pending-queued-last-of-two': 'question',
     'pending-queued-other': 'question',
     'pending-queued-other-typed': 'question',
+    'pending-queued-other-digit': 'question',
     'menu-model': 'menu',
     'menu-permissions': 'menu',
     'menu-update': 'menu',
@@ -1360,6 +1361,32 @@ describe('вопросы: пояснения вариантов, заметка,
     const typed = read('codex', 'pending-queued-other-typed').question!;
     expect(typed.options[2]).toEqual({ key: '3', label: 'green', selected: true, free: true });
     expect([other.stamp, typed.stamp]).toEqual([last.stamp, last.stamp]);
+  });
+
+  it('Codex: место вопроса в очереди входит в отпечаток — одинаковые вопросы подряд различимы', () => {
+    const first = shot('codex', 'pending-queued-first-of-two');
+    // Тот же текст и те же варианты вторым вопросом очереди (подвал — как у последнего).
+    const second = first.map((l) =>
+      l.replace('1 of 2', '2 of 2').replace(/⇧→.*$/u, (tail) => (plain([tail])[0]!.includes('main prompt') ? '⇧→ prev question' : tail)),
+    );
+    const a = readScreen(first, codex).question!;
+    const b = readScreen(second, codex).question!;
+    expect([a.title, b.title]).toEqual(['Tea or coffee?', 'Tea or coffee?']);
+    expect(b.options).toEqual(a.options);
+    expect(b.stamp).not.toBe(a.stamp);
+    // Счётчик в отпечатке — только у очереди из нескольких вопросов.
+    expect(a.stamp).not.toBe(questionStamp(a.title, a.options));
+    // Вне диалога очереди «N of M» счётчиком не считается: это строка тела.
+    expect(codex.screen.chip.test('1 of 2')).toBe(false);
+  });
+
+  it('Codex: текст своего ответа, начатый с цифры варианта, остаётся текстом в строке «Other» (замер)', () => {
+    const q = read('codex', 'pending-queued-other-digit').question!;
+    expect(q.options).toEqual([
+      { key: '1', label: 'Tea' },
+      { key: '2', label: 'Coffee' },
+      { key: '3', label: '1 cup a day', selected: true, free: true },
+    ]);
   });
 
   it('Codex: тот же диалог без заголовка очереди над ним — не вопрос', () => {

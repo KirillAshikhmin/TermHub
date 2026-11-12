@@ -196,7 +196,13 @@ Codex работает без общего фонового сервера («re
   - **Ответ.** Цифра варианта отвечает сама: в переписке появляется «↪ Re: <вопрос>» с
     ответом, блок исчезает (или открывается следующий вопрос очереди), Codex работает
     дальше. Цифра «Other» только ставит на него указатель; набранный текст заменяет
-    подпись варианта, Enter отправляет его ответом.
+    подпись варианта, Enter отправляет его ответом. При указателе на пустом «Other»
+    цифра существующего варианта — уже текст: «2» дало строку «› 3. 2», а «1 cup a day»
+    одной посылкой — «› 3. 1 cup a day»; вариант при этом не выбирается и ничего не
+    отправляется. Backspace возвращает подпись «Other».
+  - **Отпечаток.** Счётчик «N of M» узнаётся только в этом диалоге и при M > 1 входит в
+    отпечаток вопроса: два одинаковых вопроса подряд иначе неотличимы, и повторное нажатие
+    ответило бы на второй невиданным. У одиночного вопроса очереди счётчика нет.
   - **Без ответа.** «⇧→ main prompt» (Shift+→) возвращает к строке ввода, блок с
     приглашением остаётся. «⌃] skip» (Ctrl+]) снимает вопрос из очереди без ответа. Esc
     на этом экране не нажимался — в подвале его нет, а у работающего Codex он прерывает ход.
@@ -336,7 +342,7 @@ navigate», живьём не измерено; после каждой клав
 | Работа | `working`, `working-start` | `working`, `working-typing` |
 | Вопрос | `question`, `question-narrow`, `question-multi`, `question-review`, `question-free`, `question-free-typed`, `question-series`, `question-series-review` (два последних — составные) | `question`, `question-narrow`, `question-described`, `question-notes`, `question-notes-typed`, `question-first-of-two`, `question-last-of-two` |
 | Ожидающий вопрос | — | `pending-side`, `pending-side-wide`, `pending-opened` |
-| Вопрос в очереди отложенного ввода | — | `pending-queued` (обезличенный снимок живой сессии), `pending-queued-timer`, `pending-queued-two`, `pending-queued-opened`, `pending-queued-first-of-two`, `pending-queued-last-of-two`, `pending-queued-other`, `pending-queued-other-typed` |
+| Вопрос в очереди отложенного ввода | — | `pending-queued` (обезличенный снимок живой сессии), `pending-queued-timer`, `pending-queued-two`, `pending-queued-opened`, `pending-queued-first-of-two`, `pending-queued-last-of-two`, `pending-queued-other`, `pending-queued-other-typed`, `pending-queued-other-digit` |
 | Разрешение | `permission`, `permission-narrow` | `permission`, `permission-narrow`, `permission-mcp`, `permission-mcp-live`, `permission-mcp-moved` |
 | Меню | `menu-model`, `menu-model-confirm`, `menu-rewind`, `menu-trust` | `menu-model`, `menu-permissions`, `menu-update`, `menu-trust` |
 | Текст в строке | `input`, `input-multiline`, `input-pasted` | `input`, `input-multiline` |

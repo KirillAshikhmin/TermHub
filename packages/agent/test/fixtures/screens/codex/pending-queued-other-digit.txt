@@ -1,0 +1,49 @@
+
+  [38;2;99;168;248m>_ [1m[39mOpenAI Codex[0;2m (v0.167.2)[0m
+     [2m~/probe/work[0m
+
+  [1m[38;2;243;139;168mTip:[0m Use the [1m[38;2;243;139;168mdesktop app[0m. Run [38;2;166;227;161mcodex app[39m to open it. It installs automatically if needed.
+
+[48;5;8m
+[1;2m› [0m[48;5;8mCall request_user_input_async once with the single question "Tea or coffee?" (options Tea, Coffee). Do not wait for the answer; right after that run `sleep 120`, then say done.
+
+
+[2m[49m• [0mI’ll ask the question, then run [38;2;166;227;161msleep 120[39m immediately without waiting for an answer.
+
+[38;2;99;168;248m? Tea or coffee?[39m
+
+  [38;2;148;226;213m• [39mTea
+  [38;2;148;226;213m• [39mCoffee
+
+Waiting for background terminal [2m(37s • [0;1mesc[0;2m to interrupt) · 1 background terminal running · /ps to view · /stop to close[0m
+[2m  └ sleep 120[0m
+
+[2m• [0mQueued follow-up inputs
+
+  [38;2;99;168;248mTea or coffee?[39m
+
+    1. Tea
+    2. Coffee
+  [1m[38;2;99;168;248m› 3. [0m1 cup a day
+
+  [1menter[0m submit   [1m⌃][0m skip   [1m⇧→[0m main prompt
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

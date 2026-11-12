@@ -42,6 +42,11 @@ export interface DialogSign {
   /** Заголовок блока, под которым стоит диалог (с начала строки): шапка читается только
    *  до него, и без него диалог этим диалогом не считается. */
   under?: RegExp;
+  /** Счётчик над заголовком («1 of 2»): группа 1 — номер вопроса, группа 2 — сколько их.
+   *  Узнаётся только в этом диалоге. Когда вопросов больше одного, счётчик входит в
+   *  отпечаток: одинаковые вопросы подряд иначе неотличимы, и ответ на первый достался
+   *  бы второму. */
+  counter?: RegExp;
   /** Свободный ответ — всегда последний вариант (его дописывает сам агент); значение —
    *  его подпись, пока в ней ничего не набрано. */
   freeLast?: RegExp;
@@ -472,8 +477,7 @@ const CODEX: AgentProfile = {
     status: /^(?:\S\s)?(Working)\s*\((.+?)\s•\sesc to interrupt\)(?:\s·\s.*)?$/,
     queue: { item: /^\s+↳\s/ },
     // «Question 1/1 (1 unanswered)» у вопроса, «Field 1/1» у запроса на инструмент MCP.
-    // «1 of 2» — счётчик вопроса, открытого из очереди отложенного ввода.
-    chip: /^(?:Question|Field) \d+\/\d+\b|^\d+ of \d+$/,
+    chip: /^(?:Question|Field) \d+\/\d+\b/,
     free: /^$/,
     dialogs: [
       // «enter to submit all» — у последнего из нескольких вопросов. Свой ответ — заметка
@@ -497,6 +501,7 @@ const CODEX: AgentProfile = {
         kind: 'question',
         footer: /^enter submit\s{3}⌃\] skip\s{3}⇧→ (?:main prompt|prev question)(?:\s{3}⇧← next question)?$/,
         under: /^• Queued follow-up inputs$/,
+        counter: /^(\d+) of (\d+)$/,
         below: 'label',
         freeLast: /^Other$/,
       },

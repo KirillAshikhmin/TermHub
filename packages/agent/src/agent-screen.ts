@@ -433,7 +433,11 @@ function readDialog(
   // название текущего вопроса. Одиночный вопрос (шаг отправки не в счёт) — отпечаток прежний.
   const series = (head.steps?.filter((item) => !item.submit).length ?? 0) > 1;
   const named = series && step > 0 && !head.steps![step - 1]!.submit;
-  const stampBody = named ? `${head.body}\u0004${head.steps![step - 1]!.label}` : head.body;
+  const stampBody = named
+    ? `${head.body}\u0004${head.steps![step - 1]!.label}`
+    : head.place
+      ? `${head.body}\u0005${head.place}`
+      : head.body;
   return {
     stamp: questionStamp(head.title, options, stampBody),
     title: head.title,
@@ -472,7 +476,7 @@ function readHead(
   from: number,
   dialog: DialogSign,
   profile: AgentProfile,
-): { title: string; body: string; steps?: ScreenStep[] } | null {
+): { title: string; body: string; steps?: ScreenStep[]; place?: string } | null {
   const signs = profile.screen;
   let steps: ScreenStep[] | undefined;
   const paragraphs: string[][] = [];
@@ -484,6 +488,7 @@ function readHead(
   let gap = 0;
   let seen = false;
   let under = dialog.under === undefined;
+  let place: string | undefined;
   for (let i = from; i >= 0 && from - i < HEAD_LIMIT; i--) {
     const text = rows[i]!.text;
     if (signs.rule.test(text)) break;
@@ -503,6 +508,12 @@ function readHead(
       continue;
     }
     seen = true;
+    const counted = place === undefined ? dialog.counter?.exec(text.trim()) : undefined;
+    if (counted) {
+      if (Number(counted[2]) > 1) place = `${counted[1]}/${counted[2]}`;
+      close();
+      continue;
+    }
     if (signs.chip.test(text.trim())) {
       if (dialog.notCounter?.test(text.trim())) return null;
       steps ??= stepsOf(rows[i]!, profile);
@@ -523,7 +534,7 @@ function readHead(
     .filter((_, index) => index !== at)
     .map((lines) => lines.join('\n'))
     .join('\n');
-  return { title, body, ...(steps ? { steps } : {}) };
+  return { title, body, ...(steps ? { steps } : {}), ...(place ? { place } : {}) };
 }
 
 /** Строка ввода агента внизу экрана — или причина, по которой её там нет. */

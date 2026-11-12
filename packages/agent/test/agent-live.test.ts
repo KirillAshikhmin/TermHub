@@ -650,6 +650,29 @@ describe('sessionAct — вопрос в очереди отложенного �
     expect(screenOf(result).kind).toBe('working');
   });
 
+  it('ответ с отпечатком уже отвеченного вопроса очереди на таком же следующем — stale без клавиш', async () => {
+    const first = shot('codex', 'pending-queued-first-of-two');
+    const second = first.map((l) => l.replace('1 of 2', '2 of 2').replace('main prompt', 'prev question'));
+    const stamp = readScreen(first, profileOf('codex')).question!.stamp;
+    expect(readScreen(second, profileOf('codex')).question?.title).toBe('Tea or coffee?');
+    const f = fake('codex', second);
+    expect(await act(f, { kind: 'answer', stamp, option: '1' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([]);
+  });
+
+  it('свой ответ, начатый с цифры варианта: на пустом «Other» цифра становится текстом (замер)', async () => {
+    const digit = shot('codex', 'pending-queued-other-digit');
+    const at = digit.findIndex((l) => l.includes('1 cup a day'));
+    // Тот же экран до набора: указатель на пустом «Other».
+    const empty = digit.map((l, i) => (i === at ? l.replace('1 cup a day', 'Other') : l));
+    const start = empty.map((l, i) => (i === at ? '    3. Other' : l.includes('1. Tea') ? '  › 1. Tea' : l));
+    const stamp = readScreen(start, profileOf('codex')).question!.stamp;
+    const f = fake('codex', start, (sent) => (sent === '3' ? empty : sent === '1 cup a day' ? digit : 'working'));
+    const result = await act(f, { kind: 'answer', stamp, text: '1 cup a day' });
+    expect(f.sent).toEqual(['3', '1 cup a day', '\r']);
+    expect(screenOf(result).kind).toBe('working');
+  });
+
   it('свой ответ: цифра ставит указатель на «Other», текст набирается в его строке, Enter отвечает', async () => {
     const f = fake('codex', 'pending-queued-last-of-two', (sent) =>
       sent === '3' ? 'pending-queued-other' : sent === 'green' ? 'pending-queued-other-typed' : 'pending-queued-opened',

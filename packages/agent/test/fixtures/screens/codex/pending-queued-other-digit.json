@@ -1,0 +1,10 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 181,
+  "rows": 49,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "Pointer on the empty «Other» of a queued question, then «1 cup a day» sent in one go: the leading digit of an existing option became text, nothing was submitted. The working directory in the screen is shortened to ~/probe/work."
+}
