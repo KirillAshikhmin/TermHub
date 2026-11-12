@@ -6,6 +6,19 @@ export type Theme = 'dark' | 'light';
 
 const LS_KEY = 'termhub-theme';
 const THEME_COLOR: Record<Theme, string> = { dark: '#0d1117', light: '#f6f8fa' };
+// Окно без заголовка браузера (Window Controls Overlay): место под кнопками окна Chrome
+// красит цветом theme-color, а рядом стоит наша шапка — поэтому там называем её цвет
+// (`--bg-elev` в theme.css; меняешь там — поменяй здесь).
+const BAR_COLOR: Record<Theme, string> = { dark: '#161b22', light: '#ffffff' };
+const OVERLAY_QUERY = '(display-mode: window-controls-overlay)';
+
+function overlay(): boolean {
+  try {
+    return window.matchMedia(OVERLAY_QUERY).matches;
+  } catch {
+    return false;
+  }
+}
 
 /** Явно выбранная тема, иначе системная (prefers-color-scheme), иначе тёмная. */
 export function currentTheme(): Theme {
@@ -26,12 +39,18 @@ export function currentTheme(): Theme {
 function apply(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', THEME_COLOR[theme]);
+  if (meta) meta.setAttribute('content', (overlay() ? BAR_COLOR : THEME_COLOR)[theme]);
 }
 
 /** Проставляет актуальную тему при старте приложения. */
 export function initTheme(): void {
   apply(currentTheme());
+  try {
+    // Заголовок прячут и возвращают на ходу — цвет идёт следом.
+    window.matchMedia(OVERLAY_QUERY).addEventListener('change', () => apply(currentTheme()));
+  } catch {
+    // matchMedia недоступен — режима нет.
+  }
 }
 
 /** Переключает тему, персистит выбор и возвращает новую тему. */

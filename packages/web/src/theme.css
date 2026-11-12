@@ -5922,6 +5922,43 @@ main.th-feed--chat {
     --wco-left: env(titlebar-area-x, 0px);
     --wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
     --wco-h: env(titlebar-area-height, 0px);
+    /* Шапки — высотой с системную полосу: кнопки окна стоят по её середине. */
+    --header-h: max(28px, env(titlebar-area-height, 46px));
+    --termbar-h: max(28px, env(titlebar-area-height, 46px));
+  }
+  /* Цвет шапки главной — тот же, что у шапки сессии: им же Chrome красит место под
+     кнопками окна (theme-color, его ставит theme.ts). */
+  .th-header {
+    background: var(--bg-elev);
+    backdrop-filter: none;
+  }
+  /* В низкой шапке всё мельче, а подпись вкладки — одной строкой. */
+  .th-header .th-iconbtn,
+  .th-termbar .th-iconbtn {
+    min-width: 28px;
+    min-height: 24px;
+  }
+  .th-header .th-icon,
+  .th-termbar .th-icon {
+    width: 16px;
+    height: 16px;
+  }
+  .th-logo {
+    font-size: 0.92rem;
+  }
+  .th-logo__glyph {
+    padding: 0 6px;
+  }
+  .th-tab__btn,
+  .th-tab__close {
+    padding-top: 1px;
+    padding-bottom: 1px;
+  }
+  .th-tab__label,
+  .th-tabs-current__label {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
   }
   .th-header {
     padding-left: calc(16px + var(--wco-left));
@@ -5973,5 +6010,18 @@ main.th-feed--chat {
   .th-tabs-current a {
     -webkit-app-region: no-drag;
     app-region: no-drag;
+  }
+}
+/* Столбец вкладок бокового режима стоит ниже шапки — там подпись остаётся в две строки. */
+@media (display-mode: window-controls-overlay) and (min-width: 900px) and (pointer: fine) {
+  :root[data-side-tabs] .th-ws-view .th-tab__btn,
+  :root[data-side-tabs] .th-ws-view .th-tab__close {
+    padding-top: 3px;
+    padding-bottom: 3px;
+  }
+  :root[data-side-tabs] .th-ws-view .th-tab__label {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
   }
 }
