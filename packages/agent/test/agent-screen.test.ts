@@ -116,6 +116,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'pending-queued-timer': 'working',
     'pending-queued-two': 'working',
     'pending-queued-opened': 'question',
+    'pending-queued-opened-body': 'question',
     'pending-queued-first-of-two': 'question',
     'pending-queued-last-of-two': 'question',
     'pending-queued-other': 'question',
@@ -1878,6 +1879,21 @@ describe('очередь агента: тексты сообщений и воз
     });
     // В строке ввода текст: клавиша возврата заменила бы его следующим сообщением.
     expect(read('codex', 'queue-returned')).not.toHaveProperty('queueEdit');
+  });
+
+  it('Codex: открытый вопрос с пояснением под заголовком и двумя пустыми строками над ним — вопрос', () => {
+    expect(read('codex', 'pending-queued-opened-body')).toMatchObject({
+      kind: 'question',
+      question: {
+        title: 'Bring the request to merge: watch the review and fix confirmed defects?',
+        body: 'Asking separately for the new request: «Right after creating it, ask whether to watch the review\nand fix remarks until approval»',
+        options: [
+          { key: '1', label: 'Yes, bring it to merge', selected: true },
+          { key: '2', label: 'No, leave the request as is' },
+          { key: '3', label: 'Other', free: true },
+        ],
+      },
+    });
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {

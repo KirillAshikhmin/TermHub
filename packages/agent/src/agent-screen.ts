@@ -612,7 +612,9 @@ function readHead(
     }
     if (text.trim() === '') {
       gap++;
-      if (seen && gap >= 2) break;
+      // Диалог под заголовком блока кончается самим заголовком: пустые строки, сколько бы
+      // их ни было, только делят абзацы вопроса.
+      if (seen && gap >= 2 && dialog.under === undefined) break;
       close();
       continue;
     }
@@ -645,9 +647,12 @@ function readHead(
   close();
   if (!under || paragraphs.length === 0) return null;
 
+  // Под заголовком блока вопрос стоит первым абзацем, пояснение — под ним.
   const at = dialog.title
     ? paragraphs.findIndex((lines) => dialog.title!.test(lines[0]!))
-    : paragraphs.length - 1;
+    : dialog.under
+      ? 0
+      : paragraphs.length - 1;
   if (at < 0) return null;
   const title = paragraphs[at]!.join(' ');
   const body = paragraphs
