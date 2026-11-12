@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 181,
+  "rows": 49,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "composite": true,
+  "anonymized": true,
+  "note": "Anonymized live capture of the MCP tool approval dialog: the dialog frame, the counter line, the four options with their descriptions and the hints line are byte for byte; the server name, the tool name and the argument line are replaced with neutral ones, and so is the conversation above the dialog. Version is taken from the neighbouring statusline-* captures of the same installation; whether the pane was on the alternate screen was not recorded."
+}

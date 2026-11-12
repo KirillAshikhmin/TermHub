@@ -263,6 +263,70 @@ describe('sessionAct — ответ на вопрос', () => {
     expect(f.sent).toEqual(['3']);
   });
 
+  /** Диалог MCP без оформления с указателем на варианте `key`. */
+  function mcpAt(key: string): string[] {
+    const labels: Record<string, string> = { '2': 'Allow for this session', '3': 'Always allow', '4': 'Cancel' };
+    return shot('codex', 'permission-mcp')
+      .map((line) => line.replace(/\x1b\[[0-9;]*m/g, ''))
+      .map((line) =>
+        key === '1'
+          ? line
+          : line.replace('  › 1. Allow', '    1. Allow').replace(`    ${key}. ${labels[key]}`, `  › ${key}. ${labels[key]}`),
+      );
+  }
+
+  it('запрос Codex на инструмент MCP: цифра подтвердила сама — Enter не послан', async () => {
+    const f = fake('codex', 'permission-mcp', () => 'working');
+    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '2' });
+    expect(f.sent).toEqual(['2']);
+    expect(screenOf(result).kind).toBe('working');
+  });
+
+  it('запрос Codex на инструмент MCP: цифра передвинула указатель — один Enter, диалог ушёл', async () => {
+    const f = fake('codex', 'permission-mcp', (sent) => (sent === '4' ? mcpAt('4') : 'working'));
+    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '4' });
+    expect(f.sent).toEqual(['4', '\r']);
+    expect(screenOf(result).kind).toBe('working');
+  });
+
+  it('запрос Codex на инструмент MCP: указатель не встал на выбранный вариант — stale, Enter не послан', async () => {
+    const stamp = stampOf('codex', 'permission-mcp');
+    const still = fake('codex', 'permission-mcp');
+    expect(await act(still, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(still.sent).toEqual(['4']);
+    const wrong = fake('codex', 'permission-mcp', () => mcpAt('3'));
+    expect(await act(wrong, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(wrong.sent).toEqual(['4']);
+  });
+
+  it('запрос Codex на инструмент MCP: за время ожидания пришёл другой запрос — stale, Enter не послан', async () => {
+    const other = mcpAt('4').map((line) => line.replace('"search_pages"', '"delete_pages"'));
+    const f = fake('codex', 'permission-mcp', () => other);
+    const stamp = stampOf('codex', 'permission-mcp');
+    expect(readScreen(other, profileOf('codex')).question!.stamp).not.toBe(stamp);
+    expect(await act(f, { kind: 'answer', stamp, option: '4' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual(['4']);
+  });
+
+  it('запрос Codex на инструмент MCP: указатель уже на выбранном варианте — один Enter без цифры', async () => {
+    // Цифра здесь могла бы ответить сама, а экран с указателем на том же варианте ещё
+    // стоял бы — и Enter ушёл бы уже в следующий экран.
+    const f = fake('codex', 'permission-mcp', () => 'working');
+    const result = await act(f, { kind: 'answer', stamp: stampOf('codex', 'permission-mcp'), option: '1' });
+    expect(f.sent).toEqual(['\r']);
+    expect(screenOf(result).kind).toBe('working');
+  });
+
+  it('запрос Codex на инструмент MCP: чужой отпечаток и неизвестный вариант — клавиши не идут', async () => {
+    const f = fake('codex', 'permission-mcp');
+    const other = stampOf('codex', 'permission');
+    expect(await act(f, { kind: 'answer', stamp: other, option: '1' })).toMatchObject({ ok: false, reason: 'stale' });
+    const stamp = stampOf('codex', 'permission-mcp');
+    expect(await act(f, { kind: 'answer', stamp, option: '5' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await act(f, { kind: 'answer', stamp, text: 'yes' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(f.sent).toEqual([]);
+  });
+
   it('варианта с такой клавишей нет, вопроса на экране нет — клавиши не идут', async () => {
     const f = fake('claude', 'question');
     const stamp = stampOf('claude', 'question');

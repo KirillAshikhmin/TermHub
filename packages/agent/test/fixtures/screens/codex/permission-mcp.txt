@@ -1,0 +1,49 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[1m›[0m Look up the release notes in the docs
+
+[2m• [0mLooking it up.
+
+[1m[38;2;230;237;243m•[0m [1mCalling tool[0;2m · 1 action[0m
+[2m  └ Search the docs for the release notes[0m
+[2m    + Show details
+[0m
+[48;2;53;58;66m
+  [2mField 1/1[0m[48;2;53;58;66m
+  Allow Docs Server to run "search_pages"?
+
+  Query: release notes
+
+  [1m[38;2;0;0;46m[48;2;99;168;248m› 1. Allow                   [0m[38;2;0;0;46m[48;2;99;168;248mRun the tool and continue[1m                                                                                                                           [0m[48;2;53;58;66m
+    2. Allow for this session  [2mRun the tool and remember this choice for this session[0m[48;2;53;58;66m
+    3. Always allow            [2mRun the tool and remember this choice for future tool calls[0m[48;2;53;58;66m
+    4. Cancel                  [2mCancel this tool call[0m[48;2;53;58;66m
+  [1m[38;2;230;237;243menter[0m[38;2;148;155;162m[48;2;53;58;66m to submit[2m[39m | [0;1m[38;2;230;237;243m[48;2;53;58;66mesc[0m[38;2;148;155;162m[48;2;53;58;66m to cancel[39m
+

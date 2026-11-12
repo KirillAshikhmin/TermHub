@@ -400,9 +400,40 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
   if (!option) return fail('unsupported', 'no such option in the question');
   if (option.free) return fail('unsupported', 'the free-text option needs a text');
   if (question.multi) return fail('unsupported', 'this question takes several marks');
+  if (needsConfirm(ctx)) {
+    // Подтверждает ли цифра сама, не измерено: цифра, затем экран. Диалог ушёл — ответ
+    // принят; тот же диалог с указателем на выбранном варианте — клавиша отправки;
+    // всё остальное — остановка без клавиш.
+    if (!option.selected) {
+      // Указатель уже на варианте — цифру не шлём: ответь она сама, прежний экран с тем
+      // же указателем ещё стоял бы, и клавиша отправки ушла бы в следующий.
+      await press(ctx, option.key);
+      const moved = await until(ctx, (s) => !same(s) || selectedKey(s) === option.key);
+      if (!same(moved.screen)) {
+        return moved.screen.question ? fail('stale', 'another question took the place of the answered one') : done(moved.screen);
+      }
+      if (!moved.met) return stopped();
+    }
+    await press(ctx, profile.keys.submit);
+    return gone();
+  }
   // Цифра варианта отвечает сразу, без клавиши отправки.
   await press(ctx, option.key);
   return gone();
+}
+
+/** Диалог на экране — из тех, что подтверждаются клавишей отправки (`confirm` профиля). */
+function needsConfirm(ctx: Ctx): boolean {
+  const { screen, profile } = ctx;
+  const title = screen.question?.title;
+  return (
+    title !== undefined &&
+    profile.screen.dialogs.some((d) => d.confirm === true && d.kind === screen.kind && d.title?.test(title) === true)
+  );
+}
+
+function selectedKey(screen: ScreenState): string | undefined {
+  return screen.question?.options.find((o) => o.selected)?.key;
 }
 
 function freeOf(screen: ScreenState): ScreenOption | undefined {

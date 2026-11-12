@@ -78,6 +78,27 @@ describe('профиль Codex', () => {
   it('проверенная версия', () => {
     expect(profile.tested).toEqual({ min: '0.167.0', max: '0.167.0' });
   });
+
+  it('запрос разрешения на инструмент MCP — данные профиля: свой подвал и свой заголовок', () => {
+    const hint = 'enter to submit | esc to cancel';
+    const mcp = profile.screen.dialogs.filter((d) => d.footer?.test(hint));
+    expect(mcp).toHaveLength(1);
+    expect(mcp[0]!.kind).toBe('permission');
+    // Подвал требует Enter: только этот диалог подтверждается клавишей отправки.
+    expect(profile.screen.dialogs.filter((d) => d.confirm)).toEqual(mcp);
+    expect(profileOf('claude').screen.dialogs.some((d) => d.confirm)).toBe(false);
+    // Заголовок обязателен: без строки с вопросом диалог не узнаётся.
+    expect(mcp[0]!.title?.test('Allow Docs Server to run "search_pages"?')).toBe(true);
+    expect(mcp[0]!.title?.test('Allow Desk Helper to use "Notes"?')).toBe(true);
+    expect(mcp[0]!.title?.test('Would you like to run the following command?')).toBe(false);
+    expect(mcp[0]!.title?.test('Allow for this session')).toBe(false);
+    // Подвалы прежних диалогов и подвал вопроса ему не подходят.
+    expect(mcp[0]!.footer!.test('tab to add notes | enter to submit answer | esc to interrupt')).toBe(false);
+    expect(mcp[0]!.footer!.test('Press enter to confirm or esc to cancel')).toBe(false);
+    // Счётчик над вопросом в заголовок не входит.
+    expect(profile.screen.chip.test('Field 1/1')).toBe(true);
+    expect(profile.screen.chip.test('Question 1/1 (1 unanswered)')).toBe(true);
+  });
 });
 
 describe.each<AgentId>(['claude', 'codex'])('профиль %s как данные', (agent) => {

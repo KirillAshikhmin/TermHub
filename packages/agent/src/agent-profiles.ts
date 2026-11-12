@@ -39,6 +39,9 @@ export interface DialogSign {
   /** Свободный ответ — последний вариант перед внутренней линейкой: его подпись
    *  меняется по мере набора, и по тексту его не узнать. */
   freeBeforeRule?: boolean;
+  /** Цифра варианта может только переставить указатель, а отвечает клавиша отправки
+   *  (подвал «enter to submit»). Требует `title`: по нему диалог узнаётся при ответе. */
+  confirm?: boolean;
 }
 
 /** Известное меню: чат его не разбирает, а показывает окошком терминала. */
@@ -365,7 +368,8 @@ const CODEX: AgentProfile = {
     talk: /^[›•]\s/,
     status: /^(?:\S\s)?(Working)\s*\((.+?)\s•\sesc to interrupt\)$/,
     queue: { item: /^\s+↳\s/ },
-    chip: /^Question \d+\/\d+\b/,
+    // «Question 1/1 (1 unanswered)» у вопроса, «Field 1/1» у запроса на инструмент MCP.
+    chip: /^(?:Question|Field) \d+\/\d+\b/,
     free: /^$/,
     dialogs: [
       { kind: 'question', footer: /\benter to submit answer\b/, below: 'label' },
@@ -374,6 +378,17 @@ const CODEX: AgentProfile = {
         footer: /^Press enter to confirm or esc to cancel$/,
         title: /^Would you like to\b/,
         below: 'label',
+      },
+      // Запрос на вызов инструмента MCP: «Allow <сервер> to run "<инструмент>"?» (про
+      // приложение — «to use»), под ним строка аргументов. Заголовок обязателен: подвал
+      // у диалога короткий, и одного его мало, чтобы нажимать клавиши. Конец вопроса в
+      // признак не входит — в узкой панели заголовок переносится.
+      {
+        kind: 'permission',
+        footer: /^enter to submit \| esc to cancel$/,
+        title: /^Allow \S.* to (?:run|use)\b/,
+        below: 'label',
+        confirm: true,
       },
     ],
     menus: [

@@ -72,6 +72,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'question-narrow': 'question',
     permission: 'permission',
     'permission-narrow': 'permission',
+    'permission-mcp': 'permission',
     'menu-model': 'menu',
     'menu-permissions': 'menu',
     'menu-update': 'menu',
@@ -799,6 +800,132 @@ describe('чужой профиль', () => {
     expect(readScreen(shot('codex', 'permission'), profileOf('claude')).question).toBeUndefined();
     expect(readScreen(shot('codex', 'question'), profileOf('claude')).question).toBeUndefined();
     expect(readScreen(shot('claude', 'question'), profileOf('codex')).question).toBeUndefined();
+  });
+});
+
+describe('Codex: запрос разрешения на инструмент MCP', () => {
+  const codex = profileOf('codex');
+  const TITLE = 'Allow Docs Server to run "search_pages"?';
+  const OPTIONS = [
+    { key: '1', label: 'Allow' },
+    { key: '2', label: 'Allow for this session' },
+    { key: '3', label: 'Always allow' },
+    { key: '4', label: 'Cancel' },
+  ];
+
+  /** Номер строки снимка, которая без оформления начинается с `head`. */
+  function rowOf(lines: string[], head: string): number {
+    const at = plain(lines).findIndex((l) => l.startsWith(head));
+    expect(at).toBeGreaterThan(0);
+    return at;
+  }
+
+  it('читается запросом разрешения: заголовок, тело, четыре варианта, указатель на первом', () => {
+    expect(read('codex', 'permission-mcp')).toEqual({
+      kind: 'permission',
+      question: {
+        stamp: questionStamp(TITLE, OPTIONS, 'Query: release notes'),
+        title: TITLE,
+        body: 'Query: release notes',
+        options: [{ ...OPTIONS[0], selected: true }, ...OPTIONS.slice(1)],
+      },
+    });
+  });
+
+  it('заголовок с «to use» (так Codex спрашивает про приложение) — тот же диалог', () => {
+    const lines = shot('codex', 'permission-mcp');
+    lines[rowOf(lines, '  Allow ')] = '  Allow Desk Helper to use "Notes"?';
+    lines[rowOf(lines, '  Query: ')] = '  App: Notes';
+    expect(readScreen(lines, codex).question).toMatchObject({
+      title: 'Allow Desk Helper to use "Notes"?',
+      body: 'App: Notes',
+    });
+  });
+
+  it('указатель на другом варианте распознан, отпечаток от него не зависит', () => {
+    const lines = plain(shot('codex', 'permission-mcp'));
+    const first = rowOf(lines, '  › 1. Allow');
+    const third = rowOf(lines, '    3. Always allow');
+    lines[first] = lines[first]!.replace('  › 1.', '    1.');
+    lines[third] = lines[third]!.replace('    3.', '  › 3.');
+    const q = readScreen(lines, codex).question!;
+    expect(q.options.map((o) => o.selected === true)).toEqual([false, false, true, false]);
+    expect(q.stamp).toBe(read('codex', 'permission-mcp').question!.stamp);
+  });
+
+  it('другой инструмент или другие аргументы — другой отпечаток', () => {
+    const stamp = read('codex', 'permission-mcp').question!.stamp;
+    const tool = shot('codex', 'permission-mcp');
+    tool[rowOf(tool, '  Allow ')] = '  Allow Docs Server to run "delete_pages"?';
+    const args = shot('codex', 'permission-mcp');
+    args[rowOf(args, '  Query: ')] = '  Query: everything';
+    expect(readScreen(tool, codex).question!.stamp).not.toBe(stamp);
+    expect(readScreen(args, codex).question!.stamp).not.toBe(stamp);
+    expect(readScreen(tool, codex).question!.stamp).not.toBe(readScreen(args, codex).question!.stamp);
+  });
+
+  it('другая ширина панели — тот же отпечаток: пояснения переносятся, подписи нет', () => {
+    // Узкая панель собрана по образцу question-narrow того же Codex: полоса выбранной
+    // строки короче, пояснение перенесено под свою колонку.
+    const lines = plain(shot('codex', 'permission-mcp')).map((l) => l.trimEnd());
+    const third = rowOf(lines, '    3. Always allow');
+    const column = lines[third]!.indexOf('Run the tool');
+    expect(column).toBeGreaterThan(0);
+    lines[third] = `${lines[third]!.slice(0, column)}Run the tool and remember this choice`;
+    lines.splice(third + 1, 0, `${' '.repeat(column)}for future tool calls`);
+    const q = readScreen(lines, codex);
+    expect(q.kind).toBe('permission');
+    expect(q.question!.options.map((o) => o.label)).toEqual(OPTIONS.map((o) => o.label));
+    expect(q.question!.stamp).toBe(read('codex', 'permission-mcp').question!.stamp);
+  });
+
+  it('обрезан сверху (строки с вопросом нет) — unknown с причиной', () => {
+    const lines = shot('codex', 'permission-mcp');
+    const title = rowOf(lines, '  Allow ');
+    expect(readScreen(lines.slice(title + 1), codex)).toEqual({
+      kind: 'unknown',
+      why: 'dialog not recognized',
+    });
+    const second = rowOf(lines, '    2. Allow for this session');
+    expect(readScreen(lines.slice(second), codex)).toEqual({
+      kind: 'unknown',
+      why: 'dialog not recognized',
+    });
+  });
+
+  it('те же варианты под чужим заголовком и без подвала диалогом не становятся', () => {
+    const lines = shot('codex', 'permission-mcp');
+    const other = [...lines];
+    other[rowOf(lines, '  Allow ')] = '  Something else entirely';
+    expect(readScreen(other, codex).kind).toBe('unknown');
+    const footer = rowOf(lines, '  enter to submit');
+    expect(readScreen(lines.slice(0, footer), codex).kind).toBe('unknown');
+  });
+
+  it('профилем Claude за запрос не принимается', () => {
+    expect(readScreen(shot('codex', 'permission-mcp'), profileOf('claude')).question).toBeUndefined();
+  });
+
+  it('прежние вопросы и разрешения дают прежние отпечатки', () => {
+    // Отпечатки посчитаны по заголовку, вариантам и телу, выписанным с экранов.
+    const codexQuestion = read('codex', 'question').question!;
+    expect(codexQuestion.stamp).toBe(
+      questionStamp('Which color do you prefer: red, green, or blue?', codexQuestion.options, undefined),
+    );
+    expect(codexQuestion.body).toBeUndefined();
+    const codexPermission = read('codex', 'permission').question!;
+    expect(codexPermission.stamp).toBe(
+      questionStamp(
+        'Would you like to run the following command?',
+        codexPermission.options,
+        [
+          'Environment: local',
+          'Reason: May I create hello.txt in the current directory? The filesystem sandbox is read-only.',
+          "$ printf 'hello\\n' > hello.txt",
+        ].join('\n'),
+      ),
+    );
+    expect(read('codex', 'question-narrow').question!.stamp).toBe(codexQuestion.stamp);
   });
 });
 
