@@ -452,7 +452,13 @@ async function prompt(ctx: Ctx, action: Extract<ChatAction, { kind: 'prompt' }>)
   // Клавиша очереди: успех — только узнанный экран со строкой ввода, и пустой. Иной экран
   // не доказывает, что сообщение встало в очередь.
   const sent = await until(ctx, (s) => atInput(s) && !s.input);
-  if (sent.met) return steer === undefined ? done(sent.screen) : { ok: true, screen: sent.screen, steered: true };
+  if (sent.met) {
+    // Клавиша уточнения: агент мог и отложить сообщение до следующего шага — тогда оно
+    // стоит в его очереди, и «ушло в ход» говорить нельзя.
+    const count = (s: ScreenState): number => Math.max(s.queued ?? 0, s.queue?.length ?? 0);
+    const grew = count(sent.screen) > count(screen);
+    return steer === undefined || grew ? done(sent.screen) : { ok: true, screen: sent.screen, steered: true };
+  }
   if (!atInput(sent.screen)) {
     return fail(
       'stale',

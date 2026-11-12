@@ -1,0 +1,35 @@
+     [2m/home/user/probe[0m
+
+  [1m[38;2;243;139;168mTip:[0m Use the [1m[38;2;243;139;168mdesktop app[0m. Run [38;2;166;227;161mcodex app[39m to open it. It installs automatically if needed.
+
+[48;5;8m
+[1;2m› [0m[48;5;8mCreate a file hello.txt containing the word hello using a shell command. Do not read any skills.
+
+
+[2m[49m• [0mI’ll create [38;2;166;227;161mhello.txt[39m with a shell command.
+
+[38;5;2m✔ [39mYou [1mapproved[0m codex to run [2mprintf 'hello\n' > hello.txt[0;1m this time[0m
+
+[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250mprintf[38;2;205;214;244m [38;2;166;227;161m'hello\n'[38;2;205;214;244m [38;2;148;226;213m>[38;2;205;214;244m hello.txt[39m
+[2m  └ (no output)[0m
+
+[2m• [0mCreated [38;2;166;227;161mhello.txt[39m containing [38;2;166;227;161mhello[39m.
+
+[2m  Worked for 32s • 17:42[0m
+
+[48;5;8m
+[1;2m› [0m[48;5;8mWrite a 500-word story about a lighthouse.
+  queued message one
+
+[49m
+Working [2m(1s • [0;1mesc[0;2m to interrupt)[0m
+
+[2m• [0mMessages to be submitted after next tool call[2m (press [0;1mesc[0;2m to interrupt and send immediately)[0m
+[2m  ↳ would this option not suit us?[0m
+
+[2m    • Use the streaming mode of the connection, set per request[0m
+[2m    …[0m
+
+[1m[38;2;255;178;66m›[0m [2mAsk Codex to do anything[0m
+
+  [38;2;246;226;183mGPT-6-Astra max[39m · [38;2;171;223;167m/home/user/probe[39m  ⚠ [38;2;196;167;103m5 warnings[39m · [1mf2[0m to view

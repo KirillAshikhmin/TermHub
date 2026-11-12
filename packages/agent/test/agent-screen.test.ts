@@ -151,6 +151,8 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'queue-returned': 'working',
     'queue-multiline': 'working',
     'queue-cut': 'working',
+    // Сообщение очереди с абзацем: пустая строка внутри (снимок владельца 13.11.2026, обезличен).
+    'queued-paragraph': 'working',
     'queue-returned-long': 'working',
     'queue-slash-namesake': 'working',
     compacting: 'working',
@@ -1876,6 +1878,19 @@ describe('очередь агента: тексты сообщений и воз
     });
     // В строке ввода текст: клавиша возврата заменила бы его следующим сообщением.
     expect(read('codex', 'queue-returned')).not.toHaveProperty('queueEdit');
+  });
+
+  it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {
+    expect(read('codex', 'queued-paragraph')).toMatchObject({
+      kind: 'working',
+      queued: 1,
+      queue: [
+        {
+          text: 'would this option not suit us?\n\n• Use the streaming mode of the connection, set per request',
+          cut: true,
+        },
+      ],
+    });
   });
 
   it('Codex: многострочное сообщение — одно; сообщение длиннее трёх строк помечено обрезанным', () => {

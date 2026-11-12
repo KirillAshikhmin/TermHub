@@ -870,7 +870,15 @@ function readBox(
     // Блок прямо над строкой ввода: строки с отступом вверх до заголовка без отступа.
     const end = lastFilled(rows, box.top - 1);
     let top = end + 1;
-    while (top - 1 >= 0 && end - top < QUEUE_REACH && /^\s{2}\S|^\s{4}/u.test(rows[top - 1]!.text)) top--;
+    const inBlock = (at: number): boolean => at >= 0 && /^\s{2}\S|^\s{4}/u.test(rows[at]!.text);
+    // Пустая строка внутри блока — абзац в сообщении: над ней обязана стоять строка блока.
+    while (
+      top - 1 >= 0 &&
+      end - top < QUEUE_REACH &&
+      (inBlock(top - 1) || (blank(rows[top - 1]) && inBlock(top - 2)))
+    ) {
+      top--;
+    }
     if (top <= end && top >= 1 && !blank(rows[top - 1]) && !/^\s/u.test(rows[top - 1]!.text)) {
       queue = queueTexts(rows, top, end, signs.queue);
       queueEnd = end;
@@ -945,6 +953,14 @@ function queueTexts(rows: Row[], from: number, to: number, sign: QueueSign): Que
     if (open && sign.edit?.where === 'below' && sign.edit.sign.test(text)) {
       close();
       continue;
+    }
+    // Пустая строка внутри сообщения (абзац): за ней обязано идти его продолжение.
+    if (open && !open.cut && text.trim() === '' && i < to) {
+      const next = rows[i + 1]!.text;
+      if (!shape.text.test(next) && (shape.cut?.test(next) || (next.trim() !== '' && shape.more.test(next)))) {
+        open.lines.push('');
+        continue;
+      }
     }
     const more = open && !open.cut ? shape.more.exec(text) : null;
     if (more) open!.lines.push(more[1]!);

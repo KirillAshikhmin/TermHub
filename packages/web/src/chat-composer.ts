@@ -420,6 +420,9 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     note?: string;
   }
   const inQueue: Queued[] = [];
+  /** Сообщения очереди агента, отправленные не из этого чата (набраны в терминале, с
+   *  другого устройства): показаны в переписке, пока экран агента их рисует. */
+  const foreign = new Map<string, LocalMessage>();
   /** Идёт возврат из очереди. Клавиша возврата вынимает сообщение раньше, чем приходит
    *  ответ на действие, и опрос экрана посреди него видит пустую очередь — сверка приняла
    *  бы снятое сообщение за доставленное. Пока действие в пути, очередь не сверяется; отказ
@@ -442,6 +445,24 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     if (count >= inQueue.length) for (const item of inQueue) item.seen = true;
     while (inQueue.length > count && (inQueue[0]!.seen === true || screen.kind === 'idle')) {
       inQueue.shift()!.msg.set('sent', { delivered: true });
+    }
+    const mineLeft = [...inQueue];
+    const strangers = new Set<string>();
+    drawn.forEach((d, i) => {
+      const at = mineLeft.findIndex((item) => sameQueued(d, item.text));
+      if (at >= 0) return void mineLeft.splice(at, 1);
+      const id = `${i}\u0000${d.text}`;
+      strangers.add(id);
+      // Пока идёт своя отправка, её сообщение уже на экране агента, но ещё не в `inQueue`.
+      if (foreign.has(id) || sending) return;
+      const msg = thread.addLocal(d.cut ? `${d.text}\n…` : d.text, 'queued');
+      msg.set('queued', { delivered: true });
+      foreign.set(id, msg);
+    });
+    for (const [id, msg] of foreign) {
+      if (strangers.has(id)) continue;
+      msg.remove();
+      foreign.delete(id);
     }
     const scope = screen.queueEdit;
     const last = inQueue[inQueue.length - 1];

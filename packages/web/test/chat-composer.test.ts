@@ -971,6 +971,8 @@ describe('сообщение в очереди агента: «Изменить�
     expect(labels(fx.locals[1]!)).toEqual([t('chat.composer.queueEditAll'), t('chat.composer.queueCancelAll')]);
     fx.nextAct.value = { ok: true, screen: working(), taken: 'первое\nвторое' };
     fx.locals[1]!.actions[0]!.run();
+    // Живая часть после действия ставит экран из его ответа.
+    fx.screen.value = working();
     await flush();
     expect(fx.locals.map((l) => l.removed)).toEqual([true, true]);
     expect(fx.field.value).toBe('первое\nвторое');
@@ -991,6 +993,20 @@ describe('сообщение в очереди агента: «Изменить�
     fx.screen.value = working({ queued: 1, queue: [{ text: 'мо', cut: true }], queueEdit: 'last' });
     fx.emit();
     expect(labels(fx.locals[0]!)).toHaveLength(2);
+  });
+
+  it('сообщение очереди агента, отправленное не из этого чата, стоит в переписке, пока экран его рисует', async () => {
+    fx = mount();
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'набрано в терминале', cut: true }] });
+    fx.emit();
+    expect(fx.locals).toHaveLength(1);
+    expect(fx.locals[0]).toMatchObject({ text: 'набрано в терминале\n…', state: 'queued', delivered: true, actions: [] });
+    // Тот же экран второй раз сообщения не удваивает.
+    fx.emit();
+    expect(fx.locals).toHaveLength(1);
+    fx.screen.value = working();
+    fx.emit();
+    expect(fx.locals[0]!.removed).toBe(true);
   });
 
   it('очередь на экране агента опустела — пометка «в очереди» снята, даже если записи в беседе не будет', async () => {

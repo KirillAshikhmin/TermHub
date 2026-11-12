@@ -451,9 +451,12 @@ describe('sessionAct — запрос работающему Codex', () => {
       sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? 'queued-followup' : undefined,
     );
     const res = await act(plain, { kind: 'prompt', text: 'note one' });
-    // Ответ называет, что запрос ушёл в идущий ход, а не в очередь.
-    expect(res).toMatchObject({ ok: true, steered: true });
+    // Codex отложил сообщение до следующего шага — оно в его очереди, «ушло в ход» не говорим.
+    expect(res).not.toHaveProperty('steered');
     expect(screenOf(res)).toMatchObject({ kind: 'working', queued: 1 });
+    // Очередь не выросла — запрос ушёл в идущий ход.
+    const taken = fake('codex', 'working', (sent) => (sent.startsWith('paste:') ? 'queue-hint' : sent === '\r' ? 'working' : undefined));
+    expect(await act(taken, { kind: 'prompt', text: 'note one' })).toMatchObject({ ok: true, steered: true });
     expect(plain.sent).toEqual(['paste:note one', '\r']);
     const waiting = fake('codex', 'waiting-terminal', (sent) =>
       sent.startsWith('paste:') ? 'waiting-terminal-typed' : sent === '\r' ? 'queued-followup-two' : undefined,
