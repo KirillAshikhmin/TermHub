@@ -23,14 +23,16 @@ import { renderMarkdown } from './markdown';
 import { sfeedHash } from './routes';
 import { mountSessionBar } from './tabs';
 import type { FeedEntry, FeedOptions, FeedPage, FeedResult, Transport } from './transport';
-import { errorScreen, renderHoloBar, svgIcon, wireToolbar } from './ui';
-import { allTokens, formatDuration, formatTokens, sessionUsage } from './usage';
+import { errorScreen, iconButton, renderHoloBar, svgIcon, wireToolbar } from './ui';
+import { allTokens, formatDuration, formatElapsed, formatTokens, sessionUsage } from './usage';
 import { whenCap } from './capabilities';
 
 /** Размер страницы: хвост открывается быстро, листание тянет такими же кусками. */
 const LIMIT = 100;
 /** Период приращения — тот же, что и у опроса сессий. */
 const POLL_MS = 3000;
+/** Период приращения, пока агент работает (чат знает это с экрана панели). */
+const FAST_POLL_MS = 1000;
 /** Насколько близко к верху надо подлистать, чтобы начать тянуть предыдущие. */
 const NEAR_TOP = 200;
 /** «Внизу» — не дальше двух-трёх строк от конца: палец, остановившийся почти у края,
@@ -50,6 +52,8 @@ const THINKING_KEY = 'termhub.feedThinking';
 /** Скрыты ли действия: ключ старше тумблера «Показать действия» и хранит прежний смысл —
  *  выбор, сделанный до переворота, не теряется. */
 const HIDE_ACTIONS_KEY = 'termhub.feedHideActions';
+/** Открыто ли поле поиска по беседе в чате (кнопка шапки переписки). */
+const SEARCH_KEY = 'termhub.feedSearch';
 
 /** Экран ленты для роутера и для поиска (таск поиска дописывает свой вид в searchSlot). */
 export interface FeedHandle {
@@ -70,6 +74,14 @@ export interface FeedHandle {
   /** Отправленное сообщение, которого в транскрипте ещё нет: стоит в конце переписки
    *  с пометкой и исчезает, когда агент запишет реплику с тем же текстом (поле ввода чата). */
   addLocal(text: string, state?: LocalState): LocalMessage;
+  /** Место в строке шапки переписки под состояние агента с экрана (слово состояния, время,
+   *  «Стоп») — его наполняет живая часть чата. В ленте без чата не в разметке. */
+  stateSlot: HTMLElement;
+  /** Состояние агента показано в `stateSlot`: своя подпись «Агент работает» тогда лишняя. */
+  setStateShown(on: boolean): void;
+  /** Агент сейчас работает: приращение просится раз в секунду, а не раз в три. Условия
+   *  опроса те же — вкладка активна, страница видима, очередь запросов пуста. */
+  setBusy(on: boolean): void;
   teardown(): void;
 }
 
@@ -215,12 +227,51 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   const usageEl = document.createElement('span');
   usageEl.className = 'th-feed__usage';
   usageEl.hidden = true;
-  head.append(agentEl, liveEl, usageEl, toggleWrap, actionsWrap);
+  const stateSlot = document.createElement('span');
+  stateSlot.className = 'th-feed__state';
+  let stateShown = false;
+  // В чате вместо чекбоксов с подписями — три кнопки-иконки, как кнопки шапки приложения:
+  // поиск по беседе, рассуждения, действия. Чекбоксы остаются носителями состояния (их
+  // слушают те же обработчики), но в разметку не идут.
+  const headButton = (name: 'search' | 'thinking' | 'actions', icon: string, onClick: () => void): HTMLButtonElement => {
+    const b = iconButton(icon, t(`feed.toggle.${name}`), onClick);
+    b.classList.add('th-feed__tool');
+    b.dataset.toggle = name;
+    return b;
+  };
+  const press = (b: HTMLButtonElement, on: boolean): void => {
+    b.setAttribute('aria-pressed', String(on));
+    b.classList.toggle('is-on', on);
+  };
+  const flip = (box: HTMLInputElement): void => {
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event('change'));
+  };
+  let searchOn = true;
+  if (chat) {
+    try { searchOn = localStorage.getItem(SEARCH_KEY) === '1'; } catch { searchOn = false; }
+  }
+  const searchBtn = headButton('search', 'search', () => setSearch(!searchOn, true));
+  const thinkingBtn = headButton('thinking', 'bulb', () => flip(toggle));
+  const actionsBtn = headButton('actions', 'bolt', () => flip(actionsToggle));
+  const paintButtons = (): void => {
+    press(searchBtn, searchOn);
+    press(thinkingBtn, toggle.checked);
+    press(actionsBtn, actionsToggle.checked);
+  };
+  if (chat) {
+    const tools = document.createElement('span');
+    tools.className = 'th-feed__tools';
+    tools.append(searchBtn, thinkingBtn, actionsBtn);
+    head.append(agentEl, stateSlot, liveEl, usageEl, tools);
+    paintButtons();
+  } else head.append(agentEl, liveEl, usageEl, toggleWrap, actionsWrap);
 
   // Полоса поиска — над списком и под шапкой (наполняется ниже, когда есть чем
   // листать назад: поиску нужны loadOlder и jumpTo).
   const searchSlot = document.createElement('div');
   searchSlot.className = 'th-feed__search';
+  searchSlot.hidden = !searchOn;
 
   // ── Список: край сверху, записи, отказ и счёт пропусков снизу ────────
   const listEl = document.createElement('div');
@@ -342,7 +393,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
 
   const paintHeader = (): void => {
     agentEl.textContent = agentKnown ? t(`feed.${agent}`) : '';
-    liveEl.hidden = !live;
+    liveEl.hidden = !live || stateShown;
     skippedEl.textContent = t('feed.skipped', { n: skipped });
     skippedEl.hidden = skipped === 0;
   };
@@ -359,11 +410,23 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       // Подряд идущие вызовы читаются одним столбиком — соседа помечаем, чтобы CSS
       // убрал зазор между ними.
       if (prev?.kind === 'tool') box.classList.add('is-cont');
+      // Что агент делает, его словами — первой строкой; «инструмент: аргумент» — второй.
+      // Без описания строка прежняя: имя и аргумент лежат прямо в записи.
+      let line: HTMLElement = box;
+      if (chat && entry.desc) {
+        box.classList.add('has-desc');
+        const desc = document.createElement('div');
+        desc.className = 'th-feed__tooldesc';
+        desc.textContent = entry.desc;
+        line = document.createElement('span');
+        line.className = 'th-feed__toolline';
+        box.append(desc, line);
+      }
       if (entry.tool) {
         const name = document.createElement('span');
         name.className = 'th-feed__toolname';
         name.textContent = entry.tool;
-        box.append(name);
+        line.append(name);
       }
       const what = document.createElement('span');
       what.className = 'th-feed__tooltext';
@@ -371,7 +434,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
       // копию не показываем, иначе выходит «Bash Bash cd …».
       const dup = entry.tool && (entry.text === entry.tool || entry.text.startsWith(`${entry.tool} `));
       what.textContent = dup ? entry.text.slice(entry.tool!.length).trimStart() : entry.text;
-      box.append(what);
+      line.append(what);
       if (chat) {
         linkifyPaths(what, chat.linker);
         // Раскрытие — только у действий, у которых агент назвал подробности.
@@ -381,6 +444,10 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
         }
       }
       return box;
+    }
+
+    if (entry.kind === 'note' && (entry.note === 'agent-start' || entry.note === 'agent-done' || entry.note === 'agent-message')) {
+      return renderAgentEvent(box, entry);
     }
 
     if (entry.kind === 'note') {
@@ -451,6 +518,52 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     return box;
   };
 
+  /** Событие фонового агента: запуск, завершение (с длительностью, если агент её дал) или
+   *  пришедшее от него сообщение — оно свёрнуто в строку и раскрывается по нажатию. */
+  const renderAgentEvent = (box: HTMLElement, entry: FeedEntry): HTMLElement => {
+    box.classList.add('th-feed__entry--event');
+    box.dataset.note = entry.note;
+    if (entry.at) box.title = formatDate(entry.at);
+    if (entry.note === 'agent-message') {
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'th-feed__notelabel th-feed__event-toggle';
+      toggleBtn.textContent = entry.from ? t('feed.note.agent-message', { from: entry.from }) : t('feed.note.agent-message-anon');
+      toggleBtn.setAttribute('aria-expanded', 'false');
+      const body = document.createElement('div');
+      body.className = 'th-feed__event-body th-feed__text th-feed__md';
+      body.hidden = true;
+      let filled = false;
+      toggleBtn.addEventListener('click', () => {
+        if (!filled) {
+          filled = true;
+          body.append(chat ? renderChatMarkdown(entry.text, chat.linker) : renderMarkdown(entry.text));
+          if (entry.truncated) {
+            const cut = document.createElement('div');
+            cut.className = 'th-feed__cut';
+            cut.textContent = t('feed.truncated');
+            body.append(cut);
+          }
+        }
+        body.hidden = !body.hidden;
+        toggleBtn.setAttribute('aria-expanded', String(!body.hidden));
+      });
+      box.append(toggleBtn, body);
+      return box;
+    }
+    const label = document.createElement('span');
+    label.className = 'th-feed__notelabel';
+    const key =
+      entry.note === 'agent-start' ? 'agent-start'
+      : entry.outcome === 'failed' ? 'agent-failed'
+      : entry.outcome === 'stopped' ? 'agent-stopped'
+      : 'agent-done';
+    const words = t(`feed.note.${key}`, { name: entry.text });
+    label.textContent = entry.elapsed !== undefined ? `${words} · ${formatElapsed(entry.elapsed)}` : words;
+    box.append(label);
+    return box;
+  };
+
   const applyThinking = (): void => {
     for (const el of itemsEl.querySelectorAll<HTMLElement>('[data-kind="thinking"]')) el.hidden = !showThinking;
   };
@@ -459,6 +572,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     showActions = actionsToggle.checked;
     try { localStorage.setItem(HIDE_ACTIONS_KEY, showActions ? '0' : '1'); } catch { /* необязательная настройка */ }
     for (const el of itemsEl.querySelectorAll<HTMLElement>('[data-kind="tool"]')) el.hidden = !showActions;
+    paintButtons();
     paintHits(lastHits);
   });
 
@@ -466,6 +580,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     showThinking = toggle.checked;
     writeThinking(showThinking);
     applyThinking();
+    paintButtons();
     // Находки на мышление зависят от того же тумблера: включили — открылись
     // обратно, выключили — перестали притворяться доступными (см. jumpable).
     paintHits(lastHits);
@@ -936,6 +1051,20 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
   };
 
   queryEl.addEventListener('input', () => runSearch(queryEl.value));
+  // Кнопка поиска шапки чата: включили — поле показано и в фокусе; выключили — поле
+  // спрятано, запрос и находки сброшены. Прыжок к записи от поля не зависит.
+  function setSearch(on: boolean, byHand: boolean): void {
+    searchOn = on;
+    searchSlot.hidden = !on;
+    try { localStorage.setItem(SEARCH_KEY, on ? '1' : '0'); } catch { /* необязательная настройка */ }
+    paintButtons();
+    if (on) {
+      if (byHand) queryEl.focus();
+    } else if (queryEl.value !== '') {
+      queryEl.value = '';
+      runSearch('');
+    }
+  }
   moreEl.addEventListener('click', () => {
     searchGen += 1;
     window.clearTimeout(searchTimer);
@@ -961,12 +1090,19 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     const view = main.closest('.th-ws-view');
     return document.visibilityState === 'visible' && (!view || view.classList.contains('is-active'));
   };
+  // Таймер один, с шагом в секунду: работающий агент опрашивается каждым шагом,
+  // остальное время — каждым третьим (ADR 0028).
+  let busyAgent = false;
+  let sincePoll = 0;
   const timer = window.setInterval(() => {
+    sincePoll += FAST_POLL_MS;
+    if (!busyAgent && sincePoll < POLL_MS) return;
+    sincePoll = 0;
     // Запросы не копим: пока очередь не пуста, следующего продолжения не просим.
-    if (disposed || queueDepth > 0 || !(live || offline) || !shown()) return;
+    if (disposed || queueDepth > 0 || !(live || offline || busyAgent) || !shown()) return;
     // Первая загрузка не удалась — продолжать нечего, берём хвост заново.
     void (offline && items.length === 0 ? enqueue(tailJob) : loadNewer());
-  }, POLL_MS);
+  }, FAST_POLL_MS);
   // Корни проводника приехали позже первых записей — пути в них становятся ссылками.
   if (chat) {
     void chat.linker.ready.then(() => {
@@ -1016,6 +1152,14 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     jumpTo,
     refresh: () => void loadNewer(),
     addLocal,
+    stateSlot,
+    setStateShown: (on) => {
+      stateShown = on;
+      paintHeader();
+    },
+    setBusy: (on) => {
+      busyAgent = on;
+    },
     teardown: () => {
       disposed = true;
       window.clearInterval(usageTimer);

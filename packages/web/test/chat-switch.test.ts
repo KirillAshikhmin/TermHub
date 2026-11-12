@@ -52,6 +52,25 @@ describe('переключатель вида', () => {
     expect(el.querySelectorAll('a.th-holotab').length).toBe(3);
   });
 
+  it('у каждой позиции — иконка и подпись теми же классами, что у вкладок, и доступное имя', async () => {
+    const el = await bar(transportOf('claude', ['feed', 'chat']), 'feed');
+    const icons: string[] = [];
+    for (const [view, label] of [['term', 'Терминал'], ['chat', 'Чат']] as const) {
+      const b = opt(el, view);
+      const icon = b.querySelector('.th-holotab__icon svg');
+      expect(icon).not.toBeNull();
+      icons.push(icon!.innerHTML);
+      expect(b.querySelector('.th-holotab__label')!.textContent).toBe(label);
+      expect(b.getAttribute('aria-label')).toBe(label);
+      expect(b.title).toBe(label);
+    }
+    expect(icons[0]).not.toBe(icons[1]);
+    // Иконка чата своя: не та, что у кнопки ленты.
+    const feedIcon = (await bar(transportOf('zsh', ['feed']))).querySelector('.th-holotab__feed svg')!.innerHTML;
+    expect(icons).not.toContain(feedIcon);
+    expect(opt(el, 'chat').getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('Codex и голая версия Claude тоже опознаются', async () => {
     expect(sw(await bar(transportOf('codex', ['feed', 'chat'])))).not.toBeNull();
     forgetCaps();

@@ -92,7 +92,15 @@ export interface FeedEntry {
   /** Имя инструмента — только у `kind: 'tool'`. */
   tool?: string;
   /** Веха кодом, а не фразой: слова подбирает экран. Только у `kind: 'note'`. */
-  note?: 'compacted' | 'interrupted' | 'error' | 'chain';
+  note?: 'compacted' | 'interrupted' | 'error' | 'chain' | 'agent-start' | 'agent-done' | 'agent-message';
+  /** Описание действия словами агента — только у `tool`, когда агент его дал. */
+  desc?: string;
+  /** Кто прислал сообщение — только у `agent-message`, когда отправитель назван. */
+  from?: string;
+  /** Сколько работал фоновый агент, секунды — только у `agent-done`. */
+  elapsed?: number;
+  /** Чем кончил фоновый агент, если не успехом, — только у `agent-done`. */
+  outcome?: 'failed' | 'stopped';
   /** Ветка подагента. На сегодняшних данных пуста всегда — рисовать её нечем. */
   branch?: string;
   /** Текст обрезан агентом по пределу записи. */

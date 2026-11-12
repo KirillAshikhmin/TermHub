@@ -44,8 +44,20 @@ export interface FeedEntry {
   text: string;
   /** Имя инструмента — только у `kind: 'tool'`. */
   tool?: string;
-  /** Что за веха — только у `kind: 'note'`. Код, а не фраза: слова подбирает экран. */
-  note?: 'compacted' | 'interrupted' | 'error' | 'chain';
+  /** Что за веха — только у `kind: 'note'`. Код, а не фраза: слова подбирает экран.
+   *  `agent-start`, `agent-done` и `agent-message` — события фоновых агентов Claude: у
+   *  первых двух `text` — название задачи, у третьего — текст сообщения. */
+  note?: 'compacted' | 'interrupted' | 'error' | 'chain' | 'agent-start' | 'agent-done' | 'agent-message';
+  /** Описание действия словами агента (`input.description`) — только у `tool` и только
+   *  когда оно не стало самой подписью. Режется тем же пределом, что аргумент. */
+  desc?: string;
+  /** Кто прислал сообщение — только у `agent-message` и только когда отправитель назван. */
+  from?: string;
+  /** Сколько работал фоновый агент, секунды — только у `agent-done`, когда уведомление
+   *  несёт длительность. */
+  elapsed?: number;
+  /** Чем кончил фоновый агент, если не успехом, — только у `agent-done`. */
+  outcome?: 'failed' | 'stopped';
   /** Место записи в файле — курсор той же формы `<inode>:<offset>`, что принимают `before`,
    *  `after` и `around`. Им экран прыгает к найденной записи (история 9.1): поиск держит в
    *  руках запись, а не курсор, и без этого поля адресовать её место нечем. У всех записей
@@ -541,6 +553,8 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
   if (rec.isSidechain === true && str(rec.agentName)) base.branch = str(rec.agentName);
   const message = rec.message as Record<string, unknown> | undefined;
   if (type === 'user') {
+    const event = agentEvent(rec, base, message);
+    if (event) return [event];
     // Вывод инструмента в ленту не идёт: запись `tool` уже сказала, что было сделано.
     if (rec.isMeta === true || rec.toolUseResult !== undefined) return [];
     const text = claudeText(message?.content);
@@ -562,9 +576,92 @@ function fromClaude(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     if (block.type === 'text' && text.trim()) out.push(make(base, out.length, 'agent', text));
     else if (block.type === 'thinking' && thinking) out.push(make(base, out.length, 'thinking', thinking));
     else if (block.type === 'tool_use' && str(block.name))
-      out.push(withDetail(tool(base, out.length, str(block.name), argOf(block.input))));
+      out.push(withDetail(tool(base, out.length, str(block.name), argOf(block.input), descOf(block.input))));
   }
   return out;
+}
+
+/** Описание, которое агент дал действию (у `Bash` и `Monitor` — поле `description`). */
+function descOf(input: unknown): string {
+  if (input === null || typeof input !== 'object') return '';
+  return cut(str((input as Record<string, unknown>).description));
+}
+
+// --- события фоновых агентов -----------------------------------------------------------
+
+/** Сводка уведомления о задаче, если задача — агент: «Agent "…" finished», «… failed: …»,
+ *  «… was stopped by …». Фоновые команды и мониторы пишут то же уведомление другими
+ *  словами, и в ленту они не идут. Название жадное: кавычки бывают и внутри него. */
+const AGENT_DONE_RE = /^Agent "([\s\S]*)" (finished|failed\b|was stopped\b)/;
+/** Отчёт подагента в `origin.body`: строка-пояснение в квадратных скобках, кончающаяся
+ *  двоеточием, и сам отчёт с отступом в два пробела. */
+const HANDBACK_RE = /^\[[^\]\n]{1,60}\][^\n]*:\n/;
+
+/** Запись `user`, которая на деле событие фонового агента: запуск (результат вызова
+ *  `Agent` с `status: 'async_launched'`), завершение (`<task-notification>` со сводкой об
+ *  агенте) или пришедшее от него сообщение (`origin.kind: 'peer'`). Формы сняты с живых
+ *  транскриптов 12.11.2026. Человек этого не писал — запись едет вехой, а не репликой. */
+function agentEvent(
+  rec: Record<string, unknown>,
+  base: Base,
+  message: Record<string, unknown> | undefined,
+): FeedEntry | null {
+  const result = rec.toolUseResult;
+  if (result !== undefined) {
+    if (result === null || typeof result !== 'object') return null;
+    const launch = result as Record<string, unknown>;
+    const name = cut(str(launch.description));
+    if (launch.isAsync !== true || launch.status !== 'async_launched' || !name) return null;
+    return event(base, 'agent-start', name);
+  }
+  const origin = (rec.origin ?? undefined) as Record<string, unknown> | undefined;
+  const text = claudeText(message?.content);
+  if (origin?.kind === 'peer') {
+    const words = str(origin.handbackReportText).trim() || unwrapReport(str(origin.body)) || peerWords(text);
+    if (!words) return null;
+    const entry = event(base, 'agent-message', words);
+    const from = cut(str(origin.name));
+    if (from) entry.from = from;
+    return entry;
+  }
+  if (rec.isMeta === true) return null;
+  const notice = /^<task-notification>([\s\S]*)<\/task-notification>$/.exec(text);
+  if (!notice) return null;
+  const done = AGENT_DONE_RE.exec(tagOf(notice[1], 'summary'));
+  if (!done) return null;
+  const entry = event(base, 'agent-done', cut(done[1]));
+  const ms = Number(tagOf(notice[1], 'duration_ms'));
+  if (Number.isFinite(ms) && ms > 0) entry.elapsed = Math.round(ms / 1000);
+  if (done[2] !== 'finished') entry.outcome = done[2] === 'failed' ? 'failed' : 'stopped';
+  return entry;
+}
+
+function event(base: Base, what: NonNullable<FeedEntry['note']>, text: string): FeedEntry {
+  const entry = make(base, 0, 'note', text);
+  entry.note = what;
+  return entry;
+}
+
+/** Содержимое первого тега `<name>…</name>`; тега нет — пусто. */
+function tagOf(text: string, name: string): string {
+  const found = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text);
+  return found ? found[1].trim() : '';
+}
+
+/** Тело сообщения без пояснения среды: отчёт подагента лежит под строкой-пояснением с
+ *  отступом в два пробела. Другой формы — тело как есть. */
+function unwrapReport(body: string): string {
+  const head = HANDBACK_RE.exec(body);
+  if (!head) return body.trim();
+  const lines = body.slice(head[0].length).split('\n');
+  if (lines.some((line) => line.trim() !== '' && !line.startsWith('  '))) return body.trim();
+  return lines.map((line) => line.slice(2)).join('\n').trim();
+}
+
+/** Слова из самой записи, когда `origin` их не несёт: то, что внутри `<agent-message>`. */
+function peerWords(text: string): string {
+  const found = /<agent-message\b[^>]*>([\s\S]*?)<\/agent-message>/.exec(text);
+  return found ? found[1].trim() : '';
 }
 
 function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
@@ -706,7 +803,14 @@ function clip(text: string): { text: string; truncated: boolean } {
  *  кладётся в неё же, иначе страница дешевеет молча — и здесь, и в бюджете склейки
  *  цепочки, который меряет этой же функцией `session-feed`. */
 export function weigh(entry: FeedEntry): number {
-  return Buffer.byteLength(entry.text) + Buffer.byteLength(entry.id) + Buffer.byteLength(entry.tool ?? '') + 120;
+  return (
+    Buffer.byteLength(entry.text) +
+    Buffer.byteLength(entry.id) +
+    Buffer.byteLength(entry.tool ?? '') +
+    Buffer.byteLength(entry.desc ?? '') +
+    Buffer.byteLength(entry.from ?? '') +
+    120
+  );
 }
 
 /** Веха беседы. Подробность из источника проходит тот же фильтр, что и реплика человека:
@@ -720,9 +824,11 @@ function note(base: Base, what: NonNullable<FeedEntry['note']>, text: string, in
   return entry;
 }
 
-function tool(base: Base, index: number, name: string, arg: string): FeedEntry {
+function tool(base: Base, index: number, name: string, arg: string, desc = ''): FeedEntry {
   const entry = make(base, index, 'tool', arg ? `${name} ${arg}` : name);
   entry.tool = name;
+  // Описание, уже ставшее подписью (у `Agent` подпись и есть описание), не повторяется.
+  if (desc && desc !== arg) entry.desc = desc;
   return entry;
 }
 

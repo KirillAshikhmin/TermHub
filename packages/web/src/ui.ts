@@ -55,6 +55,9 @@ const ICONS: Record<string, string> = {
   paperclip: '<path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/>',
   camera: '<path d="M3 8a2 2 0 0 1 2-2h2.5l1.5-2h6l1.5 2H19a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+  chat: '<path d="M4 4h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M20 9a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2v3l-3.5-3H12"/>',
+  bulb: '<path d="M9 18h6M10 21.5h4"/><path d="M12 2.5a6.5 6.5 0 0 0-4 11.6c.7.6 1 1.3 1 2.1V18h6v-1.8c0-.8.3-1.5 1-2.1a6.5 6.5 0 0 0-4-11.6z"/>',
+  bolt: '<path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12z"/>',
   feed: '<path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3.5 21l1.9-5.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 9.5h7M8.5 13h4.5"/>',
 };
 
@@ -442,7 +445,16 @@ function mountViewSwitch(
     b.type = 'button';
     b.className = 'th-viewsw__opt';
     b.dataset.view = v;
-    b.textContent = t(`chat.view.${v}`);
+    // Те же классы, что у иконки и подписи вкладки: там, где вкладки полосы показаны
+    // иконками без подписей, позиция переключателя — тоже иконка.
+    const icon = svgIcon(v === 'term' ? 'terminal' : 'chat');
+    icon.classList.add('th-holotab__icon');
+    const label = document.createElement('span');
+    label.className = 'th-holotab__label';
+    label.textContent = t(`chat.view.${v}`);
+    b.append(icon, label);
+    b.setAttribute('aria-label', t(`chat.view.${v}`));
+    b.title = t(`chat.view.${v}`);
     b.setAttribute('aria-pressed', String(current === v));
     b.addEventListener('click', (e) => {
       // Кнопка живёт внутри ссылки на плашку: без этого клик ушёл бы ещё и в её переход.
@@ -454,7 +466,7 @@ function mountViewSwitch(
     });
     sw.append(b);
   }
-  tab.querySelector('.th-holotab__label')?.replaceWith(sw);
+  tab.querySelector(':scope > .th-holotab__label')?.replaceWith(sw);
   // Плашка мимо кнопок — в текущий вид сессии.
   if (tab instanceof HTMLAnchorElement) tab.href = view === 'chat' ? sfeedHash(session) : termHash(session);
 }

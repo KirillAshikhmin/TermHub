@@ -169,3 +169,63 @@ describe('переписка по ширине и параметры вида', 
     expect(getComputedStyle(text).fontSize).toBe('14.4px'); // 0.9rem ленты
   });
 });
+
+describe('шапка переписки: состояние, «Стоп» и кнопки', () => {
+  it('строка шапки переносится, «Стоп» в ней не ниже 44 px и не сжимается', () => {
+    const head = el('div', 'th-feed__head', chat);
+    const slot = el('span', 'th-feed__state', head);
+    const bar = el('span', 'th-live__bar', slot);
+    const stop = el('button', 'th-live__stop', bar);
+    expect(getComputedStyle(head).flexWrap).toBe('wrap');
+    expect(getComputedStyle(stop).minHeight).toBe('44px');
+    expect(getComputedStyle(stop).flexShrink).toBe('0');
+    // Полоса в шапке — часть строки: своего фона и нижней границы у неё нет.
+    expect(getComputedStyle(bar).borderBottomStyle).toBe('none');
+    expect(getComputedStyle(bar).paddingLeft).toMatch(/^0(px)?$/);
+    expect(getComputedStyle(slot).minWidth).toMatch(/^0(px)?$/);
+  });
+
+  it('пустое место состояния строки не занимает', () => {
+    const head = el('div', 'th-feed__head', chat);
+    const slot = el('span', 'th-feed__state', head);
+    expect(getComputedStyle(slot).display).toBe('none');
+  });
+
+  it('кнопки шапки прижаты вправо одной группой; описание действия — отдельной строкой', () => {
+    const head = el('div', 'th-feed__head', chat);
+    const tools = el('span', 'th-feed__tools', head);
+    expect(getComputedStyle(tools).marginLeft).toBe('auto');
+    expect(getComputedStyle(tools).flexShrink).toBe('0');
+    const tool = el('div', 'th-feed__entry th-feed__entry--tool has-desc', chat);
+    const desc = el('div', 'th-feed__tooldesc', tool);
+    const line = el('span', 'th-feed__toolline', tool);
+    expect(getComputedStyle(tool).flexWrap).toBe('wrap');
+    expect(getComputedStyle(desc).flexBasis).toBe('100%');
+    expect(getComputedStyle(line).minWidth).toMatch(/^0(px)?$/);
+    // То же в заголовке раскрываемого действия.
+    const toolHead = el('div', 'th-tool__head', el('div', 'th-feed__entry th-feed__entry--tool has-desc is-expandable', chat));
+    expect(getComputedStyle(toolHead).flexWrap).toBe('wrap');
+  });
+
+  it('скрытое поле поиска не видно', () => {
+    const slot = el('div', 'th-feed__search', chat);
+    slot.hidden = true;
+    expect(getComputedStyle(slot).display).toBe('none');
+  });
+});
+
+describe('переключатель вида: иконки там, где у вкладок нет подписей', () => {
+  it('правило, прячущее подписи вкладок, прячет и подписи переключателя, а иконки показывает', () => {
+    // Одно и то же правило: подпись позиции несёт класс подписи вкладки, иконка — класс её иконки.
+    const rule = css
+      .split('@media (max-width: 600px), (pointer: coarse) {')
+      .slice(1)
+      .map((chunk) => chunk.slice(0, chunk.indexOf('\n}')))
+      .find((chunk) => chunk.includes('.th-holotab__label'))!;
+    expect(rule).toMatch(/\.th-holotab__label \{ display: none; \}/);
+    expect(rule).toMatch(/\.th-viewsw__opt \{[^}]*min-width: 44px;[^}]*height: 44px;/);
+    // Значок самой плашки прячется только свой: иконки позиций переключателя остаются.
+    expect(css).toMatch(/\.th-holotab--term:has\(\.th-viewsw\) > \.th-holotab__icon \{\s*display: none;/);
+    expect(css).not.toMatch(/\.th-holotab--term:has\(\.th-viewsw\) \.th-holotab__icon \{/);
+  });
+});

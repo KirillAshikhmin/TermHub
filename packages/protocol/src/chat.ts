@@ -42,6 +42,10 @@ export interface ScreenState {
   status?: string;
   /** Секунды работы, если агент показывает. */
   elapsed?: number;
+  /** Токены из строки работы, если агент их рисует («↓ 2.1k tokens» → 2100). */
+  tokens?: number;
+  /** Сколько фоновых агентов ждёт агент («Waiting for 2 background agents to finish»). */
+  waiting?: number;
   /** Для `question` и `permission`. */
   question?: ScreenQuestion;
   /** id режима из профиля. */

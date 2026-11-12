@@ -65,6 +65,15 @@ export function formatDuration(ms: number): string {
   return h > 0 ? t('usage.hm', { h, m }) : t('usage.m', { m });
 }
 
+/** Секунды так, как их рисует агент: «31s», «5m 31s», «2h 03m». */
+export function formatElapsed(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+}
+
 function sum(rows: UsageTotals[]): UsageTotals {
   const out: UsageTotals = { input: 0, cached: 0, cacheWrite: 0, output: 0, turns: 0, activeMs: 0 };
   for (const r of rows) {

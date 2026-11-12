@@ -80,6 +80,8 @@ export interface ScreenSigns {
   working?: RegExp;
   /** Строка работы над строкой ввода: группа 1 — текст, группа 2 — время и прочее. */
   status: RegExp;
+  /** Строка ожидания фоновых агентов на месте строки работы: группа 1 — их число. */
+  waiting?: RegExp;
   /** Очередь: строка сообщения в очереди; `under` — подпись, над которой эти строки
    *  стоят (тогда считаются только строки прямо над ней). */
   queue: { item: RegExp; under?: RegExp };
@@ -241,6 +243,7 @@ const CLAUDE: AgentProfile = {
     // Спиннер меняет глиф на каждом кадре, поэтому глиф не перечислен: любой знак,
     // кроме тех, с которых начинаются реплики и вывод инструментов.
     status: /^[^\s\p{L}\p{N}⏺❯⎿●]\s(\S.*?…)(?:\s+\((.+)\))?$/u,
+    waiting: /^[^\s\p{L}\p{N}⏺❯⎿●]\sWaiting for (\d+) background agents? to finish$/u,
     queue: { item: /^❯\s/, under: /^\s+ctrl\+x ctrl\+s to send now$/ },
     chip: /^[←\s]*[☐☒✔]\s/,
     free: /^Type something\.?$/,

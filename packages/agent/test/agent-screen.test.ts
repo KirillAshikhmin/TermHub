@@ -259,6 +259,7 @@ describe('Claude Code', () => {
       kind: 'working',
       status: 'Whirlpooling…',
       elapsed: 6,
+      tokens: 179,
       mode: 'manual',
       input: '',
     });
@@ -275,6 +276,7 @@ describe('Claude Code', () => {
       kind: 'working',
       status: 'Doodling…',
       elapsed: 14,
+      tokens: 216,
       mode: 'manual',
       input: '',
       queued: 1,
@@ -517,15 +519,18 @@ describe('Claude Code с фоновыми агентами', () => {
       kind: 'working',
       status: 'Bloviating…',
       elapsed: 15,
+      tokens: 784,
+      waiting: 2,
       mode: 'auto',
       input: '',
     });
   });
 
   it('ожидание ввода и текст в строке ввода', () => {
-    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '' });
     expect(read('claude', 'agents-input')).toEqual({
       kind: 'idle',
+      waiting: 2,
       mode: 'auto',
       input: 'hello draft text',
     });
@@ -595,7 +600,7 @@ describe('Claude Code с фоновыми агентами', () => {
     for (const item of ['⧉ index', '3 shells', 'some new thing 42', '✦ whatever (ctrl+q)']) {
       const footer = `  ⏵⏵ auto mode on (shift+tab to cycle) · ${item} · ← 2 agents · ${item}`;
       const swapped = [...lines.slice(0, at), footer, ...lines.slice(at + 1)];
-      expect(readScreen(swapped, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+      expect(readScreen(swapped, claude)).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '' });
       const bare = shot('claude', 'idle-auto');
       const last = bare.findLastIndex((l) => l.includes('auto mode on'));
       expect(readScreen([...bare.slice(0, last), footer, ...bare.slice(last + 1)], claude)).toEqual({
@@ -794,5 +799,87 @@ describe('чужой профиль', () => {
     expect(readScreen(shot('codex', 'permission'), profileOf('claude')).question).toBeUndefined();
     expect(readScreen(shot('codex', 'question'), profileOf('claude')).question).toBeUndefined();
     expect(readScreen(shot('claude', 'question'), profileOf('codex')).question).toBeUndefined();
+  });
+});
+
+describe('Claude Code: токены в строке работы и ожидание фоновых агентов', () => {
+  const claude = profileOf('claude');
+  const STATUS = /Whirlpooling…|Bloviating…/;
+
+  /** Снимок, в котором строка работы заменена своей (оформление строки сохраняется). */
+  function restated(name: string, from: RegExp, to: string): string[] {
+    const lines = shot('claude', name);
+    const at = plain(lines).findIndex((l) => from.test(l));
+    expect(at).toBeGreaterThan(0);
+    const next = [...lines];
+    next[at] = to;
+    return next;
+  }
+
+  it('строка работы с токенами: слово состояния, время и токены', () => {
+    expect(read('claude', 'working')).toMatchObject({ status: 'Whirlpooling…', elapsed: 6, tokens: 179 });
+    // Строка со снимка пользователя.
+    const lines = restated('working', STATUS, '\x1b[38;5;174m✳\x1b[39m \x1b[38;5;216mTransmuting…\x1b[38;5;174m \x1b[38;5;246m(1m 15s · ↓\x1b[39m \x1b[38;5;246m2.1k tokens)\x1b[39m');
+    expect(readScreen(lines, claude)).toEqual({
+      kind: 'working',
+      status: 'Transmuting…',
+      elapsed: 75,
+      tokens: 2100,
+      mode: 'manual',
+      input: '',
+    });
+  });
+
+  it('токены в миллионах и стрелкой вверх; строки без токенов поля не дают', () => {
+    const up = restated('working', STATUS, '✳ Transmuting… (2h 3m 4s · ↑ 1.25M tokens)');
+    expect(readScreen(up, claude)).toMatchObject({ elapsed: 7384, tokens: 1_250_000 });
+    expect(read('claude', 'working-start')).not.toHaveProperty('tokens');
+    const bare = restated('working', STATUS, '✳ Transmuting… (12s)');
+    expect(readScreen(bare, claude)).toMatchObject({ status: 'Transmuting…', elapsed: 12 });
+    expect(readScreen(bare, claude)).not.toHaveProperty('tokens');
+  });
+
+  it('ожидание фоновых агентов рядом со строкой работы: число ожидаемых', () => {
+    expect(read('claude', 'agents-working')).toEqual({
+      kind: 'working',
+      status: 'Bloviating…',
+      elapsed: 15,
+      tokens: 784,
+      waiting: 2,
+      mode: 'auto',
+      input: '',
+    });
+  });
+
+  it('одна строка ожидания без строки работы: число ожидаемых, вид решает подвал', () => {
+    const lines = shot('claude', 'agents-working');
+    const at = plain(lines).findIndex((l) => STATUS.test(l));
+    const only = [...lines.slice(0, at - 1), ...lines.slice(at + 1)];
+    expect(plain(only).some((l) => STATUS.test(l))).toBe(false);
+    // В подвале снимка стоит «esc to interrupt» — агент ещё работает.
+    expect(readScreen(only, claude)).toEqual({ kind: 'working', waiting: 2, mode: 'auto', input: '' });
+    const one = only.map((l) => (plain([l])[0]!.includes('Waiting for') ? '✻ Waiting for 1 background agent to finish' : l));
+    expect(readScreen(one, claude)).toMatchObject({ kind: 'working', waiting: 1 });
+    // Ход окончен, агент ждёт фоновых: строка ввода свободна — это ожидание ввода.
+    expect(read('claude', 'agents-idle')).toEqual({ kind: 'idle', waiting: 2, mode: 'auto', input: '' });
+  });
+
+  it('строка ожидания выше по переписке (старая) состоянием не считается', () => {
+    const lines = shot('claude', 'agents-idle');
+    const flat = plain(lines);
+    const wait = flat.findIndex((l) => l.includes('Waiting for 2 background agents'));
+    const talk = flat.indexOf('› Message from @general-purpose (ctrl+o to expand)');
+    expect(talk).toBeGreaterThan(0);
+    expect(wait).toBeGreaterThan(talk);
+    // Меняем местами: теперь между строкой ожидания и вводом стоит строка переписки.
+    const stale = [...lines];
+    stale[wait] = lines[talk]!;
+    stale[talk] = lines[wait]!;
+    expect(readScreen(stale, claude)).toEqual({ kind: 'idle', mode: 'auto', input: '' });
+  });
+
+  it('Codex: строка работы токенов не рисует — поля нет', () => {
+    expect(read('codex', 'working')).not.toHaveProperty('tokens');
+    expect(read('codex', 'statusline-working')).not.toHaveProperty('tokens');
   });
 });

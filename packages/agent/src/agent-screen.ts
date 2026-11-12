@@ -448,6 +448,11 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
 
   let status: string | undefined;
   let elapsed: number | undefined;
+  let tokens: number | undefined;
+  let waiting: number | undefined;
+  // Строка ожидания считается состоянием, только пока между ней и строкой ввода нет
+  // переписки: выше по экрану она же стоит строкой прошлого хода.
+  let fresh = signs.waiting !== undefined;
   let queued = 0;
   let under = -1;
   const reach = Math.max(0, box.top - STATUS_REACH);
@@ -458,10 +463,18 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
       if (found) {
         status = found[1]!;
         elapsed = secondsOf(found[2]);
-        // Очередь `under` стоит выше строки работы — ищем дальше; без неё всё найдено.
-        if (!signs.queue.under) break;
+        tokens = tokensOf(found[2]);
+        // Очередь `under` и строка ожидания стоят выше строки работы — ищем дальше;
+        // без них всё найдено.
+        if (!signs.queue.under && !signs.waiting) break;
         continue;
       }
+    }
+    if (fresh && text !== '') {
+      const found = signs.waiting!.exec(text);
+      if (found) waiting = Number(found[1]);
+      // Строки с отступом — подсказки и подписи под строкой работы, не переписка.
+      if (found || !/^\s/u.test(text)) fresh = false;
     }
     if (signs.queue.under) {
       if (signs.queue.under.test(text)) under = i;
@@ -480,6 +493,8 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
   const busy = state ? box.items.find((item) => state.working.test(item)) : undefined;
   const ready = state ? box.items.some((item) => state.idle.test(item)) : false;
   status ??= busy;
+  // Ожидание фоновых агентов работой само не считается: ход агента окончен, строка
+  // ввода принимает запрос сразу; работу называют строка работы и подвал.
   const working = status !== undefined || signs.working?.test(box.footer) === true;
   const model = modelOf(box.items, profile);
   const mode = modeOf(box.footer, profile, model !== undefined || busy !== undefined || ready);
@@ -487,6 +502,8 @@ function readBox(rows: Row[], box: Box, profile: AgentProfile): ScreenState {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),
     ...(elapsed === undefined ? {} : { elapsed }),
+    ...(tokens === undefined ? {} : { tokens }),
+    ...(waiting === undefined ? {} : { waiting }),
     ...(mode === undefined ? {} : { mode }),
     input,
     ...(queued > 0 ? { queued } : {}),
@@ -499,6 +516,14 @@ function secondsOf(text: string | undefined): number | undefined {
   const found = /(?:(\d+)h\s*)?(?:(\d+)m\s*)?(\d+)s\b/u.exec(text ?? '');
   if (!found) return undefined;
   return Number(found[1] ?? 0) * 3600 + Number(found[2] ?? 0) * 60 + Number(found[3]);
+}
+
+/** «6s · ↓ 179 tokens», «↑ 2.1k tokens» → число токенов; их в строке нет — `undefined`. */
+function tokensOf(text: string | undefined): number | undefined {
+  const found = /[↓↑]\s*(\d+(?:\.\d+)?)([kKmM]?)\s+tokens\b/u.exec(text ?? '');
+  if (!found) return undefined;
+  const scale = found[2] === '' ? 1 : /k/i.test(found[2]!) ? 1_000 : 1_000_000;
+  return Math.round(Number(found[1]) * scale);
 }
 
 /** Модель среди пунктов строки состояния: имя из профиля, а у модели, которой в

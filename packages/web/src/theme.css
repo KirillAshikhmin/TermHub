@@ -4273,6 +4273,8 @@ main.th-feed {
 @media (max-width: 600px), (pointer: coarse) {
   .th-holotab__icon { display: inline-flex; width: 22px; height: 22px; }
   .th-holotab__label { display: none; }
+  /* Позиции переключателя вида — тоже иконки (их подписи и значки несут классы вкладки). */
+  .th-viewsw .th-viewsw__opt { min-width: 44px; height: 44px; padding: 0; }
   .th-term__keyboard-toggle {
     display: flex;
     top: auto;
@@ -4286,6 +4288,82 @@ main.th-feed {
 }
 
 .th-feed__head { flex-wrap: wrap; }
+
+/* ── Шапка переписки чата: состояние агента со «Стоп» и три кнопки-переключателя ──
+   Всё в одной строке с названием агента и расходом; на узком экране строка переносится,
+   кнопки остаются одной группой у правого края. */
+.th-feed__state {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.th-feed__state:empty,
+.th-feed__state:has(> .th-live__bar[hidden]) {
+  display: none;
+}
+.th-feed__state .th-live__bar {
+  display: inline-flex;
+  min-width: 0;
+  gap: 6px;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.th-feed__state .th-live__state {
+  flex: 0 1 auto;
+}
+.th-feed__state .th-live__stop {
+  flex-shrink: 0;
+  min-height: 44px;
+}
+.th-feed__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+/* Описание действия словами агента — первой строкой, «инструмент аргумент» — второй. */
+.th-feed__entry--tool.has-desc,
+.th-feed__entry--tool.has-desc > .th-tool__head {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.th-feed__tooldesc {
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.th-feed__toolline {
+  display: flex;
+  flex: 1 1 0;
+  gap: 6px;
+  min-width: 0;
+}
+/* События фоновых агентов — приглушённые строки; сообщение раскрывается по нажатию. */
+.th-feed__event-toggle {
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.th-feed__event-toggle::after {
+  content: ' ▸';
+}
+.th-feed__event-toggle[aria-expanded='true']::after {
+  content: ' ▾';
+}
+.th-feed__event-body {
+  align-self: stretch;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-dim);
+}
 .th-feed__toggle-wrap + .th-feed__toggle-wrap { margin-left: 0; }
 
 /* ── Переключатель вида «Терминал / Чат» в плашке сессии ───────────────
@@ -4294,7 +4372,7 @@ main.th-feed {
 .th-holotab--term:has(.th-viewsw) {
   flex: 1.7;
 }
-.th-holotab--term:has(.th-viewsw) .th-holotab__icon {
+.th-holotab--term:has(.th-viewsw) > .th-holotab__icon {
   display: none;
 }
 .th-viewsw {
@@ -4307,6 +4385,9 @@ main.th-feed {
   border-radius: var(--r-full);
 }
 .th-viewsw__opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
   height: 30px;
   padding: 0 10px;

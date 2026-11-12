@@ -148,9 +148,13 @@ describe('полоса состояния', () => {
 
     fx.next(live({ kind: 'working', status: 'Thinking…', elapsed: 65, queued: 2 }));
     await run(1000);
-    const text = q('.th-live__state')!.textContent!;
-    expect(text).toContain(t('chat.live.working'));
-    expect(text).toContain('1:05');
+    // Слово состояния — то, что рисует агент; время — как у агента.
+    expect(q('.th-live__state')!.textContent).toBe('Thinking… · 1m 5s');
+    fx.next(live({ kind: 'working', elapsed: 65 }));
+    await run(1000);
+    expect(q('.th-live__state')!.textContent).toBe(`${t('chat.live.working')} · 1m 5s`);
+    fx.next(live({ kind: 'working', status: 'Thinking…', elapsed: 65, queued: 2 }));
+    await run(1000);
     expect(q('.th-live__queued')!.textContent).toBe(t('chat.live.queued', { n: 2 }));
     const stop = q<HTMLButtonElement>('.th-live__stop')!;
     expect(stop.hidden).toBe(false);

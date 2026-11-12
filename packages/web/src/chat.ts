@@ -25,7 +25,8 @@ import { setSessionViewPref } from './view-pref';
 
 /** Места оболочки. Имя места — и ключ здесь, и `data-slot` в разметке. */
 export interface ChatSlots {
-  /** Полоса состояния агента: что делает, очередь, «Стоп» (`chat-live.ts`). */
+  /** Место над перепиской: плашка непроверенной версии агента (`chat-live.ts`). Состояние
+   *  агента и «Стоп» стоят не здесь, а в строке шапки переписки. */
   status: HTMLElement;
   /** Карточка вопроса или запроса разрешения (`chat-live.ts`). */
   question: HTMLElement;
@@ -131,7 +132,12 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
 
   // Живая часть: смена состояния агента сразу тянет приращение переписки. Агента нет
   // (opencode, оболочка) — запрос живого экрана отвечает отказом, и полосы не видно.
-  const live = mountLive(slots, session, transport, (_state, changed) => {
+  // Состояние с экрана (слово состояния, время, токены, «Стоп») стоит в строке шапки
+  // переписки; пока оно показано, подпись шапки «Агент работает» не дублируется.
+  const live = mountLive({ ...slots, head: feed.stateSlot }, session, transport, (state, changed) => {
+    feed.setStateShown(state !== null);
+    // Пока агент работает, переписка дочитывается раз в секунду.
+    feed.setBusy(state?.screen.kind === 'working');
     if (changed) feed.refresh();
   });
 

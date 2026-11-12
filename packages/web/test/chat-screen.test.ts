@@ -268,7 +268,8 @@ describe('оболочка чата', () => {
     await flush();
     expect(chat.entries().map((e) => e.id)).toEqual(['h', 'a']);
     expect(chat.searchSlot.querySelector('input[type="search"]')).not.toBeNull();
-    expect(host.querySelector('.th-feed__toggle')).not.toBeNull();
+    // Тумблер мышления в чате — кнопка шапки переписки.
+    expect(host.querySelector('.th-feed__head [data-toggle="thinking"]')).not.toBeNull();
     chat.teardown();
     expect(host.childElementCount).toBe(0);
   });

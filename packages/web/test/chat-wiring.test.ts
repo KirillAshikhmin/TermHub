@@ -13,6 +13,8 @@ import type { FeedOptions, Transport } from '../src/transport';
 vi.mock('../src/term', () => ({ mountTerminal: () => ({ focus() {}, teardown() {} }) }));
 
 let current: LiveResult;
+let feedLive = false;
+let feedGate: Promise<void> | null = null;
 const feedCalls: FeedOptions[] = [];
 const transport = {
   mode: 'lan',
@@ -25,7 +27,8 @@ const transport = {
   act: async () => ({ ok: true, screen: { kind: 'idle' } }),
   feed: async (_s: string, opts: FeedOptions = {}) => {
     feedCalls.push(opts);
-    return { ok: true, agent: 'claude', entries: [], head: 'h', tail: 'tl', bof: true, eof: true, complete: true, live: false, skipped: 0 };
+    if (feedGate) await feedGate;
+    return { ok: true, agent: 'claude', entries: [], head: 'h', tail: 'tl', bof: true, eof: true, complete: true, live: feedLive, skipped: 0 };
   },
 } as unknown as Transport;
 const state = (kind: 'idle' | 'working'): LiveResult => ({
@@ -46,11 +49,12 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('чат: живая часть в оболочке', () => {
-  it('полоса состояния — в слоте status, ряд управления — перед полем ввода; смена состояния просит приращение', async () => {
+  it('состояние — в строке шапки переписки (слот status пуст), ряд управления — перед полем ввода; смена состояния просит приращение', async () => {
     current = state('idle');
     const chat = mountChat(host, 'work', transport);
     await vi.advanceTimersByTimeAsync(10);
-    expect(chat.slots.status.querySelector('.th-live__state')).not.toBeNull();
+    expect(chat.el.querySelector('.th-feed__head .th-live__state')).not.toBeNull();
+    expect(chat.slots.status.childElementCount).toBe(0);
     expect(chat.slots.composer.querySelector('.th-composer')).not.toBeNull();
     expect(chat.slots.composer.previousElementSibling!.classList.contains('th-live__controls')).toBe(true);
     expect(chat.live.state()!.screen.kind).toBe('idle');
@@ -61,6 +65,61 @@ describe('чат: живая часть в оболочке', () => {
     expect(feedCalls.filter((c) => c.after !== undefined).length).toBeGreaterThan(before);
     chat.teardown();
     expect(host.querySelector('.th-live__controls')).toBeNull();
+  });
+});
+
+describe('чат: частота приращения переписки', () => {
+  const increments = (): number => feedCalls.filter((c) => c.after !== undefined).length;
+  afterEach(() => {
+    feedLive = false;
+    feedGate = null;
+  });
+
+  it('агент работает — приращение на каждой секунде; ждёт ввода — на третьей', async () => {
+    feedLive = true;
+    current = state('working');
+    const chat = mountChat(host, 'work', transport);
+    // Два кадра: состояние «работает» устоялось.
+    await vi.advanceTimersByTimeAsync(1500);
+    let before = increments();
+    for (let second = 1; second <= 4; second += 1) {
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(increments()).toBe(before + second);
+    }
+
+    current = state('idle');
+    await vi.advanceTimersByTimeAsync(1500); // смена состояния просит приращение сама
+    before = increments();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(increments() - before).toBeLessThanOrEqual(1);
+    before = increments();
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(increments() - before).toBe(2);
+    chat.teardown();
+  });
+
+  it('запросы не накладываются: пока ответ в пути, следующего не шлём; скрытая вкладка не опрашивается', async () => {
+    feedLive = true;
+    current = state('working');
+    const chat = mountChat(host, 'work', transport);
+    await vi.advanceTimersByTimeAsync(1500);
+    let release = (): void => {};
+    feedGate = new Promise<void>((r) => { release = r; });
+    const before = increments();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(increments() - before).toBe(1);
+    feedGate = null;
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+
+    const view = document.createElement('div');
+    view.className = 'th-ws-view';
+    host.replaceWith(view);
+    view.append(host);
+    const hidden = increments();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(increments()).toBe(hidden);
+    chat.teardown();
   });
 });
 

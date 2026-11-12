@@ -14,11 +14,14 @@ import { noteFailure, noteUnknown, versionNoticeDue } from './chat-health';
 import { t } from './i18n';
 import type { Transport } from './transport';
 import { toast } from './ui';
-import { allTokens, formatTokens, sessionUsage, type UsagePage } from './usage';
+import { allTokens, formatElapsed, formatTokens, sessionUsage, type UsagePage } from './usage';
 
 /** Места оболочки чата, с которыми работает живая часть (поле ввода — не её). */
 export interface LiveHost {
   status: HTMLElement;
+  /** Место в строке шапки переписки: состояние агента, очередь и «Стоп» встают сюда.
+   *  Места нет (живая часть без переписки) — они встают в `status`. */
+  head?: HTMLElement;
   question: HTMLElement;
   terminal: HTMLElement;
   /** Только якорь: ряд управления встаёт перед полем ввода. Содержимое не трогается. */
@@ -64,7 +67,6 @@ function button(cls: string, text: string, onClick: () => void): HTMLButtonEleme
   return b;
 }
 
-/** Секунды работы — «1:05». */
 /** Причина, по которой распознавание не узнало экран (короткая английская строка агента).
  *  Агент старше поля её не шлёт. */
 function whyOf(screen: ScreenState): string | undefined {
@@ -72,9 +74,19 @@ function whyOf(screen: ScreenState): string | undefined {
   return typeof why === 'string' && why.trim() ? why.trim() : undefined;
 }
 
-function clock(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+/** Что показать о работающем или ждущем агенте: слово состояния (то, что рисует сам
+ *  агент, иначе своё), время, токены и число ожидаемых фоновых агентов. Чего экран не дал —
+ *  того в строке нет. */
+function stateText(screen: ScreenState, label: string): string {
+  const parts = [screen.kind === 'working' && screen.status ? screen.status : label];
+  if (screen.kind === 'working') {
+    if (screen.elapsed !== undefined) parts.push(formatElapsed(screen.elapsed));
+    if (screen.tokens !== undefined) parts.push(t('chat.live.tokens', { n: formatTokens(screen.tokens) }));
+  }
+  if (screen.waiting !== undefined && (screen.kind === 'working' || screen.kind === 'idle')) {
+    parts.push(t('chat.live.waiting', { n: screen.waiting }));
+  }
+  return parts.join(' · ');
 }
 
 export function mountLive(host: LiveHost, session: string, transport: Transport, onState?: StateListener): LiveHandle {
@@ -90,7 +102,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   let usage: UsagePage | null = null;
 
   // ── Разметка ─────────────────────────────────────────────────────────
-  const bar = el('div', 'th-live__bar');
+  const bar = el(host.head ? 'span' : 'div', 'th-live__bar');
   bar.hidden = true;
   const dot = el('span', 'th-live__dot');
   const stateEl = el('span', 'th-live__state');
@@ -100,7 +112,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   const stopBtn = button('th-live__stop', t('chat.live.stop'), () => void ui({ kind: 'interrupt' }));
   stopBtn.hidden = true;
   bar.append(dot, stateEl, queuedEl, stopBtn);
-  host.status.append(bar);
+  (host.head ?? host.status).append(bar);
 
   const controls = el('div', 'th-live__controls');
   controls.hidden = true;
@@ -294,8 +306,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
         : kind === 'question' || kind === 'permission' ? t('chat.live.asking')
         : kind === 'menu' ? t('chat.live.menu')
         : t('chat.live.unknown');
-      stateEl.textContent = kind === 'working' && s.screen.elapsed !== undefined ? `${label} · ${clock(s.screen.elapsed)}` : label;
-      stateEl.title = kind === 'working' ? (s.screen.status ?? '') : '';
+      stateEl.textContent = stateText(s.screen, label);
+      stateEl.title = stateEl.textContent;
     }
     const queued = !offline && s?.screen.queued ? s.screen.queued : 0;
     queuedEl.hidden = queued <= 0;
