@@ -216,9 +216,20 @@ async function look(session: string, src: LiveSources): Promise<Ctx | ChatFailur
     if (found.agent === 'opencode') return fail('unknown-format', 'chat is not available for opencode sessions');
     agent = found.agent;
     file = found.files.at(-1);
-  } else if (found.reason === 'no-transcript' && claudeCommand(shot.command)) {
+  } else if (found.reason === 'no-transcript' && found.agent === 'codex') {
     // Агент есть, беседы на диске ещё нет (её не начинали): чат обязан дать написать
-    // первый запрос. Агента называет команда панели — Claude зовёт процесс версией.
+    // первый запрос. Агента называет сам определитель.
+    agent = found.agent;
+  } else if (found.reason === 'no-transcript' && claudeCommand(shot.command)) {
+    // То же, когда определитель агента не назвал: Claude зовёт процесс панели версией.
+    agent = 'claude';
+  } else if (
+    found.reason === 'no-agent' &&
+    claudeCommand(shot.command) &&
+    readScreen(shot.lines, profileOf('claude')).kind !== 'unknown'
+  ) {
+    // Claude до принятия экрана доверия каталогу в реестре сессий ещё не записан: агента
+    // называют команда панели и экран, который читается его профилем.
     agent = 'claude';
   } else {
     return { ok: false, reason: found.reason, detail: found.detail };
@@ -342,6 +353,8 @@ async function run(ctx: Ctx, action: ChatAction): Promise<ActResult> {
       return command(ctx, profile.commands.compact);
     case 'take-input':
       return takeInput(ctx);
+    case 'unqueue':
+      return unqueue(ctx, action);
     default:
       return fail('unsupported', 'unknown action');
   }
@@ -433,9 +446,11 @@ async function checkLists(ctx: Ctx, pasted: string): Promise<boolean | ChatFailu
   let why: string | undefined;
   if (readPicker(seen.lines, ctx.profile)) why = 'the agent shows a completion list at its input line';
   else if (list.length > 0) {
-    const exact = working
-      ? list.length === 1 && `/${list[0]!.name}` === input
-      : `/${readPopupPick(seen.lines, ctx.profile) ?? ''}` === input;
+    // У работающего измерены два списка: единственная строка целиком и несколько строк с
+    // указателем на набранной команде (тёзки длиннее стоят ниже) — клавиша очереди ставит
+    // набранное как есть. У ожидающего клавиша отправки исполняет строку под указателем.
+    const picked = `/${readPopupPick(seen.lines, ctx.profile) ?? ''}` === input;
+    const exact = working ? picked && `/${list[0]!.name}` === input : picked;
     if (!exact) why = 'the agent shows a completion list at its input line and the text is not the command it would run';
   } else if (working && /^\/\S*$/u.test(input)) why = 'the agent is working and does not list this command';
   if (why === undefined) return working;
@@ -482,6 +497,64 @@ async function takeInput(ctx: Ctx): Promise<ActResult> {
   const cleared = await clearInput(ctx);
   if (!cleared) return fail('stale', 'agent input line did not clear');
   return { ok: true, screen: cleared, taken };
+}
+
+/** Возврат сообщения из очереди агента. Клавиша идёт только по экрану, который сам её
+ *  называет (`queueEdit`): очередь с текстами, строка ввода пуста, вопроса в очереди нет.
+ *  После клавиши экран обязан показать текст в строке ввода и очередь, ставшую короче
+ *  ровно на возвращённое, а текст — начинаться так же, как сообщение в очереди: иначе в
+ *  строке не оно (у Claude без очереди та же клавиша достаёт запрос из истории), и клавиш
+ *  больше нет. Затем строка стирается клавишей `clearBusy`. */
+async function unqueue(ctx: Ctx, action: Extract<ChatAction, { kind: 'unqueue' }>): Promise<ActResult> {
+  const { screen, profile } = ctx;
+  const key = profile.keys.unqueue;
+  if (key === undefined || profile.keys.clearBusy === undefined) {
+    return fail('unsupported', 'agent has no key to take a message back from its queue');
+  }
+  if (!atInput(screen)) return fail('stale', 'agent is not at its input line');
+  if (screen.input) return fail('stale', 'agent input line already has text');
+  const queue = screen.queue ?? [];
+  const scope = screen.queueEdit;
+  if (scope === undefined || queue.length === 0) {
+    return fail('stale', 'the agent screen shows no queued message that can be taken back');
+  }
+  if (action.queued !== undefined && action.queued !== queue.length) {
+    return fail('stale', 'the agent queue has changed: it holds a different number of messages');
+  }
+  const left = scope === 'last' ? queue.length - 1 : 0;
+  const wanted = scope === 'last' ? queue[queue.length - 1]! : queue[0]!;
+  await press(ctx, key);
+  const back = await until(ctx, (s) => atInput(s) && !!s.input && (s.queue?.length ?? s.queued ?? 0) === left);
+  if (!back.met) {
+    return fail('stale', 'the queued message did not come back to the agent input line: no more keys were sent');
+  }
+  const input = back.screen.input ?? '';
+  if (!startsAlike(input, wanted.text, profile)) {
+    return fail(
+      'stale',
+      'the text in the agent input line is not the queued message: it is left in the agent input line',
+    );
+  }
+  // Очередь `all` нарисована целиком и без подстановок — её текст точнее строки ввода,
+  // где большая вставка стоит заглушкой. Обрезанное сообщение читается из строки ввода.
+  const whole = scope === 'all' && queue.every((item) => !item.cut);
+  const taken = whole ? queue.map((item) => item.text).join('\n') : input;
+  const swept = back.screen.kind === 'working' && (await sweepInput(ctx, back.screen));
+  if (!swept) {
+    return fail('stale', 'the message was taken back from the queue but is left in the agent input line');
+  }
+  return { ok: true, screen: await peek(ctx), taken };
+}
+
+/** Начинается ли текст строки ввода так же, как сообщение очереди: сравнивается первая
+ *  строка сообщения без пробельных знаков — очередь и строка ввода переносят длинную
+ *  строку в разных местах. Заглушка вставки на месте текста (`pasted` профиля) годится. */
+function startsAlike(input: string, queued: string, profile: AgentProfile): boolean {
+  const first = input.split('\n')[0] ?? '';
+  if (profile.screen.pasted?.test(first) === true) return true;
+  const bare = (text: string): string => text.replace(/\s+/gu, '');
+  const head = bare(queued.split('\n')[0] ?? '');
+  return head !== '' && bare(input).startsWith(head);
 }
 
 /** Команда агента: набрать в пустой строке, убедиться, что набралась она, отправить.

@@ -59,6 +59,15 @@ export interface DialogSign {
   /** Над заголовком обязана стоять строка `chip` (полоса шагов): без неё экран с тем же
    *  подвалом — не этот диалог, а меню агента с похожей подсказкой. */
   strip?: true;
+  /** Над вопросом, под заголовком `under`, бывают строки очереди сообщений
+   *  (`screen.queue.rows`): в шапку вопроса они не входят. */
+  skipQueue?: true;
+  /** Строка под вариантами вопроса с отметками, которая вариантом не является (кнопка
+   *  отправки): стоит левее пояснений и в пояснение последнего варианта не входит. */
+  submitRow?: RegExp;
+  /** Отметка в конце подписи варианта, которым на вопрос уже ответили (серия вопросов,
+   *  возврат на отвеченный): в подпись и в отпечаток не входит — вопрос тот же. */
+  answered?: RegExp;
   /** Клавиша прерывания на этом диалоге его не закрывает, а делает другое (прерывает ход
    *  агента): действие `interrupt` здесь клавишу не шлёт. */
   noInterrupt?: true;
@@ -101,6 +110,26 @@ export interface PendingSign {
   /** После клавиши годится любой изменившийся экран, а не только вопрос: в том же блоке
    *  агент держит и другой отложенный ввод, и что откроется, заранее не известно. */
   anyScreen?: true;
+}
+
+/** Очередь сообщений агента на экране. */
+export interface QueueSign {
+  /** Первая строка сообщения в очереди. */
+  item: RegExp;
+  /** Подпись, над которой стоят сообщения (тогда считаются только строки прямо над ней).
+   *  Между подписью и строкой работы бывает сколько угодно пустых строк: беседа короткая,
+   *  панель высокая. */
+  under?: RegExp;
+  /** Тексты сообщений: `text` — первая строка сообщения (группа 1 — текст), `more` —
+   *  следующая его строка (группа 1 — текст), `cut` — строка «дальше не показано», `flat` —
+   *  первая строка сообщения нарисована одним цветом (реплика беседы над очередью
+   *  начинается тем же знаком, но меняет цвет после него). Нет — сообщения только считаются. */
+  rows?: { text: RegExp; more: RegExp; cut?: RegExp; flat?: true };
+  /** Чем агент называет клавишу возврата из очереди (`keys.unqueue`) и что она вернёт:
+   *  `sign` — заглушка пустой строки ввода (`where: 'placeholder'`) либо строка сразу под
+   *  последним сообщением очереди (`where: 'below'`). Без этой подписи на экране клавиша
+   *  не шлётся: в том же блоке Codex держит вопросы, и та же клавиша открывает их. */
+  edit?: { where: 'placeholder' | 'below'; sign: RegExp; scope: 'last' | 'all' };
 }
 
 export interface ScreenSigns {
@@ -150,7 +179,7 @@ export interface ScreenSigns {
   waiting?: RegExp;
   /** Очередь: строка сообщения в очереди; `under` — подпись, над которой эти строки
    *  стоят (тогда считаются только строки прямо над ней). */
-  queue: { item: RegExp; under?: RegExp };
+  queue: QueueSign;
   /** Строки над заголовком вопроса, которые в заголовок не входят (вкладки, счётчик). */
   chip: RegExp;
   /** Полоса шагов в строке `chip` («←  ☒ Название  ☐ Название  ✔ Submit  →»): `item` —
@@ -170,6 +199,8 @@ export interface ScreenSigns {
   picker?: RegExp;
   /** Конец текста, на котором агент открывает список упоминаний. */
   mention?: RegExp;
+  /** Заглушка большой вставки в строке ввода («[Pasted text #1 +4 lines]») — вся строка. */
+  pasted?: RegExp;
   /** Как подвал называет режим: группа 1 — название, каким его рисует агент. Нужен, чтобы
    *  назвать режим, которого в `modes` нет. */
   modeLine?: RegExp;
@@ -197,6 +228,11 @@ export interface AgentProfile {
     /** Стереть текущую строку ввода у работающего агента, не трогая его работу; строк
      *  несколько — нажатие повторяется. Нет — безопасного способа у агента не измерено. */
     clearBusy?: string;
+    /** Вернуть сообщение из очереди в строку ввода (`screen.queue.edit` говорит, какое).
+     *  ТОЛЬКО при пустой строке ввода: Codex заменяет набранное возвращённым сообщением,
+     *  Claude приписывает очередь перед набранным. Без очереди та же клавиша у Claude —
+     *  история запросов. */
+    unqueue?: string;
     /** Показать ожидающий вопрос (`screen.pending`). Нет — агент такого не рисует. */
     showPending?: string;
     /** Ответить на вопрос из очереди отложенного ввода (`screen.pending` с блоком). */
@@ -239,6 +275,12 @@ const CLAUDE: AgentProfile = {
     modeCycle: '\x1b[Z',
     newline: '\x1b\r',
     clearInput: ['\x1b', '\x1b'],
+    // Ctrl+U: стирает строку ввода (у многострочного текста — по строке и по переносу за
+    // нажатие), работу не прерывает; на ожидании ввода стирает так же (замер 12.11.2026).
+    clearBusy: '\x15',
+    // Стрелка вверх — так её называет заглушка строки ввода: «Press up to edit queued
+    // messages». Возвращает в строку всю очередь разом, по сообщению на строку.
+    unqueue: '\x1b[A',
     // Стрелка вправо измерена (переход к подтверждению ответов); влево — по стрелке «←»
     // самой полосы и подсказке «Tab/Arrow keys to navigate», живьём не измерена.
     stepNext: '\x1b[C',
@@ -349,7 +391,12 @@ const CLAUDE: AgentProfile = {
     // кроме тех, с которых начинаются реплики и вывод инструментов.
     status: /^[^\s\p{L}\p{N}⏺❯⎿●]\s(\S.*?…)(?:\s+\((.+)\))?$/u,
     waiting: /^[^\s\p{L}\p{N}⏺❯⎿●]\sWaiting for (\d+) background agents? to finish$/u,
-    queue: { item: /^❯\s/, under: /^\s+ctrl\+x ctrl\+s to send now$/ },
+    queue: {
+      item: /^❯\s/,
+      under: /^\s+ctrl\+x ctrl\+s to send now$/,
+      rows: { text: /^❯[ \u00a0](.*)$/, more: /^\s{2}(.*)$/, flat: true },
+      edit: { where: 'placeholder', sign: /^Press up to edit queued messages$/, scope: 'all' },
+    },
     chip: /^[←\s]*[☐☒✔]\s/,
     steps: { item: /([☐☒✔])\s+(\S(?:.*?\S)?)(?=\s+[☐☒✔→]|\s*$)/gu, done: '☒', submit: '✔' },
     free: /^Type something\.?$/,
@@ -362,6 +409,8 @@ const CLAUDE: AgentProfile = {
         below: 'description',
         freeBeforeRule: true,
         strip: true,
+        submitRow: /^\s+Submit$/,
+        answered: /\s✔$/,
       },
       // Заголовок измерен один — «Do you want to create hello.txt?»; под тем же подвалом
       // Claude спрашивает и другое (подтверждение плана), и это не запрос разрешения.
@@ -373,9 +422,12 @@ const CLAUDE: AgentProfile = {
       { id: 'model', sign: /^Select model$/, footer: /^Enter to set as default\b/ },
       { id: 'model-confirm', sign: /^Switch model\?$/ },
       { id: 'rewind', sign: /^Rewind$/, footer: /^Enter to continue · Esc to cancel$/ },
+      // Окно справки (/help): вкладки в первой строке окна, внизу одна подсказка.
+      { id: 'help', sign: /^Help\s+General\s+Commands\s+Custom commands$/, footer: /^Esc to cancel$/ },
     ],
     popup: /^\s{2}[❯ ]\s\/(\S+)(?:\s{2,}(\S.*))?$/,
     popupMore: /^\s{12,}(\S.*)$/,
+    pasted: /^\[Pasted text #\d+ \+\d+ lines\]$/,
     // «⏵⏵ accept edits on (shift+tab to cycle)», «⏸ plan mode on (shift+tab to cycle)».
     modeLine: /(\p{L}[\p{L} ]*? on) \(shift\+tab to cycle\)/u,
   },
@@ -400,6 +452,9 @@ const CODEX: AgentProfile = {
     // Ctrl+U: стирает строку ввода, на пустой ничего не делает, работу не прерывает (замер).
     clearBusy: '\x15',
     // Ctrl+/ — так его называет сам подвал: «main needs input · ⌃/ to switch».
+    // Shift+← — так его называет блок очереди: «⇧← edit last queued message». Возвращает
+    // в строку последнее сообщение, прочие остаются в очереди (замер 12.11.2026).
+    unqueue: '\x1b[1;2D',
     showPending: '\x1f',
     // Shift+← (CSI 1;2 D) — так его называет блок очереди: «⇧← to answer».
     answerPending: '\x1b[1;2D',
@@ -513,8 +568,14 @@ const CODEX: AgentProfile = {
     talk: /^[›•]\s/,
     // За скобкой бывает приписка: «· 1 background terminal running · /ps to view · …».
     // Пока ход ждёт фоновую команду, строка работы зовётся иначе, скобка та же.
-    status: /^(?:\S\s)?(Working|Waiting for background terminal)\s*\((.+?)\s•\sesc to interrupt\)(?:\s·\s.*)?$/,
-    queue: { item: /^\s+↳\s/ },
+    // Сжатие контекста (/compact) — третье название с той же скобкой.
+    status: /^(?:\S\s)?(Working|Waiting for background terminal|Compacting context)\s*\((.+?)\s•\sesc to interrupt\)(?:\s·\s.*)?$/,
+    queue: {
+      item: /^\s+↳\s/,
+      // Сообщение рисуется не больше чем тремя строками, дальше — строка «…».
+      rows: { text: /^\s{2}↳ (.*)$/, more: /^\s{4}(.*)$/, cut: /^\s{4}…$/ },
+      edit: { where: 'below', sign: /^\s{4}⇧← edit last queued message$/, scope: 'last' },
+    },
     // «Question 1/1 (1 unanswered)» у вопроса, «Field 1/1» у запроса на инструмент MCP.
     chip: /^(?:Question|Field) \d+\/\d+\b/,
     free: /^$/,
@@ -538,7 +599,12 @@ const CODEX: AgentProfile = {
       // вариантов отвечает сама. В подвале — переходы между вопросами очереди.
       {
         kind: 'question',
-        footer: /^enter submit\s{3}⌃\] skip\s{3}⇧→ (?:main prompt|prev question)(?:\s{3}⇧← next question)?$/,
+        // Измерены пункты «⇧→ main prompt», «⇧→ prev question», «⇧← next question» и
+        // «⇧← queued messages» (в очереди есть ещё сообщения). Вопрос узнают два первых
+        // пункта; что стоит за ними через три пробела, его неузнанным не делает.
+        footer: /^enter submit\s{3}⌃\] skip(?:\s{3}\S(?:.*\S)?)?$/,
+        // Сообщения очереди стоят между заголовком блока и вопросом — в вопрос не входят.
+        skipQueue: true,
         under: /^• Queued follow-up inputs$/,
         counter: /^(\d+) of (\d+)$/,
         below: 'label',
@@ -549,7 +615,8 @@ const CODEX: AgentProfile = {
       },
       {
         kind: 'permission',
-        footer: /^Press enter to confirm or esc to cancel$/,
+        // Вид диалога называет начало подсказки; что агент допишет за ней, его не меняет.
+        footer: /^Press enter to confirm or esc to cancel(?:\s.*)?$/,
         title: /^Would you like to\b/,
         below: 'label',
       },
@@ -559,7 +626,7 @@ const CODEX: AgentProfile = {
       // признак не входит — в узкой панели заголовок переносится.
       {
         kind: 'permission',
-        footer: /^enter to submit \| esc to cancel$/,
+        footer: /^enter to submit \| esc to cancel(?:\s.*)?$/,
         title: /^Allow \S.* to (?:run|use)\b/,
         below: 'label',
         // Цифра варианта отвечает сама (замер на 0.167.2), как и в прочих диалогах.

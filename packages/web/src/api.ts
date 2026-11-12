@@ -355,8 +355,12 @@ export const api = {
   /** Экран агента в панели. Отказ — телом `ok:false` при HTTP 200, как у ленты. */
   live: (session: string) => request<LiveResult>('GET', `/api/live?session=${encodeURIComponent(session)}`),
   act: (session: string, action: ChatAction) => request<ActResult>('POST', '/api/act', { body: { session, action } }),
-  commands: (session: string) =>
-    request<CommandsResult>('GET', `/api/commands?session=${encodeURIComponent(session)}`),
+  /** Список команд. `verify` — просьба сверить его с экраном агента: сверка нажимает клавиши
+   *  в панели, поэтому идёт запросом POST (его Origin проверяет агент), а чтение — GET. */
+  commands: (session: string, opts: { verify?: boolean } = {}) =>
+    opts.verify === true
+      ? request<CommandsResult>('POST', '/api/commands', { body: { session, verify: true } })
+      : request<CommandsResult>('GET', `/api/commands?session=${encodeURIComponent(session)}`),
   caffeinate: () => request<CaffeinateState>('GET', '/api/caffeinate'),
   setCaffeinate: (active: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { active } }),
   setLidAwake: (lid: boolean) => request<CaffeinateState>('POST', '/api/caffeinate', { body: { lid } }),

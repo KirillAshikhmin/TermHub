@@ -1177,8 +1177,11 @@ export class RelayTransport implements Transport {
     return this.chatCall<ActResult>(FrameType.Act, 'act', { session, action }, ACT_TIMEOUT_MS);
   }
 
-  commands(session: string): Promise<CommandsResult> {
-    return this.chatCall<CommandsResult>(FrameType.Commands, 'commands', { session });
+  commands(session: string, opts: { verify?: boolean } = {}): Promise<CommandsResult> {
+    // Сверка листает список агента клавишами (до 12 с) — срок у неё тот же, что у действия.
+    return opts.verify === true
+      ? this.chatCall<CommandsResult>(FrameType.Commands, 'commands', { session, verify: true }, ACT_TIMEOUT_MS)
+      : this.chatCall<CommandsResult>(FrameType.Commands, 'commands', { session });
   }
 
   gradle<T = unknown>(action: string, params: Record<string, unknown>): Promise<T> {

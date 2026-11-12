@@ -13,6 +13,7 @@ import { buildSessionName, runStatus, startRun, stopRun } from '../src/gradle.js
 import { runGradleAction } from '../src/gradle-action.js';
 import { SessionService } from '../src/sessions.js';
 import type { GradleRunState } from '@termhub/protocol';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux. Пропускать шов нельзя: без tmux продукт не работает, и молча
  *  снятый шов оставил бы прогон зелёным на непроверенном запуске сборки. */
@@ -86,7 +87,7 @@ describe('gradle — запуск в tmux (изолированный сокет
 
   afterAll(() => {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       // сервер мог не подниматься — не ошибка
     }
@@ -364,7 +365,7 @@ describe('gradle — запуск в tmux (изолированный сокет
       expect(tmux(['list-sessions', '-F', '#{session_name}'], otherSocket)).toContain(buildName);
     } finally {
       try {
-        tmux(['kill-server'], otherSocket);
+        killTmuxServer(otherSocket);
       } catch {
         // сервер мог не подниматься — не ошибка
       }

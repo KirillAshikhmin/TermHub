@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { open } from '../src/session-link.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 // Живой шов: единственный тест, который видит НАСТОЯЩЕЕ начало потока `tmux -CC`.
 // Синтетические байты в session-link.test.ts подделывают приветствие без обёртки iTerm2,
@@ -53,7 +54,7 @@ describe.skipIf(!tmuxAvailable).each(['live', 'sprut.app'])('SessionLink — н�
 
   afterAll(() => {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       // сервер мог уже не работать
     }

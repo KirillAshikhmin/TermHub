@@ -1,0 +1,50 @@
+
+
+[38;5;246m[48;5;237m❯ [38;5;231mReply with exactly: queued-ok[39m
+
+[38;5;231m[49m⏺[39m queued-ok
+
+[38;5;246m✻[39m [38;5;246mCooked for 47s · done 22:03[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mReply with exactly: over-ok[39m
+[49m
+[38;5;231m⏺[39m over-ok
+
+[38;5;246m✻[39m [38;5;246mBrewed for 0s · done 22:03[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mUse the AskUserQuestion tool to ask me one single-choice question: which fruit do I prefer, with options Apple, Banana, Cherry. After I answer, reply with just my answer.[39m
+[49m
+[38;5;246m⏺ [39mUser answered Claude's questions:
+[38;5;246m  ⎿  · Какой фрукт вы предпочитаете? → Banana[39m
+
+[38;5;231m⏺[39m Banana
+
+[38;5;246m✻[39m [38;5;246mBrewed for 1s · done 22:04[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mAsk the same fruit question again with AskUserQuestion (same three options). After I answer, reply with just my answer.[39m
+
+[38;5;246m[49m⏺ [39mUser answered Claude's questions:
+[38;5;246m  ⎿  · Какой фрукт вы предпочитаете? → Груша 🍐 pear[39m
+
+[38;5;231m⏺[39m Груша 🍐 pear
+
+[38;5;246m✻[39m [38;5;246mCogitated for 2s · done 22:04[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mUse AskUserQuestion once with one multi-select question (multiSelect true): which colors do I like, options Red, Green, Blue. After I answer, reply with just my selection.[39m
+[38;5;246m[49m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+← [38;5;16m[48;5;153m ☐ Цвета [39m[49m ✔ Submit  →
+
+[1m[38;5;231mКакие цвета вам нравятся?[0m
+
+[38;5;153m❯[39m [38;5;246m1.[39m [ ] [38;5;153mRed[39m
+         [38;5;246mКрасный[39m
+  [38;5;246m2.[39m [ ] Green
+         [38;5;246mЗеленый[39m
+  [38;5;246m3.[39m [ ] Blue
+         [38;5;246mСиний[39m
+  [38;5;246m4. [39m[ ] [38;5;246mType something[39m
+     [1mSubmit[0m
+[38;5;246m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  5. Chat about this
+
+[38;5;246mEnter to select · ↑/↓ to navigate · Esc to cancel[39m

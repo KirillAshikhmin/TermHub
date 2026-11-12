@@ -89,6 +89,10 @@ export function parseAction(value: unknown): ChatAction | null {
     case 'model':
       // Модель выбирают в меню самого агента: имя здесь ничего не решает.
       return { kind: 'model', to: typeof raw.to === 'string' ? raw.to : '' };
+    case 'unqueue':
+      if (raw.queued === undefined) return { kind: 'unqueue' };
+      if (typeof raw.queued !== 'number' || !Number.isInteger(raw.queued) || raw.queued < 0) return null;
+      return { kind: 'unqueue', queued: raw.queued };
     case 'interrupt':
     case 'compact':
     case 'take-input':

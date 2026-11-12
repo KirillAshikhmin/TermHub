@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { capturePane, pasteText, sendKeys } from '../src/pane-io.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 let tmuxAvailable = false;
 try {
@@ -72,7 +73,7 @@ describe.skipIf(!tmuxAvailable)('pane-io — экран и ввод на нас�
 
   afterAll(() => {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       /* сервер уже завершён */
     }

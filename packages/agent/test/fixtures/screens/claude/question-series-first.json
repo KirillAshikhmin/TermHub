@@ -1,0 +1,11 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 200,
+  "rows": 50,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "anonymized": true,
+  "note": "Live probe capture (isolated tmux socket, claude --model haiku); only the directory is replaced. First question of a series of two, before any answer."
+}

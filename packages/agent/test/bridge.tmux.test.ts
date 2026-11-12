@@ -11,6 +11,7 @@ import { SessionService } from '../src/sessions.js';
 import { wireTerminalWs } from '../src/bridge.js';
 import { hashPassword } from '../src/config.js';
 import type { TermhubConfig } from '../src/config.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux (иначе describe пропускается). */
 let tmuxAvailable = false;
@@ -82,7 +83,7 @@ describe.skipIf(!tmuxAvailable).each(['bridge', 'sprut.app', '$1', 'проект
   afterAll(async () => {
     await server.close();
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       // сервер мог уже не работать
     }
@@ -162,7 +163,7 @@ describe.skipIf(!tmuxAvailable)('TerminalBridge — зритель владел�
   afterAll(async () => {
     await server.close();
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       // сервер мог уже не работать
     }

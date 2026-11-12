@@ -89,6 +89,10 @@ export interface TranscriptFailure {
   reason: FailureReason;
   /** Человекочитаемая причина: уходит в лог и на экран следующего этапа. */
   detail: string;
+  /** Только при `no-transcript`: чей это агент, когда определитель узнал его по процессу
+   *  панели (клиент Codex до первого сообщения беседы). Чату этого хватает, чтобы читать
+   *  экран и принять первый запрос. */
+  agent?: AgentKind;
 }
 
 export type TranscriptResult = TranscriptChain | TranscriptFailure;
@@ -189,6 +193,8 @@ const SNAPSHOT_TTL_MS = 1000;
  *  чаще — срок по-прежнему его накрывает; станет реже срока — кэш перестанет помогать
  *  вовсе, и поднимать надо будет не это число наугад, а срок до периода опроса. */
 const CODEX_CACHE_TTL_MS = 5000;
+/** Сколько помнится «Codex есть, беседы ещё нет»: файл появляется с первым сообщением. */
+const CODEX_FRESH_TTL_MS = 1500;
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
@@ -1014,8 +1020,19 @@ async function tryCodex(pane: string, snap: Snapshot, src: TranscriptSources): P
   if (hit && hit.key === key && hit.until > Date.now()) return hit.value;
   // Название потока в заголовке панели — самая точная привязка: при общем демоне Codex ни
   // открытые файлы, ни рабочий каталог панели друг от друга не отличают.
-  const value = (await codexByTitle(pane, pid, processes, src)) ?? (await codexThread(pid, processes, src));
-  codexCache.set(pane, { key, until: Date.now() + CODEX_CACHE_TTL_MS, value });
+  let value = (await codexByTitle(pane, pid, processes, src)) ?? (await codexThread(pid, processes, src));
+  let ttl = CODEX_CACHE_TTL_MS;
+  // Клиент Codex в панели есть, а файла беседы нет ни у него, ни у демона: беседу ещё не
+  // начинали — rollout появляется с первым сообщением. Это не «агента нет»: чат обязан
+  // дать написать первый запрос. Помнится недолго — файл вот-вот появится.
+  if (value === undefined && descendants(pid, processes).some((id) => isCodexTui(processes.get(id)?.args ?? ''))) {
+    value = {
+      ...fail('no-transcript', `Codex в панели ${pane} беседу ещё не начинал: файла беседы на диске нет`),
+      agent: 'codex',
+    };
+    ttl = CODEX_FRESH_TTL_MS;
+  }
+  codexCache.set(pane, { key, until: Date.now() + ttl, value });
   return value;
 }
 

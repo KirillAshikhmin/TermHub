@@ -6,6 +6,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { runTmux, isNoServerError } from '../src/tmux-run.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Отказ tmux в том виде, в каком его отдаёт execFile: код выхода и stderr. */
 function failure(stderr: string, code: unknown = 1): Error {
@@ -60,7 +61,7 @@ describe.skipIf(!tmuxAvailable)('runTmux — реальный tmux (изолир
 
   afterAll(() => {
     try {
-      execFileSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore' });
+      killTmuxServer(socketName);
     } catch {
       // сервер мог не подниматься — не ошибка
     }

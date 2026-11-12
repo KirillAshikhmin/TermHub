@@ -48,6 +48,8 @@ interface Fx {
   feedTail: { value: FeedResult | Error };
   live: { refresh: ReturnType<typeof vi.fn> };
   transport: Record<string, ReturnType<typeof vi.fn>>;
+  /** Сообщить подписчикам живого состояния, что экран сменился. */
+  emit(): void;
 }
 
 const human = (id: string, text: string): FeedEntry => ({ id, at: 0, kind: 'human', text });
@@ -55,7 +57,16 @@ function page(entries: FeedEntry[]): FeedResult {
   return { ok: true, agent: 'claude', entries, head: '1:0', tail: '1:9', bof: true, eof: true, skipped: 0 } as FeedResult;
 }
 
-function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; session?: string; spaced?: boolean } = {}): Fx {
+function mount(
+  opts: {
+    scope?: unknown;
+    commands?: CommandsResult | Error;
+    /** Ответы на запросы списка команд по порядку (последний повторяется). */
+    commandsSeq?: CommandsResult[];
+    session?: string;
+    spaced?: boolean;
+  } = {},
+): Fx {
   const acts: ChatAction[] = [];
   const keys: Array<string | undefined> = [];
   const locals: LocalRec[] = [];
@@ -64,6 +75,8 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
   const screen = { value: IDLE };
   const shown: Fx['shown'] = { value: [] };
   const feedTail: Fx['feedTail'] = { value: page([]) };
+  const subs: Array<() => void> = [];
+  const commandsByCall = opts.commandsSeq;
   const live = {
     state: () => ({ ok: true, agent: 'claude', tested: true, screen: screen.value, modes: [], models: [] }) as LiveState,
     act: vi.fn(async (a: ChatAction) => {
@@ -75,7 +88,10 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
       return v;
     }),
     refresh: vi.fn(async () => {}),
-    subscribe: () => () => {},
+    subscribe: (fn: () => void) => {
+      subs.push(fn);
+      return () => {};
+    },
     teardown() {},
   } as unknown as LiveHandle;
   const thread = {
@@ -107,6 +123,7 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
       return v;
     }),
     commands: vi.fn(async () => {
+      if (commandsByCall) return commandsByCall.length > 1 ? commandsByCall.shift()! : commandsByCall[0]!;
       const c = opts.commands ?? ({ ok: true, commands: COMMANDS, verified: true } as CommandsResult);
       if (c instanceof Error) throw c;
       return c;
@@ -157,6 +174,9 @@ function mount(opts: { scope?: unknown; commands?: CommandsResult | Error; sessi
     feedTail,
     live: live as unknown as Fx['live'],
     transport: transport as unknown as Fx['transport'],
+    emit: () => {
+      for (const fn of subs) fn();
+    },
   };
 }
 
@@ -847,5 +867,134 @@ describe('гость', () => {
   it('поле строится только для того, у кого есть право write (решает хозяин компонента)', () => {
     fx = mount({ scope: { session: 'work', write: true, files: true } });
     expect(fx.field).not.toBeNull();
+  });
+});
+
+describe('сверка списка команд по первому «/»', () => {
+  it('список при открытии — обычным чтением; несверенный список по первому «/» просят со сверкой, один раз, и подсказки обновляются', async () => {
+    const extra: ChatCommand = { name: 'zeta-from-screen', source: 'screen' };
+    fx = mount({
+      commandsSeq: [
+        { ok: true, commands: COMMANDS, verified: false },
+        { ok: true, commands: [...COMMANDS, extra], verified: true },
+      ],
+    });
+    await flush();
+    expect(fx.transport.commands.mock.calls).toEqual([['work']]);
+    type(fx, '/');
+    await flush();
+    expect(fx.transport.commands.mock.calls).toEqual([['work'], ['work', { verify: true }]]);
+    expect(options(fx).some((row) => row.includes('/zeta-from-screen'))).toBe(true);
+    type(fx, '/z');
+    await flush();
+    expect(fx.transport.commands).toHaveBeenCalledTimes(2);
+  });
+
+  it('сверенный список по «/» заново не просят; текст без «/» сверку не запускает', async () => {
+    fx = mount();
+    await flush();
+    type(fx, 'привет');
+    type(fx, '/');
+    await flush();
+    expect(fx.transport.commands.mock.calls).toEqual([['work']]);
+  });
+});
+
+describe('сообщение в очереди агента: «Изменить» и «Отменить»', () => {
+  const working = (over: Partial<ScreenState> = {}): ScreenState => ({ kind: 'working', input: '', ...over });
+  const labels = (rec: LocalRec): string[] => rec.actions.map((a) => a.label);
+  const queueUp = async (texts: string[]): Promise<void> => {
+    for (const text of texts) {
+      type(fx, text);
+      key(fx, 'Enter');
+      await flush();
+    }
+  };
+
+  it('Codex: кнопки только у последнего сообщения очереди; «Отменить» убирает его и поле не трогает', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['первое', 'второе']);
+    expect(fx.locals.map((l) => l.state)).toEqual(['queued', 'queued']);
+    fx.screen.value = working({ queued: 2, queue: [{ text: 'первое' }, { text: 'второе' }], queueEdit: 'last' });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toEqual([]);
+    expect(labels(fx.locals[1]!)).toEqual([t('chat.composer.queueEdit'), t('chat.composer.queueCancel')]);
+
+    fx.nextAct.value = { ok: true, screen: working({ queued: 1, queue: [{ text: 'первое' }], queueEdit: 'last' }), taken: 'второе' };
+    fx.locals[1]!.actions[1]!.run();
+    await flush();
+    expect(fx.acts.at(-1)).toEqual({ kind: 'unqueue', queued: 2 });
+    expect(fx.locals[1]!.removed).toBe(true);
+    expect(fx.locals[0]!.removed).toBe(false);
+    expect(fx.field.value).toBe('');
+    // Теперь последнее в очереди — первое сообщение: кнопки переехали к нему.
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'первое' }], queueEdit: 'last' });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toHaveLength(2);
+  });
+
+  it('«Изменить» возвращает текст сообщения в поле ввода чата', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['поправь\nвторую строку']);
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'поправь\nвторую строку' }], queueEdit: 'last' });
+    fx.emit();
+    fx.nextAct.value = { ok: true, screen: working(), taken: 'поправь\nвторую строку' };
+    fx.locals[0]!.actions[0]!.run();
+    await flush();
+    expect(fx.acts.at(-1)).toEqual({ kind: 'unqueue', queued: 1 });
+    expect(fx.locals[0]!.removed).toBe(true);
+    expect(fx.field.value).toBe('поправь\nвторую строку');
+  });
+
+  it('Claude возвращает всю очередь разом: кнопки у последнего сообщения называют «все», действие снимает все', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['первое', 'второе']);
+    fx.screen.value = working({ queued: 2, queue: [{ text: 'первое' }, { text: 'второе' }], queueEdit: 'all' });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toEqual([]);
+    expect(labels(fx.locals[1]!)).toEqual([t('chat.composer.queueEditAll'), t('chat.composer.queueCancelAll')]);
+    fx.nextAct.value = { ok: true, screen: working(), taken: 'первое\nвторое' };
+    fx.locals[1]!.actions[0]!.run();
+    await flush();
+    expect(fx.locals.map((l) => l.removed)).toEqual([true, true]);
+    expect(fx.field.value).toBe('первое\nвторое');
+  });
+
+  it('кнопок нет, пока экран агента возврат не называет, и когда в очереди агента не наше сообщение', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['моё']);
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'моё' }] });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toEqual([]);
+    fx.screen.value = working({ queued: 2, queue: [{ text: 'моё' }, { text: 'набрано в терминале' }], queueEdit: 'last' });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toEqual([]);
+    // Обрезанное агентом сообщение сверяется по началу.
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'мо', cut: true }], queueEdit: 'last' });
+    fx.emit();
+    expect(labels(fx.locals[0]!)).toHaveLength(2);
+  });
+
+  it('отказ агента: сообщение остаётся «в очереди», поле не тронуто, причина показана', async () => {
+    fx = mount();
+    fx.screen.value = working();
+    fx.nextAct.value = { ok: true, screen: working() };
+    await queueUp(['моё']);
+    fx.screen.value = working({ queued: 1, queue: [{ text: 'моё' }], queueEdit: 'last' });
+    fx.emit();
+    fx.nextAct.value = { ok: false, reason: 'stale', detail: 'the agent queue has changed' };
+    fx.locals[0]!.actions[1]!.run();
+    await flush();
+    expect(fx.locals[0]).toMatchObject({ removed: false, state: 'queued' });
+    expect(fx.locals[0]!.note).toContain('the agent queue has changed');
+    expect(fx.field.value).toBe('');
   });
 });

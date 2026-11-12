@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SessionService } from '../src/sessions.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux в песочнице (иначе describe пропускается). */
 let tmuxAvailable = false;
@@ -31,7 +32,7 @@ describe.skipIf(!tmuxAvailable)('SessionService — реальный tmux (из�
 
   afterAll(() => {
     try {
-      execFileSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore' });
+      killTmuxServer(socketName);
     } catch {
       // сервер мог не подниматься — не ошибка
     }

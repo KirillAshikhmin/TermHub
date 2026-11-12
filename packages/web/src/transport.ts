@@ -119,7 +119,9 @@ export interface Transport {
    *  Требует права ввода; отказ — значением. */
   act(session: string, action: ChatAction): Promise<ActResult>;
   /** Команды агента сессии для подсказок по «/». */
-  commands(session: string): Promise<CommandsResult>;
+  /** `verify` — сверить список с экраном агента (агент нажимает клавиши в его строке ввода);
+   *  без него — только чтение. */
+  commands(session: string, opts?: { verify?: boolean }): Promise<CommandsResult>;
   /** VAPID public key агента для web-push (оба режима: LAN — REST, relay — E2E). */
   vapidKey(): Promise<string>;
   /** Отправить push-подписку агенту (оба режима). */
@@ -396,8 +398,8 @@ export class LanTransport implements Transport {
     return api.act(session, action);
   }
 
-  commands(session: string): Promise<CommandsResult> {
-    return api.commands(session);
+  commands(session: string, opts?: { verify?: boolean }): Promise<CommandsResult> {
+    return api.commands(session, opts);
   }
 
   vapidKey(): Promise<string> {

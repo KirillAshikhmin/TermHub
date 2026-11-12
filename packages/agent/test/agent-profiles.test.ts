@@ -85,9 +85,16 @@ describe('профиль Codex', () => {
     // работу не трогает (Ctrl+C там — прерывание).
     expect(profile.keys.queue).toBe('\t');
     expect(profile.keys.clearBusy).toBe('\x15');
-    // У Claude отправка работающему — та же клавиша, отдельных нет.
+    // У Claude отправка работающему — та же клавиша; Ctrl+U стирает его строку так же
+    // (замер таска 25 на Claude Code 2.1.322: работа не тронута).
     expect(profileOf('claude').keys.queue).toBeUndefined();
-    expect(profileOf('claude').keys.clearBusy).toBeUndefined();
+    expect(profileOf('claude').keys.clearBusy).toBe('\x15');
+    // Возврат из очереди (замер таска 25): Codex — Shift+← возвращает последнее сообщение,
+    // Claude — стрелка вверх возвращает всю очередь; что вернётся, называет профиль.
+    expect(profile.keys.unqueue).toBe('\x1b[1;2D');
+    expect(profile.screen.queue.edit?.scope).toBe('last');
+    expect(profileOf('claude').keys.unqueue).toBe('\x1b[A');
+    expect(profileOf('claude').screen.queue.edit?.scope).toBe('all');
     const footer = profile.screen.footer!;
     expect(footer.test('  tab to queue message')).toBe(true);
     expect(footer.test('  tab to queue message                               97% context left')).toBe(true);

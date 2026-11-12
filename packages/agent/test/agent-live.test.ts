@@ -1274,3 +1274,182 @@ describe('sessionAct — прерывание, режим, модель, сжа�
     expect(f.sent).toEqual([]);
   });
 });
+
+describe('sessionAct — возврат сообщения из очереди агента (замер 12.11.2026)', () => {
+  const SHIFT_LEFT = '\x1b[1;2D';
+  const UP = '\x1b[A';
+  const CTRL_U = '\x15';
+
+  it('Codex: клавиша возврата, текст последнего сообщения в строке ввода, строка стёрта — ответ несёт текст', async () => {
+    const f = fake('codex', 'queue-edit-two', (sent) =>
+      sent === SHIFT_LEFT ? 'queue-returned' : sent === CTRL_U ? 'queued-followup' : undefined,
+    );
+    const result = await act(f, { kind: 'unqueue', queued: 2 });
+    expect(result).toMatchObject({ ok: true, taken: 'Reply with exactly: beta-two', screen: { kind: 'working', input: '' } });
+    expect(f.sent).toEqual([SHIFT_LEFT, CTRL_U]);
+  });
+
+  it('Claude: стрелка вверх возвращает всю очередь; текст берётся из блока очереди, строка стирается по строке', async () => {
+    let erased = 0;
+    const f = fake('claude', 'queued-two', (sent) => {
+      if (sent === UP) return 'queue-returned';
+      if (sent === CTRL_U) return ++erased >= 3 ? 'working' : undefined;
+      return undefined;
+    });
+    const result = await act(f, { kind: 'unqueue' });
+    expect(result).toMatchObject({
+      ok: true,
+      taken: 'Reply with exactly: alpha-one\nReply with exactly: beta-two',
+      screen: { kind: 'working', input: '' },
+    });
+    expect(f.sent).toEqual([UP, CTRL_U, CTRL_U, CTRL_U]);
+  });
+
+  it('в строке агента уже текст — отказ до клавиш: клавиша возврата заменила бы его', async () => {
+    const f = fake('codex', 'queue-returned');
+    expect(await act(f, { kind: 'unqueue' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([]);
+  });
+
+  it('клиент видел другое число сообщений в очереди — отказ до клавиш', async () => {
+    const f = fake('codex', 'queue-edit-two');
+    const result = await act(f, { kind: 'unqueue', queued: 1 });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/queue has changed/);
+    expect(f.sent).toEqual([]);
+  });
+
+  it('очереди на экране нет, в очереди вопрос, агент ждёт ввода — клавиш нет', async () => {
+    for (const [agent, name] of [
+      ['codex', 'working'],
+      ['codex', 'idle'],
+      ['codex', 'pending-queued'],
+      ['codex', 'queued'],
+      ['claude', 'working'],
+      ['claude', 'idle'],
+    ] as const) {
+      const f = fake(agent, name);
+      expect(await act(f, { kind: 'unqueue' }), name).toMatchObject({ ok: false, reason: 'stale' });
+      expect(f.sent, name).toEqual([]);
+    }
+  });
+
+  it('после клавиши текст в строке не появился — отказ, клавиш больше нет', async () => {
+    const f = fake('codex', 'queue-edit-two');
+    const result = await act(f, { kind: 'unqueue' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/did not come back/);
+    expect(f.sent).toEqual([SHIFT_LEFT]);
+  });
+
+  it('в строке оказался не тот текст, что стоял в очереди, — отказ, строка не стирается', async () => {
+    const other = shot('codex', 'queue-returned').map((line) => line.replace('exactly: beta-two', 'something else'));
+    const f = fake('codex', 'queue-edit-two', (sent) => (sent === SHIFT_LEFT ? other : undefined));
+    const result = await act(f, { kind: 'unqueue' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/not the queued message.*left in the agent input line/);
+    expect(f.sent).toEqual([SHIFT_LEFT]);
+  });
+
+  it('строка не стёрлась — отказ называет, что сообщение осталось в строке агента', async () => {
+    const f = fake('codex', 'queue-edit-two', (sent) => (sent === SHIFT_LEFT ? 'queue-returned' : undefined));
+    const result = await act(f, { kind: 'unqueue' });
+    expect(result).toMatchObject({ ok: false, reason: 'stale' });
+    expect(!result.ok && result.detail).toMatch(/left in the agent input line/);
+    expect(f.sent[0]).toBe(SHIFT_LEFT);
+    expect(f.sent.slice(1).every((key) => key === CTRL_U)).toBe(true);
+  });
+
+  it('длинное сообщение, показанное в очереди не целиком, сверяется по началу и возвращается целиком', async () => {
+    let erased = 0;
+    const f = fake('codex', 'queue-cut', (sent) => {
+      if (sent === SHIFT_LEFT) return 'queue-returned-long';
+      if (sent === CTRL_U) return ++erased >= 11 ? 'working' : undefined;
+      return undefined;
+    });
+    const result = await act(f, { kind: 'unqueue', queued: 1 });
+    expect(result.ok && result.taken?.split('\n')).toEqual([
+      'Reply with exactly: epsilon and then this sentence is deliberately long so that it does not fit into one hundred and',
+      'twenty columns of the pane at all, okay',
+      'line two',
+      'line three',
+      'line four',
+      'line five',
+    ]);
+  });
+});
+
+describe('живая проверка 12.11.2026: действия', () => {
+  it('Codex до первого сообщения беседы: состояние читается, первый запрос уходит', async () => {
+    const found: TranscriptResult = { ok: false, reason: 'no-transcript', detail: 'беседы ещё нет', agent: 'codex' };
+    const f = fake('codex', 'fresh', (sent) => (sent.startsWith('paste:') ? 'input' : sent === '\r' ? 'working' : undefined), {
+      found,
+      command: 'codex',
+      version: async () => ({}),
+    });
+    expect(await sessionLive('work', f.src)).toMatchObject({
+      ok: true,
+      agent: 'codex',
+      screen: { kind: 'idle', input: '' },
+    });
+    expect(await act(f, { kind: 'prompt', text: 'hello draft text' })).toMatchObject({ ok: true });
+    expect(f.sent).toEqual(['paste:hello draft text', '\r']);
+  });
+
+  it('Claude на экране доверия каталогу: агента называет команда панели, экран — известное меню', async () => {
+    const found: TranscriptResult = { ok: false, reason: 'no-agent', detail: 'агента нет' };
+    const f = fake('claude', 'menu-trust-live', undefined, { found, command: '2.1.322' });
+    expect(await sessionLive('work', f.src)).toMatchObject({ ok: true, agent: 'claude', screen: { kind: 'menu', menu: 'trust' } });
+    // Та же команда панели, но экран не Claude: отказ определителя остаётся как есть.
+    const shell = fake('claude', 'shell', undefined, { found, command: '2.1.322' });
+    expect(await sessionLive('work', shell.src)).toEqual(found);
+  });
+
+  it('Codex работает, в списке под указателем ровно набранная команда, хотя есть тёзка длиннее — команда встаёт в очередь', async () => {
+    const f = fake('codex', 'queued-followup', (sent) =>
+      sent === 'paste:/status' ? 'queue-slash-namesake' : sent === '\t' ? 'queue-edit-two' : undefined,
+    );
+    expect(await act(f, { kind: 'prompt', text: '/status' })).toMatchObject({ ok: true, screen: { kind: 'working', input: '' } });
+    expect(f.sent).toEqual(['paste:/status', '\t']);
+  });
+});
+
+describe('вопрос очереди Codex при непустой очереди сообщений (G46)', () => {
+  it('кнопка «Вопрос агента» открывает вопрос, ответ кнопкой — цифра варианта, Shift+← на вопросе не нажимается', async () => {
+    const f = fake('codex', 'pending-queued-message', (sent) =>
+      sent === '\x1b[1;2D' ? 'pending-queued-opened-messages' : sent === '2' ? 'queued-followup' : undefined,
+    );
+    const shown = screenOf(await act(f, { kind: 'show-question' }));
+    expect(shown).toMatchObject({ kind: 'question', question: { title: 'Red or blue?' } });
+    expect(screenOf(await act(f, { kind: 'answer', stamp: shown.question!.stamp, option: '2' })).kind).toBe('working');
+    expect(f.sent).toEqual(['\x1b[1;2D', '2']);
+  });
+
+  it('возврат сообщения из очереди при открытом вопросе и при вопросе в блоке клавиш не шлёт', async () => {
+    for (const name of ['pending-queued-opened-messages', 'pending-queued-message']) {
+      const f = fake('codex', name);
+      expect(await act(f, { kind: 'unqueue' }), name).toMatchObject({ ok: false, reason: 'stale' });
+      expect(f.sent, name).toEqual([]);
+    }
+  });
+});
+
+describe('отправка ждущему Codex со строкой состояния пользователя (живой отказ G47)', () => {
+  it('после вставки под строкой состояния остаётся одно правое уведомление — текст подтверждён, Enter уходит', async () => {
+    const idle = shot('codex', 'statusline-idle');
+    const flat = idle.map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    const input = flat.findIndex((l) => l === '› Ask Codex to do anything');
+    const typed = [
+      ...idle.slice(0, input),
+      '› Действуй',
+      ...idle.slice(input + 1, input + 3),
+      `${' '.repeat(150)}⚠ 3 warnings · f2 to view`,
+      '',
+    ];
+    const f = fake('codex', 'statusline-idle', (sent) =>
+      sent.startsWith('paste:') ? typed : sent === '\r' ? 'statusline-working' : undefined,
+    );
+    expect(await act(f, { kind: 'prompt', text: 'Действуй' })).toMatchObject({ ok: true, screen: { kind: 'working' } });
+    expect(f.sent).toEqual(['paste:Действуй', '\r']);
+  });
+});

@@ -56,3 +56,13 @@ describe('parseAction — ключ идемпотентности', () => {
     expect(parseAction({ kind: 'mode', to: 'plan', key: 'k-1' })).toEqual({ kind: 'mode', to: 'plan' });
   });
 });
+
+describe('parseAction — «вернуть из очереди»', () => {
+  it('действие разбирается: число сообщений — целое неотрицательное, лишние поля отброшены', () => {
+    expect(parseAction({ kind: 'unqueue' })).toEqual({ kind: 'unqueue' });
+    expect(parseAction({ kind: 'unqueue', queued: 2, key: '\x1b[A' })).toEqual({ kind: 'unqueue', queued: 2 });
+    expect(parseAction({ kind: 'unqueue', queued: '2' })).toBeNull();
+    expect(parseAction({ kind: 'unqueue', queued: -1 })).toBeNull();
+    expect(parseAction({ kind: 'unqueue', queued: 1.5 })).toBeNull();
+  });
+});

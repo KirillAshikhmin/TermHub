@@ -70,6 +70,7 @@ import {
   withId,
 } from './chat-fixture.js';
 import type { AuthorizedDevice } from '../src/config.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux (иначе happy-LIST пропускается). */
 let tmuxAvailable = false;
@@ -240,7 +241,7 @@ afterAll(async () => {
   await relayHandle.close();
   if (tmuxAvailable) {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       /* сервер мог уже не работать */
     }
@@ -1837,6 +1838,11 @@ describe('RelayLink — лента сессии через relay', () => {
     expect(refused?.type).toBe(FrameType.ActResult);
     expect(td.decode(refused!.payload)).toBe(withId(2, CHAT_FORBIDDEN_WRITE_JSON));
     expect(acted).toEqual([]);
+
+    // Возврат сообщения из очереди — то же право ввода.
+    c.send(jsonFrame(FrameType.Act, 0, { id: 3, session: OWN_SESSION, action: { kind: 'unqueue', queued: 1 } }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(3, CHAT_FORBIDDEN_WRITE_JSON));
+    expect(acted).toEqual([]);
   }, 25000);
 
   it('гость с write отвечает на вопрос в своей сессии', async () => {
@@ -1844,6 +1850,10 @@ describe('RelayLink — лента сессии через relay', () => {
     c.send(jsonFrame(FrameType.Act, 0, { id: 3, session: OWN_SESSION, action: ACT_ACTION }));
     expect(td.decode((await c.next())!.payload)).toBe(withId(3, ACT_DONE_JSON));
     expect(acted).toEqual([{ session: OWN_SESSION, action: ACT_ACTION }]);
+
+    c.send(jsonFrame(FrameType.Act, 0, { id: 4, session: OWN_SESSION, action: { kind: 'unqueue', queued: 1 } }));
+    expect(td.decode((await c.next())!.payload)).toBe(withId(4, ACT_DONE_JSON));
+    expect(acted.at(-1)).toEqual({ session: OWN_SESSION, action: { kind: 'unqueue', queued: 1 } });
   }, 25000);
 
   it('гость с полными правами: чужая и сборочная сессии — forbidden на оба кадра, экран не читается', async () => {

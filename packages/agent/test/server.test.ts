@@ -43,6 +43,7 @@ import {
   LIVE_STATE_JSON,
 } from './chat-fixture.js';
 import type { SessionInfo } from '@termhub/protocol';
+import { killTmuxServer } from './tmux-socket.js';
 
 const SECRET = 'test-cookie-secret';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1021,7 +1022,7 @@ describe.skipIf(!tmuxAvailable)('AgentServer — реальный SessionService
   afterAll(async () => {
     await started.server.close();
     try {
-      execFileSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore' });
+      killTmuxServer(socketName);
     } catch {
       // сервер мог не подниматься
     }
@@ -1166,7 +1167,7 @@ describe.skipIf(!tmuxAvailable)('POST /api/gradle — запуск в подпа
   afterAll(async () => {
     await started.server.close();
     try {
-      execFileSync('tmux', ['-L', socketName, 'kill-server'], { stdio: 'ignore' });
+      killTmuxServer(socketName);
     } catch {
       // сервер мог не подниматься
     }

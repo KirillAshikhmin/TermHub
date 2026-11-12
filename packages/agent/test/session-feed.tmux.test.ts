@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sessionFeed, type SessionFeedSources } from '../src/session-feed.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux. Пропускать шов нельзя: без tmux панели не найти вовсе, и молча
  *  снятый шов вернул бы прогон в то же состояние, в котором находку и не заметили. */
@@ -90,7 +91,7 @@ describe('sessionFeed — активная панель на настоящем 
 
   afterAll(() => {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       // сервер мог не подниматься — не ошибка
     }

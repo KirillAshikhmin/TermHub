@@ -28,10 +28,11 @@ beforeEach(() => {
 });
 
 describe('переписка в чате', () => {
-  it('реплика человека прижата вправо и не шире 85%, ответ агента — без фона и рамки', () => {
+  it('реплика человека — плашка с фоном у левого края, не шире 85%; ответ агента — без фона и рамки', () => {
     const human = el('div', 'th-feed__entry th-feed__entry--human', chat);
     const agent = el('div', 'th-feed__entry th-feed__entry--agent', chat);
-    expect(getComputedStyle(human).alignSelf).toBe('flex-end');
+    expect(getComputedStyle(human).alignSelf).toBe('flex-start');
+    expect(getComputedStyle(human).backgroundColor).not.toMatch(/transparent|rgba\(0, 0, 0, 0\)/);
     expect(getComputedStyle(human).maxWidth).toBe('85%');
     expect(getComputedStyle(agent).backgroundColor).toMatch(/transparent|rgba\(0, 0, 0, 0\)/);
     expect(getComputedStyle(agent).borderTopStyle).toBe('none');
@@ -147,7 +148,17 @@ describe('переписка по ширине и параметры вида', 
     return root;
   };
 
-  it('колонка переписки не ограничена по ширине и не центрируется; плашка человека остаётся справа', () => {
+  it('локальные записи — тоже слева: «отправляется», «в очереди», «отправлено», строка команды', () => {
+    for (const state of ['sending', 'queued', 'sent', 'failed']) {
+      const local = el('div', 'th-feed__entry th-feed__entry--human th-feed__entry--local', chat);
+      local.dataset.state = state;
+      expect(getComputedStyle(local).alignSelf, state).toBe('flex-start');
+    }
+    const command = el('div', 'th-feed__entry th-feed__entry--human th-feed__entry--local is-command', chat);
+    command.dataset.state = 'command';
+    expect(getComputedStyle(command).alignSelf).toBe('flex-start');
+  });
+  it('колонка переписки не ограничена по ширине и не центрируется; плашка человека стоит слева', () => {
     area();
     for (const cls of ['th-feed__items', 'th-feed__local-list']) {
       const col = el('div', cls, chat);
@@ -156,7 +167,7 @@ describe('переписка по ширине и параметры вида', 
       expect(getComputedStyle(col).marginRight, cls).not.toBe('auto');
     }
     const human = el('div', 'th-feed__entry th-feed__entry--human', chat);
-    expect(getComputedStyle(human).alignSelf).toBe('flex-end');
+    expect(getComputedStyle(human).alignSelf).toBe('flex-start');
   });
 
   it('размер, семейство и интервал берутся из переменных области чата', () => {

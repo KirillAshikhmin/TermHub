@@ -34,6 +34,7 @@ import { loadAuthorized, saveAuthorized } from '../src/config.js';
 import { loadClientStore, type ClientStore } from '../src/client-store.js';
 import { runPair, type RunPairOpts } from '../src/pair-cmd.js';
 import { connectAgent } from '../src/connect-cmd.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux — иначе весь сценарий пропускается (нужен реальный pty). */
 let tmuxAvailable = false;
@@ -140,7 +141,7 @@ describe.skipIf(!tmuxAvailable)('E2E: агент ↔ relay ↔ клиент (п�
   afterAll(async () => {
     if (link) await link.stop();
     if (relayHandle) await relayHandle.close();
-    if (tmuxAvailable) tmux(['kill-server']);
+    if (tmuxAvailable) killTmuxServer(socketName);
     if (root) fs.rmSync(root, { recursive: true, force: true });
     if (termhubDir) fs.rmSync(termhubDir, { recursive: true, force: true });
     delete process.env.TERMHUB_DIR;

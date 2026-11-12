@@ -208,7 +208,11 @@ describe('sessionCommands — каталоги на диске', () => {
     const sim = new Sim([]);
     const res = await listVerified(
       'work',
-      sim.sources({ resolve: async () => ({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' }) }),
+      sim.sources({
+        resolve: async () => ({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' }),
+        // Команда панели — оболочка: по экрану и номеру версии агента узнают только Claude.
+        capture: async () => ({ lines: sim.lines(), alt: false, cols: 100, rows: 32, pane: PANE, command: 'zsh' }),
+      }),
     );
     expect(res).toEqual({ ok: false, reason: 'no-agent', detail: 'pane runs zsh' });
     expect(sim.sent).toEqual([]);
@@ -305,19 +309,28 @@ describe('sessionCommands — сверка с экраном агента', () =
     expect(sim.sent).toHaveLength(before);
   });
 
-  it('срок 5 с: по часам, а не по числу нажатий', async () => {
+  it('список Codex в 67 строк при 85 мс на нажатие (замер живой проверки: 5,8 с) укладывается в срок', async () => {
+    const sim = new Sim(Array.from({ length: 67 }, (_, i) => `cmd-${i}`));
+    let clock = 0;
+    const res = await listVerified('work', sim.sources({ now: () => (clock += 85) }));
+    if (!res.ok) throw new Error(res.detail);
+    expect(res.verified).toBe(true);
+    expect(sim.input).toBe('');
+  });
+
+  it('срок 12 с: по часам, а не по числу нажатий', async () => {
     const sim = new Sim(Array.from({ length: 250 }, (_, i) => `cmd-${i}`));
     let clock = 0;
     const res = await listVerified(
       'work',
       sim.sources({
-        // Каждый вызов часов — 100 мс: за 5 секунд успевает меньше сотни нажатий.
+        // Каждый вызов часов — 100 мс: за 12 секунд успевает немногим больше сотни нажатий.
         now: () => (clock += 100),
       }),
     );
     if (!res.ok) throw new Error(res.detail);
     expect(res.verified).toBe(false);
-    expect(sim.sent.filter((k) => k === DOWN).length).toBeLessThan(100);
+    expect(sim.sent.filter((k) => k === DOWN).length).toBeLessThan(130);
     expect(sim.input).toBe('');
   });
 

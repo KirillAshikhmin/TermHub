@@ -23,6 +23,7 @@ import { loadClientStore, type ClientStore } from '../src/client-store.js';
 import { runPair } from '../src/pair-cmd.js';
 import { connectAgent } from '../src/connect-cmd.js';
 import { runDevices, runRevoke } from '../src/devices-cmd.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 /** Доступен ли tmux (иначе connect-happy пропускается). */
 let tmuxAvailable = false;
@@ -139,7 +140,7 @@ afterAll(async () => {
   await relayHandle.close();
   if (tmuxAvailable) {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       /* сервер мог уже не работать */
     }

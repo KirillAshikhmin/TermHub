@@ -1,0 +1,11 @@
+{
+  "agent": "claude",
+  "version": "2.1.322",
+  "cols": 120,
+  "rows": 40,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "anonymized": true,
+  "note": "Live probe capture (isolated tmux socket, claude --model haiku); only the directory is replaced. Up pressed with two queued messages: both are back in the input line, one per line; the queue is empty."
+}

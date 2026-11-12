@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { open } from '../src/session-link.js';
+import { killTmuxServer } from './tmux-socket.js';
 
 // Мост живёт на настоящем tmux: утечку дескрипторов видно только на живом
 // клиенте, а не на фейке. Сокет изолированный (-L termhub-test-<uniq>),
@@ -37,7 +38,7 @@ describe.skipIf(!tmuxAvailable)('pty: дескрипторы возвращаю�
 
   afterAll(() => {
     try {
-      tmux(['kill-server']);
+      killTmuxServer(socketName);
     } catch {
       // сервер мог уже умереть — teardown идемпотентен
     }

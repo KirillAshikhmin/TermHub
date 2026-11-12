@@ -62,6 +62,15 @@ describe('чат по LAN', () => {
     });
   });
 
+  it('commands со сверкой: POST /api/commands {session, verify: true}', async () => {
+    const calls = stubFetch({ ok: true, commands: [], verified: true });
+    await new LanTransport().commands('my work', { verify: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('/api/commands');
+    expect(calls[0]!.init?.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ session: 'my work', verify: true });
+  });
+
   it('commands: GET /api/commands?session=', async () => {
     const calls = stubFetch({ ok: true, commands: [], verified: false });
     await new LanTransport().commands('work');
@@ -110,6 +119,25 @@ describe('чат через relay', () => {
     const refusal = { ok: false, reason: 'stale', detail: 'screen changed' };
     ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.ActResult, 0, { id: req.id, ...refusal })));
     await expect(p).resolves.toEqual(refusal);
+  });
+
+  it('commands со сверкой: кадр Commands {id, session, verify: true}; обычное чтение поля verify не несёт', async () => {
+    const { transport, ws, agentEnc, agentDec, firstEncrypted } = streaming();
+    const p = transport.commands('work', { verify: true });
+    const sent = decodeFrame(agentDec.pull(ws.sent[firstEncrypted] as Uint8Array));
+    expect(sent.type).toBe(FrameType.Commands);
+    const req = frameJson<{ id: number; session: string; verify?: boolean }>(sent);
+    expect(req).toEqual({ id: req.id, session: 'work', verify: true });
+    const body = { ok: true, commands: [], verified: true };
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CommandsResult, 0, { id: req.id, ...body })));
+    await expect(p).resolves.toEqual(body);
+
+    const plainCall = transport.commands('work');
+    const next = decodeFrame(agentDec.pull(ws.sent[firstEncrypted + 1] as Uint8Array));
+    const plainReq = frameJson<{ id: number; session: string }>(next);
+    expect(plainReq).toEqual({ id: plainReq.id, session: 'work' });
+    ws.deliverBinary(agentEnc.push(jsonFrame(FrameType.CommandsResult, 0, { id: plainReq.id, ...body })));
+    await plainCall;
   });
 
   it('commands: кадр Commands', async () => {

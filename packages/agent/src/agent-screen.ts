@@ -14,13 +14,14 @@ import { questionStamp } from '@termhub/protocol/chat';
 import type {
   BackgroundAgent,
   ChatCommand,
+  QueuedMessage,
   ScreenOption,
   ScreenQuestion,
   ScreenState,
   ScreenStep,
 } from '@termhub/protocol/chat';
 
-import type { AgentProfile, DialogSign, PendingSign } from './agent-profiles.js';
+import type { AgentProfile, DialogSign, PendingSign, QueueSign } from './agent-profiles.js';
 
 /** Строка экрана без оформления; `dim` — номера знаков, нарисованных тусклым, `lit` —
  *  нарисованных с фоном (так агент выделяет текущий шаг полосы над вопросом). */
@@ -28,6 +29,9 @@ interface Row {
   text: string;
   dim: Set<number>;
   lit: Set<number>;
+  /** Сколько раз в строке задан цвет текста: реплику беседы от сообщения очереди у Claude
+   *  отличает только смена цвета после знака. У строки без оформления — ноль. */
+  inks: number;
 }
 
 /** Строка ввода агента и то, что вокруг неё. */
@@ -41,6 +45,8 @@ interface Box {
   footer: string;
   /** Пункты строки состояния из подвала (`statusLine` профиля). */
   items: string[];
+  /** Строки подвала по одной. */
+  lines: string[];
 }
 
 /** Сколько строк над вариантами может занимать шапка диалога (команда, правка). */
@@ -49,6 +55,10 @@ const HEAD_LIMIT = 60;
 const EXTRA_LIMIT = 8;
 /** Как далеко над строкой ввода ищутся строка работы и очередь. */
 const STATUS_REACH = 12;
+/** Сколько строк под рамкой ввода `ruled` считается её подвалом, самое большее. */
+const FOOTER_REACH = 8;
+/** Сколько строк занимает блок очереди над строкой ввода, самое большее. */
+const QUEUE_REACH = 60;
 /** В каком хвосте экрана ищется заголовок меню. */
 const MENU_REACH = 40;
 
@@ -61,6 +71,7 @@ function strip(line: string): Row {
   const lit = new Set<number>();
   let faint = false;
   let back = false;
+  let inks = 0;
   let i = 0;
   while (i < line.length) {
     if (line.charCodeAt(i) === 0x1b) {
@@ -70,6 +81,7 @@ function strip(line: string): Row {
         if (found[2] === 'm') {
           faint = nextFaint(found[1] ?? '', faint);
           back = nextBack(found[1] ?? '', back);
+          if (setsInk(found[1] ?? '')) inks++;
         }
         i = ESCAPE.lastIndex;
         continue;
@@ -80,7 +92,20 @@ function strip(line: string): Row {
     text += line[i];
     i++;
   }
-  return { text: text.replace(/\s+$/u, ''), dim, lit };
+  return { text: text.replace(/\s+$/u, ''), dim, lit, inks };
+}
+
+/** Задаёт ли SGR-последовательность цвет текста: 30–37, 90–97 и `38;…`; сброс (39, 0) —
+ *  нет. Числа внутри цвета кодами не считаются. */
+function setsInk(params: string): boolean {
+  const parts = params.split(';');
+  for (let i = 0; i < parts.length; i++) {
+    const code = parts[i] === '' ? 0 : Number(parts[i]);
+    if (code === 38) return true;
+    if (code === 48 || code === 58) i += parts[i + 1] === '5' ? 2 : parts[i + 1] === '2' ? 4 : 0;
+    else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) return true;
+  }
+  return false;
 }
 
 /** Есть ли фон после SGR-последовательности: 40–47, 100–107 и `48;…` ставят его, 49 и 0
@@ -294,11 +319,13 @@ const TRAY_TAIL =
   /^(?=\S)(?:(?:\d+h\s*)?(?:\d+m\s*)?\d+s)?(?:\s*·\s*)?(?:[↓↑]\s*\d+(?:\.\d+)?[kKmM]?\s+tokens)?$/u;
 
 /** Счётчики фоновой работы из подвала: пункт, целиком совпавший с признаком профиля. */
-function backgroundOf(footer: string, profile: AgentProfile): { shells?: number; agentCount?: number } {
+function backgroundOf(box: Box, profile: AgentProfile): { shells?: number; agentCount?: number } {
   const signs = profile.screen.background;
   if (!signs) return {};
   const out: { shells?: number; agentCount?: number } = {};
-  for (const item of footer.split(signs.sep)) {
+  // Пункты читаются и из подвала целиком (пункт перенесён на две строки), и построчно
+  // (за пунктом стоит незнакомая строка).
+  for (const item of [box.footer, ...box.lines].flatMap((text) => text.split(signs.sep))) {
     const shells = signs.shells.exec(item.trim());
     if (shells) out.shells = Number(shells[1]);
     const agents = signs.agents.exec(item.trim());
@@ -446,11 +473,19 @@ function readDialog(
       if (extra.length > EXTRA_LIMIT) return null;
       continue;
     }
-    let label = line.label;
+    let label = dialog.answered ? line.label.replace(dialog.answered, '') : line.label;
     const about = line.hint ? [line.hint] : [];
     // Строки под вариантом собраны снизу вверх — разворачиваем. Всё, что не перенос
     // подписи, — пояснение варианта.
     for (const more of extra.reverse()) {
+      // Кнопка отправки вопроса с отметками стоит под последним вариантом, левее пояснений.
+      if (
+        line.checked !== undefined &&
+        dialog.submitRow?.test(more.text) === true &&
+        indentOf(more.text) < line.column
+      ) {
+        continue;
+      }
       if (dialog.below === 'label' && indentOf(more.text) === line.column) {
         label += ` ${more.text.trim()}`;
       } else about.push(more.text.trim());
@@ -574,6 +609,11 @@ function readHead(
       close();
       continue;
     }
+    // Сообщение очереди над вопросом: его первая строка и собранные под ней продолжения.
+    if (dialog.skipQueue === true && signs.queue.rows?.text.test(text) === true) {
+      current = [];
+      continue;
+    }
     seen = true;
     const counted = place === undefined ? dialog.counter?.exec(text.trim()) : undefined;
     if (counted) {
@@ -613,13 +653,16 @@ function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string
     rows.some((row) => signs.talk.test(row.text)) ? 'no input frame' : 'no agent on screen';
 
   if (signs.box === 'ruled') {
-    // Подвал под нижней линейкой: до трёх строк (режим и подсказки переносятся).
+    // Агента у строки ввода узнаёт сама рамка: две линейки и знак ввода между ними. Что
+    // стоит под нижней линейкой — подвал: он читается, а не сверяется, и незнакомая строка
+    // в нём экран неузнанным не делает. Предел высоты подвала — чтобы рамкой не стала
+    // пара линеек из переписки далеко над низом экрана.
     let bottom = last;
-    while (bottom >= 0 && last - bottom <= 3 && !signs.rule.test(rows[bottom]!.text)) bottom--;
+    while (bottom >= 0 && last - bottom <= FOOTER_REACH && !signs.rule.test(rows[bottom]!.text)) bottom--;
     if (bottom >= 1 && signs.rule.test(rows[bottom]!.text)) {
       return ruledBox(rows, bottom, last, profile) ?? 'input frame malformed';
     }
-    // Рамка есть, но выше: под её подвалом стоит то, чего профиль не знает.
+    // Рамка есть, но выше: под её подвалом слишком много того, чего профиль не знает.
     for (let i = bottom; i >= 1; i--) {
       if (signs.rule.test(rows[i]!.text) && ruledBox(rows, i, i, profile)) {
         return 'content below footer';
@@ -628,22 +671,24 @@ function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string
     return missing();
   }
 
+  // `open`: строка ввода — последний на экране блок, начатый знаком ввода с начала строки;
+  // под ним пустая строка и подвал — непрерывные строки с отступом до конца экрана. Подвал
+  // читается, а не сверяется: строку состояния собирает пользователь, а строка подсказок
+  // под ней бывает пустой, с подсказками или с одним уведомлением справа.
   const strange = (): string =>
     rows.some((row) => signs.talk.test(row.text)) ? 'footer not recognized' : 'no agent on screen';
-  if (!signs.footer?.test(rows[last]!.text)) return strange();
-  // Подвал — до `footerLines` строк с отступом; над ним обязана быть пустая строка.
+  const reach = (signs.footerLines ?? 1) + 1;
   let head = last;
-  while (
-    last - head + 1 < (signs.footerLines ?? 1) &&
-    !blank(rows[head - 1]) &&
-    rows[head - 1]!.text.startsWith('  ')
-  ) {
-    head--;
-  }
-  const block = rows.slice(head, last + 1).map((row) => row.text);
+  while (head >= 0 && last - head < reach && !blank(rows[head]) && rows[head]!.text.startsWith('  ')) head--;
+  // Низ экрана без отступа — не подвал: переписка, оболочка, диалог.
+  if (head === last) return strange();
+  // Над подвалом обязана быть пустая строка: иначе он выше предела или приклеен к тексту.
+  if (head < 0 || !blank(rows[head])) return 'no input frame';
+  const block = rows.slice(head + 1, last + 1).map((row) => row.text);
+  // Подсказки меню выглядят как подвал, а указатель списка — как знак ввода.
   if (block.some((text) => signs.notFooter?.test(text))) return strange();
-  const end = lastFilled(rows, head - 1);
-  if (end < 0 || end === head - 1) return 'no input frame';
+  const end = lastFilled(rows, head);
+  if (end < 0) return 'no input frame';
   let first = end;
   while (first >= 0 && !startsInput(rows[first]!.text, signs.prompt)) {
     const text = rows[first]!.text;
@@ -651,8 +696,13 @@ function findBox(rows: Row[], last: number, profile: AgentProfile): Box | string
     first--;
   }
   if (first < 0) return 'no input frame';
+  // Варианты под указателем («› 1. …», «  2. …») — список меню, а не набранный текст.
+  const pointed = optionOf(rows[first]!.text, profile);
+  if (pointed?.key === '1' && first < end && optionOf(rows[first + 1]!.text, profile)?.key === '2') {
+    return 'dialog not recognized';
+  }
   const footer = block.join('  ');
-  return { top: first, first, last: end, footer, items: itemsOf(footer, profile) };
+  return { top: first, first, last: end, footer, items: itemsOf(footer, profile), lines: block.map((text) => text.trim()) };
 }
 
 function itemsOf(footer: string, profile: AgentProfile): string[] {
@@ -680,11 +730,9 @@ function ruledBox(rows: Row[], bottom: number, last: number, profile: AgentProfi
     const text = rows[i]!.text;
     if (text !== '' && !text.startsWith('  ')) return null;
   }
-  const footer = rows
-    .slice(bottom + 1, last + 1)
-    .map((row) => row.text.trim())
-    .join(' ');
-  return { top, first: top + 1, last: bottom - 1, footer, items: itemsOf(footer, profile) };
+  const lines = rows.slice(bottom + 1, last + 1).map((row) => row.text.trim());
+  const footer = lines.join(' ');
+  return { top, first: top + 1, last: bottom - 1, footer, items: itemsOf(footer, profile), lines };
 }
 
 /** Приглашение «вопрос ждёт»: признак в подвале либо блок прямо над строкой ввода —
@@ -735,12 +783,14 @@ function readBox(
   let fresh = signs.waiting !== undefined;
   let queued = 0;
   let under = -1;
+  let statusAt = -1;
   const reach = Math.max(0, box.top - STATUS_REACH);
   for (let i = box.top - 1; i >= reach; i--) {
     const text = rows[i]!.text;
     if (status === undefined) {
       const found = signs.status.exec(text);
       if (found) {
+        statusAt = i;
         status = found[1]!;
         elapsed = secondsOf(found[2]);
         tokens = tokensOf(found[2]);
@@ -760,13 +810,49 @@ function readBox(
       if (signs.queue.under.test(text)) under = i;
     } else if (signs.queue.item.test(text)) queued++;
   }
+  // Беседа короткая, панель высокая — блок очереди стоит далеко над строкой работы:
+  // подпись очереди тогда первая непустая строка над ней.
+  if (under < 0 && signs.queue.under && statusAt >= 0) {
+    const far = lastFilled(rows, statusAt - 1);
+    if (far >= 0 && signs.queue.under.test(rows[far]!.text)) under = far;
+  }
+  let queue: QueuedMessage[] | undefined;
+  /** Последняя строка блока очереди — под ней ищется подпись клавиши возврата. */
+  let queueEnd = -1;
   if (under >= 0) {
-    for (let i = under - 1; i >= 0; i--) {
-      const text = rows[i]!.text;
-      if (signs.queue.item.test(text)) queued++;
-      else if (text === '' || !text.startsWith('  ')) break;
+    // Сообщения стоят над подписью, между ними — по пустой строке; у сообщения из
+    // нескольких строк знак только в первой.
+    let top = under;
+    let i = under - 1;
+    while (i >= 0) {
+      let first = i;
+      while (
+        first >= 0 &&
+        !signs.queue.item.test(rows[first]!.text) &&
+        rows[first]!.text !== '' &&
+        rows[first]!.text.startsWith('  ')
+      ) {
+        first--;
+      }
+      if (first < 0 || !signs.queue.item.test(rows[first]!.text)) break;
+      // Реплика беседы над очередью начинается тем же знаком, но меняет цвет после него.
+      if (signs.queue.rows?.flat === true && rows[first]!.inks > 1) break;
+      queued++;
+      top = first;
+      i = blank(rows[first - 1]) ? first - 2 : first - 1;
+    }
+    queue = queueTexts(rows, top, under - 1, signs.queue);
+  } else if (!signs.queue.under && queued > 0) {
+    // Блок прямо над строкой ввода: строки с отступом вверх до заголовка без отступа.
+    const end = lastFilled(rows, box.top - 1);
+    let top = end + 1;
+    while (top - 1 >= 0 && end - top < QUEUE_REACH && /^\s{2}\S|^\s{4}/u.test(rows[top - 1]!.text)) top--;
+    if (top <= end && top >= 1 && !blank(rows[top - 1]) && !/^\s/u.test(rows[top - 1]!.text)) {
+      queue = queueTexts(rows, top, end, signs.queue);
+      queueEnd = end;
     }
   }
+  if (queue) queued = Math.max(queued, queue.length);
 
   // Состояние из строки состояния: строки работы над вводом может не быть на экране.
   const state = signs.statusLine;
@@ -780,6 +866,17 @@ function readBox(
   const mode = modeOf(box.footer, profile, model !== undefined || busy !== undefined || ready);
   const invite = pendingOf(rows, box, profile);
   if (invite) seen.invite = invite;
+  // Клавишу возврата из очереди называет сам экран; годится она только при пустой строке
+  // ввода и только когда в очереди нет вопроса — ему та же клавиша отвечает.
+  const edit = signs.queue.edit;
+  let queueEdit: 'last' | 'all' | undefined;
+  if (edit && queue && queue.length > 0 && input === '' && !invite) {
+    const named =
+      edit.where === 'placeholder'
+        ? placeholder && edit.sign.test(head.text.slice(start).trim())
+        : queueEnd >= 0 && edit.sign.test(rows[queueEnd]!.text);
+    if (named) queueEdit = edit.scope;
+  }
   return {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),
@@ -789,10 +886,48 @@ function readBox(
     ...(mode === undefined ? {} : { mode }),
     input,
     ...(queued > 0 ? { queued } : {}),
+    ...(queue && queue.length > 0 ? { queue } : {}),
+    ...(queueEdit === undefined ? {} : { queueEdit }),
     ...(model === undefined ? {} : { model }),
-    ...backgroundOf(box.footer, profile),
+    ...backgroundOf(box, profile),
     ...(invite ? { pending: true } : {}),
   };
+}
+
+/** Тексты сообщений очереди в строках `from…to`, сверху вниз. Строка, которая не сообщение
+ *  и не его продолжение, сообщение закрывает: её собственные продолжения ничьи. Профиль
+ *  тексты не описывает — `undefined`. */
+function queueTexts(rows: Row[], from: number, to: number, sign: QueueSign): QueuedMessage[] | undefined {
+  const shape = sign.rows;
+  if (!shape) return undefined;
+  const out: QueuedMessage[] = [];
+  let open: { lines: string[]; cut: boolean } | undefined;
+  const close = (): void => {
+    if (open) out.push({ text: open.lines.join('\n'), ...(open.cut ? { cut: true } : {}) });
+    open = undefined;
+  };
+  for (let i = from; i <= to; i++) {
+    const text = rows[i]!.text;
+    const first = shape.text.exec(text);
+    if (first) {
+      close();
+      open = { lines: [first[1]!], cut: false };
+      continue;
+    }
+    if (open && shape.cut?.test(text)) {
+      open.cut = true;
+      continue;
+    }
+    if (open && sign.edit?.where === 'below' && sign.edit.sign.test(text)) {
+      close();
+      continue;
+    }
+    const more = open && !open.cut ? shape.more.exec(text) : null;
+    if (more) open!.lines.push(more[1]!);
+    else close();
+  }
+  close();
+  return out;
 }
 
 /** «6s · ↓ 179 tokens», «1m 05s» → секунды; времени нет — `undefined`. */

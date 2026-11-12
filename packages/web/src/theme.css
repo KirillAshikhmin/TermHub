@@ -5183,12 +5183,13 @@ main.th-feed--chat {
   gap: 14px;
   width: 100%;
 }
-/* Реплика человека — плашка справа, ширина по тексту, но не шире 85%. */
+/* Реплика человека — плашка с фоном у левого края, как ответы агента: читаем слева
+   направо, и короткую реплику у правого края не видно. Ширина по тексту, не шире 85%. */
 .th-feed--chat .th-feed__entry--human {
-  align-self: flex-end;
+  align-self: flex-start;
   max-width: 85%;
   padding: 9px 13px;
-  border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
+  border-radius: var(--r-lg) var(--r-lg) var(--r-lg) var(--r-sm);
   background: var(--accent-tint);
   border: none;
 }
@@ -5761,7 +5762,7 @@ main.th-feed--chat {
 }
 /* Отправленная слэш-команда: приглушённая строка без плашки сообщения. */
 .th-feed--chat .th-feed__entry--local.is-command {
-  align-self: flex-end;
+  align-self: flex-start;
   max-width: 100%;
   padding: 0;
   border: 0;

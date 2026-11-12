@@ -434,6 +434,24 @@ describe('resolve: панель Codex', () => {
     expect(res).toMatchObject({ ok: true, agent: 'codex', files: [ROOT_FILE] });
   });
 
+  it('Codex до первого сообщения беседы: клиент в панели есть, файла беседы нет — «беседы ещё нет» с названным агентом', async () => {
+    // Замер 12.11.2026 на 0.167.2: процесс панели — `codex -c …`, открыты только базы
+    // состояния, rollout появляется с первым сообщением.
+    const fresh = sources({
+      panePids: async () => new Map([[PANE, 900]]),
+      processTable: async () => [
+        { ...row(900, localStart()), args: 'codex -c tui.animations=false --no-alt-screen' },
+        { ...row(901, localStart(), 900), args: 'node /opt/bin/mcp-server' },
+      ],
+      openFiles: async () => ['/home/u/.codex/state_5.sqlite'],
+    });
+    expect(await resolve(PANE, fresh)).toMatchObject({ ok: false, reason: 'no-transcript', agent: 'codex' });
+    clearCache();
+    // Оболочка без Codex — по-прежнему «агента нет».
+    const shell = sources({ panePids: async () => new Map([[PANE, 900]]), processTable: async () => [{ ...row(900, localStart()), args: '-zsh' }] });
+    expect(await resolve(PANE, shell)).toMatchObject({ ok: false, reason: 'no-agent' });
+  });
+
   it('daemon не подставляет журнал другого каталога или другого TUI', async () => {
     const meta = JSON.parse(ROOT_META.split('\n')[0]);
     meta.payload.cwd = '/other';
@@ -448,7 +466,8 @@ describe('resolve: панель Codex', () => {
       openFiles: async (pids) => pids.includes(902) ? [ROOT_FILE] : [],
       readHead: async () => JSON.stringify(meta),
     });
-    expect(await resolve(PANE, base)).toMatchObject({ ok: false, reason: 'no-agent' });
+    // Клиент Codex в панели есть, своей беседы у него нет: «беседы ещё нет», а не чужой журнал.
+    expect(await resolve(PANE, base)).toMatchObject({ ok: false, reason: 'no-transcript', agent: 'codex' });
     clearCache();
     meta.payload.cwd = '/project';
     const processes = await base.processTable!();

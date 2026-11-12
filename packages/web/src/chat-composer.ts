@@ -399,6 +399,108 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   const restoreToField = (text: string): void => setField(field.value ? `${text}\n${field.value}` : text);
   const failText = (res: Extract<ActResult, { ok: false }>): string => res.detail || res.reason;
 
+  // ── Очередь агента: «Изменить» и «Отменить» ─────────────────────────
+  // Сообщения, принятые работающим агентом в очередь, в порядке отправки. Кнопки стоят
+  // только там, куда дотягивается клавиша возврата самого агента (`screen.queueEdit`):
+  // `last` — у последнего сообщения очереди, `all` — у последнего, и действуют на всю
+  // очередь. Очередь агента обязана совпасть с нашими сообщениями — иначе клавиша вернула
+  // бы чужое (набранное в терминале, с другого устройства), и кнопок нет.
+  interface Queued {
+    msg: LocalMessage;
+    text: string;
+    /** Что сейчас нарисовано у сообщения — чтобы не перерисовывать на каждый опрос экрана. */
+    shown: string;
+    /** Экран агента хоть раз показал очередь, в которую это сообщение входит. */
+    seen?: boolean;
+    note?: string;
+  }
+  const inQueue: Queued[] = [];
+  const bare = (text: string): string => text.replace(/\s+/gu, '');
+  /** Наше ли сообщение стоит в очереди агента: обрезанное агентом сверяется по началу. */
+  const sameQueued = (drawn: { text: string; cut?: boolean }, text: string): boolean =>
+    drawn.cut ? bare(text).startsWith(bare(drawn.text)) : bare(text) === bare(drawn.text);
+  const syncQueue = (): void => {
+    if (disposed) return;
+    const screen = live.state()?.screen;
+    // Экран со строкой ввода называет очередь; на прочих (вопрос, меню) её не видно.
+    if (!screen || (screen.kind !== 'idle' && screen.kind !== 'working')) return;
+    const drawn = screen.queue ?? [];
+    // Агент забрал сообщение из очереди — оно уже запрос, а не очередь: пометка «в очереди»
+    // снимается, даже если записи о нём в беседе не будет (агент пишет его не всегда).
+    // Сообщение, которого экран в очереди ещё не показывал, ждёт: экран мог отстать.
+    const count = Math.max(screen.queued ?? 0, drawn.length);
+    if (count >= inQueue.length) for (const item of inQueue) item.seen = true;
+    while (inQueue.length > count && (inQueue[0]!.seen === true || screen.kind === 'idle')) {
+      inQueue.shift()!.msg.set('sent', { delivered: true });
+    }
+    const scope = screen.queueEdit;
+    const last = inQueue[inQueue.length - 1];
+    const reachable =
+      scope === 'last'
+        ? !!last && drawn.length > 0 && sameQueued(drawn[drawn.length - 1]!, last.text)
+        : scope === 'all'
+          ? drawn.length === inQueue.length && inQueue.every((item, i) => sameQueued(drawn[i]!, item.text))
+          : false;
+    for (const item of inQueue) {
+      const mine = reachable && item === last;
+      const all = mine && scope === 'all' && inQueue.length > 1;
+      const key = `${mine ? (all ? 'all' : 'one') : ''}\u0000${item.note ?? ''}`;
+      if (key === item.shown) continue;
+      item.shown = key;
+      item.msg.set('queued', {
+        delivered: true,
+        ...(item.note ? { note: item.note } : {}),
+        actions: mine
+          ? [
+              { label: t(all ? 'chat.composer.queueEditAll' : 'chat.composer.queueEdit'), run: () => void unqueue(true) },
+              { label: t(all ? 'chat.composer.queueCancelAll' : 'chat.composer.queueCancel'), run: () => void unqueue(false) },
+            ]
+          : [],
+      });
+    }
+  };
+  /** Вернуть сообщение из очереди агента: `keep` — текст встаёт в поле ввода («Изменить»),
+   *  иначе сообщение просто снято («Отменить»). Строка агента в обоих случаях остаётся пустой. */
+  const unqueue = async (keep: boolean): Promise<void> => {
+    if (sending || disposed) return;
+    const screen = live.state()?.screen;
+    const scope = screen?.queueEdit;
+    const last = inQueue[inQueue.length - 1];
+    if (!scope || !last) return;
+    sending = true;
+    syncSend();
+    try {
+      let res: ActResult;
+      try {
+        res = await live.act({ kind: 'unqueue', queued: screen?.queue?.length ?? 0 });
+      } catch {
+        last.note = t('chat.composer.noConnection');
+        return;
+      }
+      if (disposed) return;
+      if (!res.ok) {
+        last.note = t('chat.composer.unqueueFailed', { reason: failText(res) });
+        return;
+      }
+      const gone = scope === 'all' ? inQueue.splice(0) : inQueue.splice(-1);
+      for (const item of gone) item.msg.remove();
+      if (keep) {
+        // Свой текст точнее прочитанного с экрана: там длинная строка перенесена, а большая
+        // вставка стоит заглушкой.
+        restoreToField(gone.map((item) => item.text).join('\n') || (res.taken ?? ''));
+        field.focus();
+      }
+      thread.refresh();
+    } finally {
+      sending = false;
+      if (!disposed) {
+        syncSend();
+        syncQueue();
+      }
+    }
+  };
+  const offQueue = live.subscribe(() => syncQueue());
+
   /** Текст запроса, как его сравнивать с записью беседы: без разницы в пробелах и переносах. */
   const plain = (s: string): string => s.replace(/\s+/gu, ' ').trim();
   const humanIds = (): Set<string> => new Set(thread.entries().filter((e) => e.kind === 'human').map((e) => e.id));
@@ -453,6 +555,10 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     // она становится строкой «команда отправлена» и записи транскрипта не ждёт.
     const delivered = (): void => {
       msg.set(COMMAND_RE.test(text) ? 'command' : state === 'queued' ? 'queued' : 'sent', { delivered: true });
+      if (state === 'queued' && !COMMAND_RE.test(text)) {
+        inQueue.push({ msg, text, shown: '' });
+        syncQueue();
+      }
       thread.refresh();
       window.setTimeout(() => {
         if (!disposed) thread.refresh();
@@ -546,16 +652,21 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
   // ── Подсказки ────────────────────────────────────────────────────────
   let commands: ChatCommand[] = [];
   let commandsOk = false;
+  /** Список сверен с экраном агента: просить сверку незачем. */
+  let commandsVerified = false;
   let commandsRetried = false;
   let commandsLoad: Promise<void> | null = null;
-  const loadCommands = (): Promise<void> => {
+  /** `verify` — просьба сверить список с экраном агента: агент наберёт «/» в своей строке
+   *  ввода и пролистает список. Открытие чата её не шлёт — только первый «/» в поле. */
+  const loadCommands = (verify = false): Promise<void> => {
     if (commandsLoad) return commandsLoad;
     commandsLoad = (async () => {
       try {
-        const res = await transport.commands(session);
+        const res = await (verify ? transport.commands(session, { verify: true }) : transport.commands(session));
         if (res.ok) {
           commands = res.commands;
           commandsOk = true;
+          commandsVerified = res.verified;
         }
       } catch {
         /* подсказок нет, поле работает */
@@ -653,11 +764,17 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     }
     let items: Suggestion[];
     if (at.kind === 'slash') {
-      if (!commandsOk && !commandsRetried) {
-        // Список при открытии не пришёл: просим ещё раз, по первому «/».
+      if (commandsLoad) await commandsLoad;
+      if (!commandsVerified && !commandsRetried) {
+        // Первый «/»: список не пришёл или не сверен — просим его со сверкой, один раз.
+        // Что уже есть, показывается сразу; сверенный список подменит подсказки, когда придёт.
         commandsRetried = true;
-        await loadCommands();
-      } else if (commandsLoad) await commandsLoad;
+        const verified = loadCommands(true);
+        if (!commandsOk) await verified;
+        else void verified.then(() => {
+          if (!disposed && current?.kind === 'slash') void refreshSuggest();
+        });
+      }
       items = rankCommands(commands, at.query)
         .slice(0, MAX_SUGGEST)
         .map((c) => ({
@@ -770,6 +887,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     },
     teardown: () => {
       disposed = true;
+      offQueue();
       vv?.removeEventListener('resize', onViewport);
       vv?.removeEventListener('scroll', onViewport);
       for (const att of attachments) if (att.thumb && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(att.thumb);

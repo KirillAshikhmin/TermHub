@@ -68,6 +68,17 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'input-pasted': 'idle',
     slash: 'idle',
     queued: 'working',
+    // Замер таска 25 и снимки живой проверки.
+    'queued-far': 'working',
+    'queued-two': 'working',
+    'queued-multiline': 'working',
+    'queue-returned': 'working',
+    'queue-returned-pasted': 'working',
+    'menu-help': 'menu',
+    'menu-trust-live': 'menu',
+    'question-multi-submit': 'question',
+    'question-series-first': 'question',
+    'question-series-answered': 'question',
     shell: 'unknown',
     'idle-footer-item': 'idle',
     'agents-working': 'working',
@@ -131,6 +142,18 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'queue-slash-completed': 'working',
     // Строка работы выше списка упоминаний, дальше, чем её ищет разбор: работу называет подвал.
     'queue-mention-list': 'working',
+    // Замер таска 25: до первого сообщения беседы, очередь с текстами и возврат из неё.
+    fresh: 'idle',
+    'queue-edit-two': 'working',
+    'queue-returned': 'working',
+    'queue-multiline': 'working',
+    'queue-cut': 'working',
+    'queue-returned-long': 'working',
+    'queue-slash-namesake': 'working',
+    compacting: 'working',
+    // Замечание с живой сессии (G46): вопрос очереди, когда в ней есть ещё сообщение.
+    'pending-queued-message': 'working',
+    'pending-queued-opened-messages': 'question',
   },
 };
 
@@ -330,6 +353,8 @@ describe('Claude Code', () => {
       mode: 'manual',
       input: '',
       queued: 1,
+      queue: [{ text: 'queued message one' }],
+      queueEdit: 'all',
       agentCount: 2,
     });
   });
@@ -685,12 +710,16 @@ describe('Claude Code с фоновыми агентами', () => {
     expect(readScreen([...lines.slice(0, lines.length >> 1), ...tray], claude).kind).toBe('unknown');
   });
 
-  it('под подвалом не список, а что-то ещё — экран не узнан, причина названа', () => {
+  it('под подвалом не список, а что-то ещё: несколько незнакомых строк экран читается, высокий хвост — нет', () => {
     const lines = shot('claude', 'agents-idle');
     const first = plain(lines).findIndex((l) => ITEM.test(l));
+    // Указание владельца (G48): рамку ввода узнаёт она сама, незнакомые строки под её
+    // подвалом экран неузнанным не делают.
     const odd = [...lines.slice(0, first - 1), '  something else', '  one more line', '  and more', ''];
-    expect(readScreen(odd, claude)).toEqual({ kind: 'unknown', why: 'content below footer' });
-    // Список длиннее предела профиля — тоже не узнан.
+    expect(readScreen(odd, claude)).toMatchObject({ kind: 'idle', input: '' });
+    const tall = [...lines.slice(0, first - 1), ...Array.from({ length: 12 }, (_, i) => `  unknown line ${i}`), ''];
+    expect(readScreen(tall, claude)).toEqual({ kind: 'unknown', why: 'content below footer' });
+    // Список длиннее предела профиля — не узнан.
     expect(readScreen(withAgents('agents-idle', 40), claude)).toEqual({
       kind: 'unknown',
       why: 'content below footer',
@@ -860,7 +889,8 @@ describe('Codex со строкой состояния пользователя'
       why: 'footer not recognized',
     });
     // Под строкой ввода больше строк, чем бывает у подвала.
-    const tall = [...lines.slice(0, status), '  one · two', '  three · four', ...lines.slice(status)];
+    const more = ['  one · two', '  three · four', '  five · six', '  seven · eight'];
+    const tall = [...lines.slice(0, status), ...more, ...lines.slice(status)];
     expect(readScreen(tall, codex).kind).toBe('unknown');
     // Строка без отступа в подвале.
     expect(readScreen(withStatus('statusline-idle', 'plain text · more'), codex).kind).toBe('unknown');
@@ -908,6 +938,8 @@ describe('Codex: запрос работающему агенту', () => {
       mode: 'default',
       input: '',
       queued: 1,
+      queue: [{ text: 'note two' }],
+      queueEdit: 'last',
       model: 'GPT-6-Astra',
     });
     expect(read('codex', 'queued-followup-two')).toMatchObject({ kind: 'working', queued: 2, input: '' });
@@ -923,6 +955,8 @@ describe('Codex: запрос работающему агенту', () => {
       mode: 'default',
       input: '',
       queued: 1,
+      queue: [{ text: 'note two' }],
+      queueEdit: 'last',
       model: 'GPT-6-Astra',
     });
     expect(read('codex', 'waiting-terminal-typed')).toMatchObject({
@@ -1757,5 +1791,317 @@ describe('диалог без указателя и экраны с нумеро
         expect(state.question).toBeUndefined();
       }
     }
+  });
+});
+
+describe('очередь агента: тексты сообщений и возврат (замер 12.11.2026)', () => {
+  const claude = profileOf('claude');
+  const codex = profileOf('codex');
+
+  it('Claude: блок очереди далеко над строкой работы (короткая беседа, высокая панель) считается', () => {
+    expect(read('claude', 'queued-far')).toMatchObject({
+      kind: 'working',
+      status: 'Quantumizing…',
+      input: '',
+      queued: 1,
+      queue: [{ text: 'Reply with exactly: queued-ok' }],
+      queueEdit: 'all',
+    });
+  });
+
+  it('Claude: два сообщения в очереди читаются с текстами; клавиша возврата названа заглушкой строки ввода', () => {
+    expect(read('claude', 'queued-two')).toMatchObject({
+      kind: 'working',
+      queued: 2,
+      queue: [{ text: 'Reply with exactly: alpha-one' }, { text: 'Reply with exactly: beta-two' }],
+      queueEdit: 'all',
+    });
+  });
+
+  it('Claude: многострочное сообщение очереди — одно сообщение со всеми строками', () => {
+    const screen = read('claude', 'queued-multiline');
+    expect(screen.queued).toBe(2);
+    expect(screen.queue).toEqual([
+      { text: 'Reply with exactly: gamma\nsecond line of gamma' },
+      {
+        text: [
+          'Reply with exactly: epsilon and then this sentence is deliberately long so that it does not fit into one hundred and',
+          'twenty columns of the pane at all, okay',
+          'line two',
+          'line three',
+          'line four',
+          'line five',
+        ].join('\n'),
+      },
+    ]);
+  });
+
+  it('Claude: после возврата очередь пуста, сообщения стоят в строке ввода, клавиша возврата не названа', () => {
+    const screen = read('claude', 'queue-returned');
+    expect(screen).toMatchObject({
+      kind: 'working',
+      input: 'Reply with exactly: alpha-one\nReply with exactly: beta-two',
+    });
+    expect(screen).not.toHaveProperty('queued');
+    expect(screen).not.toHaveProperty('queue');
+    expect(screen).not.toHaveProperty('queueEdit');
+  });
+
+  it('Claude: прежний снимок очереди называет текст и клавишу возврата', () => {
+    const screen = read('claude', 'queued');
+    expect(screen.queued).toBe(1);
+    expect(screen.queue).toHaveLength(1);
+    expect(screen.queueEdit).toBe('all');
+  });
+
+  it('Codex: два сообщения с текстами; подсказка блока называет возврат последнего', () => {
+    expect(read('codex', 'queue-edit-two')).toMatchObject({
+      kind: 'working',
+      input: '',
+      queued: 2,
+      queue: [{ text: 'Reply with exactly: alpha-one' }, { text: 'Reply with exactly: beta-two' }],
+      queueEdit: 'last',
+    });
+  });
+
+  it('Codex: после возврата последнее сообщение в строке ввода, первое осталось в очереди', () => {
+    expect(read('codex', 'queue-returned')).toMatchObject({
+      kind: 'working',
+      input: 'Reply with exactly: beta-two',
+      queued: 1,
+      queue: [{ text: 'Reply with exactly: alpha-one' }],
+    });
+    // В строке ввода текст: клавиша возврата заменила бы его следующим сообщением.
+    expect(read('codex', 'queue-returned')).not.toHaveProperty('queueEdit');
+  });
+
+  it('Codex: многострочное сообщение — одно; сообщение длиннее трёх строк помечено обрезанным', () => {
+    expect(read('codex', 'queue-multiline').queue).toEqual([
+      { text: 'Reply with exactly: gamma\nsecond line of gamma' },
+      { text: 'Reply with exactly: delta-four' },
+    ]);
+    expect(read('codex', 'queue-cut')).toMatchObject({
+      queued: 1,
+      queue: [
+        {
+          text: [
+            'Reply with exactly: epsilon and then this sentence is deliberately long so that it does not fit into one hundred and',
+            'twenty columns of the pane at all, okay',
+            'line two',
+          ].join('\n'),
+          cut: true,
+        },
+      ],
+    });
+  });
+
+  it('Codex: прежние снимки очереди называют тексты; очередь с вопросом возврат сообщения не называет', () => {
+    expect(read('codex', 'queued-followup-two')).toMatchObject({ queued: 2, queueEdit: 'last' });
+    expect(read('codex', 'queued-followup-two').queue).toHaveLength(2);
+    for (const name of ['pending-queued', 'pending-queued-timer', 'pending-queued-two']) {
+      expect(read('codex', name)).not.toHaveProperty('queueEdit');
+    }
+    // 0.167.0: сообщения под другим заголовком, подсказки возврата нет.
+    expect(read('codex', 'queued')).not.toHaveProperty('queueEdit');
+  });
+
+  it('Codex: команда под указателем списка у работающего агента — та, что набрана, хотя в списке есть тёзка', () => {
+    const lines = shot('codex', 'queue-slash-namesake');
+    expect(readScreen(lines, codex)).toMatchObject({ kind: 'working', input: '/status', queued: 1 });
+    expect(readPopup(lines, codex).map((c) => c.name)).toEqual(['status', 'statusline']);
+    expect(readPopupPick(lines, codex)).toBe('status');
+  });
+});
+
+describe('живая проверка 12.11.2026: что не читалось', () => {
+  it('Codex до первого сообщения беседы: обычная пустая строка ввода', () => {
+    expect(read('codex', 'fresh')).toEqual({ kind: 'idle', mode: 'default', input: '', model: 'GPT-6-Astra' });
+  });
+
+  it('Codex: сжатие контекста названо строкой работы, а не словом подвала', () => {
+    expect(read('codex', 'compacting')).toMatchObject({ kind: 'working', status: 'Compacting context', elapsed: 5 });
+  });
+
+  it('Claude: экран справки — известное меню', () => {
+    expect(read('claude', 'menu-help')).toEqual({ kind: 'menu', menu: 'help' });
+    expect(read('claude', 'menu-trust-live')).toEqual({ kind: 'menu', menu: 'trust' });
+  });
+
+  it('Claude: строка отправки под вариантами вопроса с отметками — не пояснение свободного варианта', () => {
+    const question = read('claude', 'question-multi-submit').question!;
+    expect(question.multi).toBe(true);
+    expect(question.options.map((o) => [o.key, o.label, o.hint])).toEqual([
+      ['1', 'Red', 'Красный'],
+      ['2', 'Green', 'Зеленый'],
+      ['3', 'Blue', 'Синий'],
+      ['4', 'Type something', undefined],
+      ['5', 'Chat about this', undefined],
+    ]);
+    expect(question.options[3]).toMatchObject({ free: true, checked: false });
+  });
+
+  it('Claude: возврат на отвеченный вопрос серии — подпись без отметки, отпечаток прежний', () => {
+    const first = read('claude', 'question-series-first').question!;
+    const back = read('claude', 'question-series-answered').question!;
+    expect(first.options.map((o) => o.label)).toEqual(['Small', 'Large', 'Type something.', 'Chat about this']);
+    expect(back.options.map((o) => o.label)).toEqual(['Small', 'Large', 'Type something.', 'Chat about this']);
+    expect(back.stamp).toBe(first.stamp);
+    expect(back.steps).toEqual([
+      { label: 'Размер', done: true, current: true },
+      { label: 'Скорость' },
+      { label: 'Submit', submit: true },
+    ]);
+  });
+});
+
+describe('вопрос очереди Codex при непустой очереди сообщений (замер 12.11.2026)', () => {
+  const codex = profileOf('codex');
+  const opened = (): string[] => shot('codex', 'pending-queued-opened-messages');
+  /** Тот же экран с другим подвалом вопроса (строка подвала — без оформления). */
+  const withFooter = (footer: string): string[] =>
+    opened().map((line) => (plain([line])[0]!.includes('enter submit') ? `  ${footer}` : line));
+
+  it('сообщение и вопрос в одном блоке: вопрос ждёт, сообщение сосчитано, возврат сообщения не назван', () => {
+    const lines = shot('codex', 'pending-queued-message');
+    expect(readScreen(lines, codex)).toMatchObject({
+      kind: 'working',
+      pending: true,
+      queued: 1,
+      queue: [{ text: 'Reply with exactly: alpha-one' }],
+    });
+    expect(readScreen(lines, codex)).not.toHaveProperty('queueEdit');
+    expect(readPending(lines, codex)).toEqual({ key: 'answerPending', count: 1 });
+  });
+
+  it('открытый вопрос с пунктом подвала «⇧← queued messages» читается: заголовок, варианты, «Other» своим ответом', () => {
+    const screen = readScreen(opened(), codex);
+    expect(screen.kind).toBe('question');
+    expect(screen.question).toMatchObject({
+      title: 'Red or blue?',
+      options: [
+        { key: '1', label: 'Red (recommended)', selected: true },
+        { key: '2', label: 'Blue' },
+        { key: '3', label: 'Other', free: true },
+      ],
+      freeText: true,
+    });
+    // Сообщение очереди над вопросом в вопрос не входит.
+    expect(screen.question).not.toHaveProperty('body');
+    const alone = opened().filter((line) => !line.includes('↳'));
+    expect(alone).toHaveLength(opened().length - 1);
+    expect(readScreen(alone, codex).question?.stamp).toBe(screen.question!.stamp);
+  });
+
+  it('незнакомый пункт подвала после «enter submit» и «skip» вопрос неузнанным не делает', () => {
+    expect(plain(opened()).some((line) => line.trim() === 'enter submit   ⌃] skip   ⇧→ main prompt   ⇧← queued messages')).toBe(true);
+    const more = withFooter('enter submit   ⌃] skip   ⇧→ main prompt   ⌥q something new   ⌥w and more');
+    expect(readScreen(more, codex)).toMatchObject({ kind: 'question', question: { title: 'Red or blue?' } });
+    const bare = withFooter('enter submit   ⌃] skip');
+    expect(readScreen(bare, codex).kind).toBe('question');
+  });
+
+  it('без «enter submit» или без вариантов экран остаётся неузнанным', () => {
+    const noSubmit = withFooter('enter accept   ⌃] skip   ⇧→ main prompt   ⇧← queued messages');
+    expect(readScreen(noSubmit, codex).kind).toBe('unknown');
+    const noSkip = withFooter('enter submit   ⌃] drop   ⇧→ main prompt   ⇧← queued messages');
+    expect(readScreen(noSkip, codex).kind).toBe('unknown');
+    const noOptions = opened().filter((line) => !/\d\. (?:Red|Blue|Other)/.test(plain([line])[0]!));
+    expect(noOptions).toHaveLength(opened().length - 3);
+    expect(readScreen(noOptions, codex).kind).toBe('unknown');
+  });
+});
+
+// Указание владельца (G48): агента у строки ввода узнаёт сама строка ввода, а подвал под
+// ней только читается — незнакомая строка, пункт или уведомление экран неузнанным не делают.
+describe('строка ввода узнаётся сама; подвал под ней читается, а не сверяется', () => {
+  const claude = profileOf('claude');
+  const codex = profileOf('codex');
+  const NOTICE = `${' '.repeat(150)}⚠ 3 warnings · f2 to view`;
+
+  /** `statusline-idle` с текстом в строке ввода и другим хвостом под строкой состояния. */
+  function codexTyped(text: string, tail: string[]): string[] {
+    const lines = shot('codex', 'statusline-idle');
+    const flat = plain(lines);
+    const input = flat.findIndex((l) => l === '› Ask Codex to do anything');
+    const hints = flat.findIndex((l) => /← for agents · \? for shortcuts/.test(l));
+    expect(input).toBeGreaterThan(0);
+    expect(hints).toBe(input + 3);
+    return [...lines.slice(0, input), `› ${text}`, ...lines.slice(input + 1, hints), ...tail, ''];
+  }
+
+  it('живой отказ: ждущий Codex с текстом в строке, под строкой состояния только правое уведомление', () => {
+    expect(readScreen(codexTyped('Действуй', [NOTICE]), codex)).toMatchObject({
+      kind: 'idle',
+      input: 'Действуй',
+      mode: 'default',
+      model: 'GPT-6-Astra',
+    });
+  });
+
+  it('под строкой состояния пусто (предупреждений нет) — тот же экран', () => {
+    expect(readScreen(codexTyped('Действуй', []), codex)).toMatchObject({ kind: 'idle', input: 'Действуй' });
+  });
+
+  it('правое уведомление рядом с подсказками и рядом с «tab to queue message» экран неузнанным не делает', () => {
+    const hinted = codexTyped('', [`  ← for agents · ? for shortcuts${' '.repeat(100)}⚠ 3 warnings · f2 to view`]);
+    expect(readScreen(hinted, codex).kind).toBe('idle');
+    const queue = shot('codex', 'queue-hint-statusline');
+    const at = plain(queue).findIndex((l) => l === '  tab to queue message');
+    expect(at).toBeGreaterThan(0);
+    const noticed = [...queue.slice(0, at), `  tab to queue message${' '.repeat(100)}⚠ 3 warnings · f2 to view`, ...queue.slice(at + 1)];
+    expect(readScreen(noticed, codex)).toMatchObject({ kind: 'working', input: 'draft note' });
+  });
+
+  it('Codex: произвольная незнакомая строка подвала экран неузнанным не делает', () => {
+    expect(readScreen(codexTyped('', ['  ← for agents · ? for shortcuts', '  something nobody has measured yet']), codex).kind).toBe('idle');
+    expect(readScreen(codexTyped('note', ['  brand new footer line without separators']), codex)).toMatchObject({
+      kind: 'idle',
+      input: 'note',
+    });
+  });
+
+  it('Claude: произвольная незнакомая строка под подвалом экран неузнанным не делает', () => {
+    for (const name of ['idle', 'working', 'input']) {
+      const lines = shot('claude', name);
+      const end = plain(lines).findLastIndex((l) => l.trim() !== '');
+      const more = [...lines.slice(0, end + 1), '  something nobody has measured yet', '  and one more line', ...lines.slice(end + 3)];
+      expect(readScreen(more, claude), name).toEqual(read('claude', name));
+    }
+  });
+
+  it('незнакомый пункт подвала диалога его неузнанным не делает — у обоих агентов', () => {
+    const extra = (agent: AgentId, name: string, footer: RegExp, tail: string): ReturnType<typeof readScreen> => {
+      const lines = shot(agent, name);
+      const at = plain(lines).findIndex((l) => footer.test(l));
+      expect(at, name).toBeGreaterThan(0);
+      return readScreen([...lines.slice(0, at), `${plain(lines)[at]}${tail}`, ...lines.slice(at + 1)], profileOf(agent));
+    };
+    for (const [agent, name, footer, tail] of [
+      ['claude', 'question', /^Enter to select/, ' · ctrl+y to do something new'],
+      ['claude', 'permission', /Esc to cancel · Tab to amend/, ' · ctrl+y to do something new'],
+      ['codex', 'permission', /Press enter to confirm or esc to cancel/, ' · ⌥y something new'],
+      ['codex', 'permission-mcp', /enter to submit \| esc to cancel/, ' | ⌥y something new'],
+      ['codex', 'question', /enter to submit answer/, ' | ⌥y something new'],
+    ] as const) {
+      const was = read(agent, name);
+      const now = extra(agent, name, footer, tail);
+      expect(now.kind, name).toBe(was.kind);
+      expect(now.question?.stamp, name).toBe(was.question!.stamp);
+      expect(now.question?.options, name).toEqual(was.question!.options);
+    }
+  });
+
+  it('без строки ввода агент не узнаётся: реплика с ответом под ней, меню с незнакомой подсказкой, высокий хвост', () => {
+    // Реплика человека, под ней ответ агента без отступа — это переписка, а не строка ввода.
+    expect(readScreen(['› Reply with exactly: pong', '', '• pong', '', '  Worked for 3s • 22:11', ''], codex).kind).toBe('unknown');
+    // Варианты меню под указателем — не текст строки ввода, какой бы ни была подсказка.
+    expect(
+      readScreen(['  Some new menu', '', '› 1. First choice', '  2. Second choice', '', '  press space to toggle', ''], codex).kind,
+    ).toBe('unknown');
+    // Под строкой ввода строк больше, чем бывает у подвала.
+    const tall = codexTyped('note', ['  one', '  two', '  three', '  four', '  five']);
+    expect(readScreen(tall, codex).kind).toBe('unknown');
+    // Подсказка меню в подвале.
+    expect(readScreen(codexTyped('note', ['  enter select · esc back']), codex).kind).toBe('unknown');
   });
 });
