@@ -117,6 +117,9 @@ export interface FeedEntry {
    *  `tool`, а `text` несёт вопросы словами: у старого агента поля нет, и запись — обычное
    *  действие. */
   questions?: FeedQuestion[];
+  /** Сколько сообщений человека и ответов агента Codex оставил без сжатия — только у вехи
+   *  `compacted` Codex; тексты тянут запросом `detail` по курсору вехи. */
+  retained?: { human: number; agent: number };
 }
 
 /** Вопрос агента в переписке (форма провода агента). `answer` — подписи выбранных
@@ -179,7 +182,15 @@ export type FeedResult = FeedPage | FeedFailure;
  *  ленты. Форма провода — `@termhub/protocol/chat`. */
 /** Исход в подробностях называется только у ошибки и прерывания; успех — отсутствие
  *  поля и `pending`. */
-export type DetailResult = ({ ok: true } & ToolDetail & { result?: ToolResult }) | FeedFailure;
+export type DetailResult =
+  | ({ ok: true } & ToolDetail & { result?: ToolResult; messages?: RetainedMessage[] })
+  | FeedFailure;
+
+/** Сохранённое без сжатия сообщение — тело раскрытия вехи сжатия Codex (форма провода агента). */
+export interface RetainedMessage {
+  role: 'human' | 'agent';
+  text: string;
+}
 
 /** Курсоры взаимоисключающие; при нескольких сразу агент берёт `around`, затем
  *  `before`, затем `after`. Лимит по умолчанию 200, максимум 1000. */

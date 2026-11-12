@@ -501,6 +501,7 @@ const ru: Dict = {
     },
     note: {
       compacted: 'Беседа сжата',
+      compactedKept: 'Беседа сжата · сохранено без сжатия: {human} ваших и {agent} ответов агента',
       interrupted: 'Прервано',
       error: 'Ошибка',
       chain: 'Продолжение беседы',
@@ -1202,6 +1203,7 @@ const en: Dict = {
     },
     note: {
       compacted: 'Conversation compacted',
+      compactedKept: 'Conversation compacted · kept uncompressed: {human} of yours and {agent} agent replies',
       interrupted: 'Interrupted',
       error: 'Error',
       chain: 'Conversation continued',

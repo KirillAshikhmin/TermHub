@@ -489,8 +489,21 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
     if (entry.kind === 'note') {
       const label = document.createElement('span');
       label.className = 'th-feed__notelabel';
-      label.textContent = entry.note ? t(`feed.note.${entry.note}`) : '';
+      const kept = entry.note === 'compacted' ? entry.retained : undefined;
+      label.textContent = kept
+        ? t('feed.note.compactedKept', { human: kept.human, agent: kept.agent })
+        : entry.note
+          ? t(`feed.note.${entry.note}`)
+          : '';
       box.append(label);
+      // Сохранённое без сжатия раскрывается по тапу (только в чате: в ленте — числа текстом).
+      const expandKept = (): void => {
+        if (chat && kept && entry.cursor) {
+          const cursor = entry.cursor;
+          box.classList.add('th-feed__entry--kept');
+          mountToolDetail(box, entry, () => transport.feedDetail(session, cursor));
+        }
+      };
       // Сводка сжатия — не подпись к вехе, а целый markdown-документ: агент дальше
       // работает по нему, а не по беседе. Рисуется карточкой своего цвета, как ответ.
       if (entry.note === 'compacted' && entry.text) {
@@ -505,6 +518,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
           cut.textContent = t('feed.truncated');
           box.append(cut);
         }
+        expandKept();
         return box;
       }
       if (entry.text) {
@@ -513,6 +527,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
         text.textContent = entry.text;
         box.append(text);
       }
+      expandKept();
       return box;
     }
 

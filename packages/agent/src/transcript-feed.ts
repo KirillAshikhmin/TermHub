@@ -82,6 +82,16 @@ export interface FeedEntry {
    *  записи остаётся `tool`, а `text` несёт вопросы словами: клиент, не знающий поля,
    *  показывает прежнюю строку действия и вопроса не теряет. */
   questions?: FeedQuestion[];
+  /** Сколько сообщений Codex оставил в новом окне без сжатия — только у веха `compacted`
+   *  из файла Codex, и только когда есть что показать. Тексты в страницу не кладутся: их
+   *  отдаёт `readDetail` по курсору вехи (`messages`). */
+  retained?: { human: number; agent: number };
+}
+
+/** Одно сохранённое без сжатия сообщение — тело раскрытия вехи сжатия Codex. */
+export interface RetainedMessage {
+  role: 'human' | 'agent';
+  text: string;
 }
 
 /** Один вопрос вызова. `answer` — данный ответ: подписи выбранных вариантов либо свой
@@ -806,6 +816,34 @@ function peerWords(text: string): string {
   return found ? found[1].trim() : '';
 }
 
+/** Сохранённое без сжатия в записи `compacted` Codex: `payload.retained_context` — открытый
+ *  текст последних сообщений человека и ответов агента в порядке беседы (`order`). Итог
+ *  сжатия зашифрован (`replacement_history[].compaction`), а `replacement_history` — это
+ *  ещё и служебные инструкции роли developer: оттуда не берётся ничего. Человеческие
+ *  сообщения проходят тот же фильтр, что реплики ленты: обёртки среды и ответы на вопросы
+ *  очереди — не его слова. */
+function retainedMessages(payload: Record<string, unknown> | undefined): RetainedMessage[] {
+  const ctx = payload?.retained_context;
+  if (ctx === null || typeof ctx !== 'object') return [];
+  const found: Array<RetainedMessage & { order: number }> = [];
+  const take = (list: unknown, role: RetainedMessage['role']): void => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      if (item === null || typeof item !== 'object') continue;
+      const m = item as Record<string, unknown>;
+      const raw = str(m.text);
+      if (role === 'human' && REPLY_RE.test(raw)) continue;
+      const text = (role === 'human' ? humanWords(raw) : raw).trim();
+      if (text) found.push({ role, text, order: typeof m.order === 'number' ? m.order : found.length });
+    }
+  };
+  const c = ctx as Record<string, unknown>;
+  take(c.user_messages, 'human');
+  take(c.assistant_messages, 'agent');
+  // Сортировка устойчива: при равном `order` человек раньше агента, как собрано.
+  return found.sort((a, b) => a.order - b.order).map(({ role, text }) => ({ role, text }));
+}
+
 function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
   const payload = (rec.payload ?? undefined) as Record<string, unknown> | undefined;
   const id =
@@ -813,7 +851,13 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     (typeof rec.ordinal === 'number' ? String(rec.ordinal) : '') ||
     String(offset);
   const base: Base = { id, at: stamp(rec.timestamp) };
-  if (rec.type === 'compacted') return [note(base, 'compacted', str(payload?.message))];
+  if (rec.type === 'compacted') {
+    const entry = note(base, 'compacted', str(payload?.message));
+    const kept = retainedMessages(payload);
+    const human = kept.filter((m) => m.role === 'human').length;
+    if (kept.length > 0) entry.retained = { human, agent: kept.length - human };
+    return [entry];
+  }
   if (rec.type === 'event_msg')
     return payload?.type === 'error' ? [note(base, 'error', str(payload.message))] : [];
   if (rec.type !== 'response_item' || !payload) return [];
@@ -1340,7 +1384,9 @@ function codexSummary(payload: Record<string, unknown>): string {
 // --- подробности действия ------------------------------------------------------------------
 
 /** Ответ на запрос подробностей: тело `ToolDetail` либо отказ ленты теми же причинами. */
-export type DetailResult = ({ ok: true } & ToolDetail & { result?: ToolResult }) | FeedFailure;
+export type DetailResult =
+  | ({ ok: true } & ToolDetail & { result?: ToolResult; messages?: RetainedMessage[] })
+  | FeedFailure;
 
 /** Как далеко от вызова ищется его результат. Результат идёт следом, но между ними бывают
  *  записи параллельных вызовов и реплики; дальше этого предела вызов считается ещё идущим. */
@@ -1386,6 +1432,10 @@ export async function readDetail(file: string, agent: FileAgent, cursor: string)
       return { ok: false, reason: 'cursor-stale', detail: `cursor ${cursor} is not from ${file}` };
     const line = await lineAt(fh, at, st.size);
     if (line === 'long') return { ok: false, reason: 'lookup-failed', detail: `line at ${cursor} is too long` };
+    if (line !== null && agent === 'codex') {
+      const kept = retainedDetail(line.text);
+      if (kept) return kept;
+    }
     const found = line === null ? null : callOf(line.text, agent, line.end);
     if (!found) return { ok: false, reason: 'cursor-stale', detail: `cursor ${cursor} is not on an action` };
     const outcome = found.id ? await outcomeOf(fh, agent, found.id, found.end, st.size) : null;
@@ -1395,6 +1445,39 @@ export async function readDetail(file: string, agent: FileAgent, cursor: string)
   } finally {
     await fh.close();
   }
+}
+
+/** Раскрытие вехи сжатия Codex: сохранённые сообщения в порядке беседы. Бюджет один на всё
+ *  тело — предел текста записи; набирается с самых свежих, а упёршееся сообщение режется, и
+ *  тело помечается `truncated`. `null` — строка не веха сжатия с сохранённым. */
+function retainedDetail(line: string): DetailResult | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (raw === null || typeof raw !== 'object') return null;
+  const rec = raw as Record<string, unknown>;
+  if (rec.type !== 'compacted') return null;
+  const kept = retainedMessages((rec.payload ?? undefined) as Record<string, unknown> | undefined);
+  if (kept.length === 0) return null;
+  const out: RetainedMessage[] = [];
+  let room = TEXT_LIMIT;
+  let truncated = false;
+  for (let i = kept.length - 1; i >= 0; i -= 1) {
+    const size = Buffer.byteLength(kept[i].text);
+    if (size <= room) {
+      out.push(kept[i]);
+      room -= size;
+      continue;
+    }
+    truncated = true;
+    if (room > 0) out.push({ role: kept[i].role, text: clip(kept[i].text, room).text });
+    break;
+  }
+  if (out.length < kept.length) truncated = true;
+  return { ok: true, messages: out.reverse(), ...(truncated ? { truncated: true } : {}) };
 }
 
 /** Целая строка с `at`; `null` — строки там нет (конец файла или она ещё пишется). */

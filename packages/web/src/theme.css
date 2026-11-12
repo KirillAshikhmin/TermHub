@@ -5314,7 +5314,8 @@ main.th-feed--chat {
   color: var(--text-faint);
   transition: transform var(--t);
 }
-.th-feed__entry--tool.is-open > .th-tool__head::after {
+.th-feed__entry--tool.is-open > .th-tool__head::after,
+.th-feed__entry--kept.is-open > .th-tool__head::after {
   transform: rotate(90deg);
 }
 .th-tool__panel {
@@ -5326,6 +5327,31 @@ main.th-feed--chat {
   color: var(--text);
   font-size: 0.8rem;
   min-width: 0;
+}
+.th-kept {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+.th-kept--human {
+  background: var(--bg-elev);
+  margin-left: 24px;
+}
+.th-kept--agent {
+  margin-right: 24px;
+}
+.th-kept__who {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  margin-bottom: 2px;
+}
+.th-kept__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
 }
 .th-tool__label {
   margin: 0 0 3px;

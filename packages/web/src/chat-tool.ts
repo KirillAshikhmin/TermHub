@@ -40,6 +40,12 @@ export function renderDiff(detail: Pick<Detail, 'diff'>): HTMLElement {
 
 function renderDetail(detail: Detail, shell: boolean): HTMLElement[] {
   const out: HTMLElement[] = [];
+  // Веха сжатия Codex: сохранённые сообщения, свои и агента различимы подписью и плашкой.
+  for (const m of detail.messages ?? []) {
+    const box = div(`th-kept th-kept--${m.role}`);
+    box.append(div('th-kept__who', m.role === 'human' ? t('feed.you') : t('feed.kind.agent')), div('th-kept__text', m.text));
+    out.push(box);
+  }
   if (detail.input) {
     out.push(div('th-tool__label', t('chat.tool.input')));
     const pre = document.createElement('pre');
