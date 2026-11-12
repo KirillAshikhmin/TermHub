@@ -745,6 +745,64 @@ button {
   transform: scale(0.95);
 }
 
+/* ── Окно без заголовка браузера (Window Controls Overlay) ────────────
+   Установленное приложение в Chrome и Edge может отдать странице полосу заголовка: от
+   системы остаются только кнопки окна. Шапки отступают от них и служат местом, за которое
+   окно перетаскивают; кнопки, вкладки и поля из области перетаскивания вырезаны. Вне
+   этого режима блок не действует вовсе. */
+@media (display-mode: window-controls-overlay) {
+  :root {
+    --wco-left: env(titlebar-area-x, 0px);
+    --wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+    --wco-h: env(titlebar-area-height, 0px);
+  }
+  /* Экран без шапки (вход, пейринг) тоже должен перетаскиваться за верхнюю полосу. */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--wco-h);
+    pointer-events: none;
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .th-header,
+  .th-termbar,
+  .th-spanel__head {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .th-header {
+    padding-left: calc(16px + var(--wco-left));
+    padding-right: calc(16px + var(--wco-right));
+  }
+  .th-termbar {
+    padding-left: calc(4px + var(--wco-left));
+    padding-right: calc(8px + var(--wco-right));
+  }
+  .th-spanel__head {
+    padding-left: calc(16px + var(--wco-left));
+    padding-right: calc(8px + var(--wco-right));
+  }
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  label,
+  summary,
+  [role='button'],
+  [role='tab'],
+  [tabindex],
+  [contenteditable],
+  .th-tab {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
+
 /* ── Вход ──────────────────────────────────────────────────────────── */
 .th-login {
   flex: 1;

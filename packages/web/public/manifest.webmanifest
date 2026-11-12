@@ -7,6 +7,15 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": [
+    "window-controls-overlay"
+  ],
+  "launch_handler": {
+    "client_mode": [
+      "focus-existing",
+      "auto"
+    ]
+  },
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
   "icons": [
@@ -15,6 +24,20 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Новая сессия",
+      "url": "./#/do/new"
+    },
+    {
+      "name": "Расход по сессиям",
+      "url": "./#/do/usage"
+    },
+    {
+      "name": "Настройки",
+      "url": "./#/do/settings"
     }
   ]
 }

@@ -303,6 +303,12 @@ npx tsc -p packages/web/tsconfig.json --noEmit
 - Веб: `packages/web/src/term-paste.ts` — `readClipboard()` (картинка старше текста; `unavailable` вне защищённого контекста, `denied` при отказе), `imageFromPaste`, `pathForPaste`; `Transport.pasteImage(blob) -> путь`. В `term.ts` три входа: кнопка «Вставить из буфера» во втором ряду панели клавиш (сразу за ⇧Tab и ⇧←; текст — `term.paste`, картинка — загрузка), событие `paste` с картинкой без текста (Cmd+V, меню браузера) и Ctrl+V — читается буфер устройства: есть картинка — загрузка, иначе в терминал уходит обычный `^V`.
 - Тесты: `packages/agent/test/paste-image.test.ts`, близнецы в `server.test.ts` и `relay-link.test.ts`, `packages/web/test/term-paste.test.ts`, кнопка — в `quickkeys.test.ts`.
 
+## Установленное приложение: окно без заголовка и меню иконки
+
+- Манифест (`packages/web/public/manifest.webmanifest`): `display_override: ["window-controls-overlay"]` — в Chrome и Edge на десктопе полоса заголовка отдаётся странице (включает пользователь стрелкой в заголовке окна). Раскладка — один блок `@media (display-mode: window-controls-overlay)` в `theme.css`: шапки (`.th-header`, `.th-termbar`, `.th-spanel__head`) отступают от кнопок окна (`--wco-left`/`--wco-right` из `env(titlebar-area-*)`) и помечены областью перетаскивания, интерактивные элементы из неё вырезаны (`app-region: no-drag`). Новая шапка у верха экрана обязана попасть в этот блок, иначе она ляжет под кнопки окна. Safari режим не знает — там обычный заголовок.
+- Меню иконки (Dock, панель задач) — поле `shortcuts`: адреса `./#/do/<действие>`, список действий — `packages/web/src/app-actions.ts` (`new`, `usage`, `settings`). Это не экран: `main.ts` запоминает действие, возвращает прежний адрес и открывает окно поверх текущего экрана (`runPending`); действие, которому не на чем выполниться (нет связи, экран входа), ждёт `ACTION_WAIT_MS`. `launch_handler: focus-existing` — пункт меню поднимает открытое окно, действие приходит через `launchQueue`; без поддержки открывается новое окно с тем же адресом. Строки манифеста статичны и в i18n не входят. Системное меню macOS и меню «⋯» Chrome странице недоступны.
+- Тесты: `packages/web/test/manifest.test.ts` (каждый адрес `shortcuts` разбирается в известное действие), `packages/web/test/app-actions.test.ts`.
+
 ## Не спать при закрытой крышке (ADR 0036)
 
 Пользовательское описание — `docs/lid-awake.ru.md` / `docs/lid-awake.md` (держать синхронными).

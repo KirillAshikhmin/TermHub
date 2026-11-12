@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+import { parseAction } from '../src/app-actions';
+
 const manifestUrl = new URL('../public/manifest.webmanifest', import.meta.url);
 
 interface Manifest {
@@ -13,6 +15,8 @@ interface Manifest {
   background_color: string;
   theme_color: string;
   icons: Array<{ src: string; sizes: string; type: string; purpose: string }>;
+  display_override?: string[];
+  shortcuts?: Array<{ name: string; url: string }>;
 }
 
 describe('web app manifest', () => {
@@ -41,5 +45,21 @@ describe('web app manifest', () => {
     expect(icon.type).toBe('image/svg+xml');
     expect(icon.sizes).toBe('any');
     expect(icon.purpose).toContain('maskable');
+  });
+
+  it('просит окно без заголовка браузера, оставаясь standalone там, где режима нет', () => {
+    const m = JSON.parse(raw) as Manifest;
+    expect(m.display_override).toEqual(['window-controls-overlay']);
+    expect(m.display).toBe('standalone');
+  });
+
+  it('каждый пункт меню иконки ведёт к известному действию', () => {
+    const m = JSON.parse(raw) as Manifest;
+    expect(m.shortcuts?.length).toBeGreaterThan(0);
+    for (const item of m.shortcuts ?? []) {
+      expect(item.name).not.toBe('');
+      expect(item.url.startsWith('./#')).toBe(true);
+      expect(parseAction(item.url.slice(2))).not.toBeNull();
+    }
   });
 });

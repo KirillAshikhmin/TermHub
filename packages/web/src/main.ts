@@ -7,8 +7,10 @@
 import './theme.css';
 
 import { api } from './api';
-import { negotiateCaps } from './capabilities';
-import { mountDashboard, mountLogin } from './dashboard';
+import { ACTION_WAIT_MS, actionOfUrl, parseAction } from './app-actions';
+import type { AppAction } from './app-actions';
+import { negotiateCaps, whenCap } from './capabilities';
+import { mountDashboard, mountLogin, openCreateModal } from './dashboard';
 import { resetDocumentTitle } from './document-title';
 import { mountDiag } from './diag';
 import { mountFiles } from './files';
@@ -20,8 +22,10 @@ import { initTheme } from './theme';
 import { parseSplit, termHash } from './routes';
 import { mountSplit } from './split';
 import { initTermPrefs } from './term-prefs';
+import { openTermSettings } from './term-settings';
 import { LanTransport } from './transport';
 import type { Transport } from './transport';
+import { openUsage } from './usage';
 import { dismissOverlays } from './ui';
 import { mountWorkspace, routeWorkspace } from './workspace';
 import type { WorkspaceHandle } from './workspace';
@@ -32,6 +36,41 @@ let remote: RemoteController | null = null;
 // Живое рабочее пространство сессии (терминал/проводник/репо); переиспользуется, пока
 // не сменилась сессия/транспорт — тогда пере-монтируется.
 let workspace: WorkspaceHandle | null = null;
+
+// Действие из меню иконки приложения (`#/do/<действие>`): ждёт экрана, на котором его можно
+// выполнить, но недолго — окно, всплывшее через минуту после просьбы, уже некстати.
+let pending: { action: AppAction; at: number } | null = null;
+// Последний адрес экрана: к нему возвращаемся, сняв адрес действия.
+let screenHash = '#/';
+
+/** Адрес — просьба о действии? Тогда запоминаем её и возвращаем адрес экрана. */
+function takeAction(): boolean {
+  const action = parseAction(location.hash);
+  if (!action) return false;
+  pending = { action, at: Date.now() };
+  history.replaceState(null, '', screenHash);
+  return true;
+}
+
+function runPending(): void {
+  if (!pending) return;
+  const { action, at } = pending;
+  if (Date.now() - at > ACTION_WAIT_MS) {
+    pending = null;
+    return;
+  }
+  if (action === 'settings') {
+    pending = null;
+    openTermSettings();
+    return;
+  }
+  const route = parseRoute().name;
+  const transport = remote ? remote.activeTransport() : lanTransport;
+  if (!transport || route === 'login' || route === 'pair') return;
+  pending = null;
+  if (action === 'new') openCreateModal(transport);
+  else void whenCap('usage', transport).then((can) => can && openUsage(transport));
+}
 
 function appRoot(): HTMLElement {
   const root = document.getElementById('app');
@@ -91,6 +130,11 @@ function parseRoute(): RemoteRoute {
 }
 
 function render(): void {
+  renderScreen();
+  runPending();
+}
+
+function renderScreen(): void {
   // Смена роута: сносим висящие модалки/тосты вместе с их document-слушателями.
   dismissOverlays();
   const root = appRoot();
@@ -151,6 +195,26 @@ function render(): void {
   else cleanup = mountDashboard(root, t);
 }
 
+/** Запуск из меню иконки при уже открытом окне (`launch_handler: focus-existing`): страница
+ *  не переходит, адрес запуска отдаёт `launchQueue`. Первый запуск окна с адресом действия
+ *  уже разобран по hash — его повтор из очереди пропускаем. */
+function watchLaunches(): void {
+  const queue = (window as { launchQueue?: { setConsumer(fn: (p: { targetURL?: string }) => void): void } })
+    .launchQueue;
+  if (!queue) return;
+  let first = true;
+  queue.setConsumer((params) => {
+    const own = first && params.targetURL === initialHref;
+    first = false;
+    const action = params.targetURL ? actionOfUrl(params.targetURL) : null;
+    if (!action || own) return;
+    pending = { action, at: Date.now() };
+    runPending();
+  });
+}
+
+const initialHref = location.href;
+
 async function boot(): Promise<void> {
   document.documentElement.lang = getLang();
   initTheme();
@@ -176,7 +240,17 @@ async function boot(): Promise<void> {
 
   // Роутер подключаем только после инициализации транспорта — до этого render()
   // не должен запускаться (иначе lanTransport ещё null).
-  window.addEventListener('hashchange', render);
+  if (!takeAction()) screenHash = location.hash || '#/';
+  window.addEventListener('hashchange', () => {
+    // Просьба о действии экран не меняет: адрес уже возвращён, осталось её выполнить.
+    if (takeAction()) {
+      runPending();
+      return;
+    }
+    screenHash = location.hash || '#/';
+    render();
+  });
+  watchLaunches();
   // Смена языка перерисовывает всё, включая живое рабочее пространство сессии: роутер его
   // переиспользует, и без пересборки экран сессии оставался на прежнем языке — выглядело
   // так, будто язык обратно не переключается.
