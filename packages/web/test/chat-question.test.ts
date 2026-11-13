@@ -172,7 +172,7 @@ describe('ответ из записи вопроса в переписке', ()
   const option = (i: number): HTMLElement => blocks()[0]!.querySelectorAll<HTMLElement>('.th-q__option')[i]!;
 
   it('вопрос ждёт в очереди Codex: нажатие варианта открывает вопрос и отвечает его клавишей', async () => {
-    answer = () => page([ASKED]);
+    answer = () => page([structuredClone(ASKED)]);
     const acts: unknown[] = [];
     const chat = mountChat(host, 'work', withLive(IDLE, acts, (a) => ({ ok: true, screen: a.kind === 'show-question' ? OPENED : IDLE })));
     await flush();
@@ -180,11 +180,17 @@ describe('ответ из записи вопроса в переписке', ()
     option(1).click();
     await flush();
     expect(acts).toEqual([{ kind: 'show-question' }, { kind: 'answer', stamp: 'st-1', option: '2' }]);
+    // Ответ отмечен на месте, варианты больше не кнопки: повторное нажатие ничего не шлёт.
+    expect(option(1).classList.contains('is-chosen')).toBe(true);
+    expect(blocks()[0]!.querySelectorAll('.is-pickable')).toHaveLength(0);
+    option(0).click();
+    await flush();
+    expect(acts).toHaveLength(2);
     chat.teardown();
   });
 
   it('вопрос уже показан на экране — отвечает сразу; на экране другой вопрос — клавиш нет', async () => {
-    answer = () => page([ASKED]);
+    answer = () => page([structuredClone(ASKED)]);
     const acts: unknown[] = [];
     const chat = mountChat(host, 'work', withLive(OPENED, acts, () => ({ ok: true, screen: IDLE })));
     await flush();

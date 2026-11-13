@@ -186,9 +186,9 @@ export interface FeedChatOptions {
   /** Миниатюры картинок под сообщениями человека и агента (`chat-images.ts`). */
   images?: { attach(box: HTMLElement, text: string): void };
   /** Ответить на вопрос из его записи в переписке: вариант неотвеченного вопроса становится
-   *  кнопкой. Ждёт ли вопрос ответа на экране агента, решает получатель. Нет — запись
-   *  вопроса только читается. */
-  onAnswer?: (question: FeedQuestion, label: string) => Promise<void>;
+   *  кнопкой. Ждёт ли вопрос ответа на экране агента, решает получатель; `true` — ответ
+   *  ушёл агенту. Нет — запись вопроса только читается. */
+  onAnswer?: (question: FeedQuestion, label: string) => Promise<boolean>;
 }
 
 /** Монтирует ленту сессии в host. */
@@ -665,9 +665,24 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
             li.setAttribute('role', 'button');
             li.tabIndex = 0;
             const run = (): void => {
-              if (list.classList.contains('is-busy')) return;
+              if (list.classList.contains('is-busy') || li.dataset.answered) return;
               list.classList.add('is-busy');
-              void pick(q, o.label).finally(() => list.classList.remove('is-busy'));
+              void pick(q, o.label)
+                .then((sent) => {
+                  if (!sent) return;
+                  // Запись уже загружена и заново с агента не придёт (лента дочитывает только
+                  // новое): ответ отмечается на месте, варианты перестают быть кнопками.
+                  q.answer = [o.label];
+                  li.classList.add('is-chosen');
+                  li.setAttribute('aria-label', t('feed.question.chosen', { text: o.label }));
+                  for (const other of list.querySelectorAll<HTMLElement>('.is-pickable')) {
+                    other.classList.remove('is-pickable');
+                    other.removeAttribute('role');
+                    other.removeAttribute('tabindex');
+                    other.dataset.answered = '1';
+                  }
+                })
+                .finally(() => list.classList.remove('is-busy'));
             };
             li.addEventListener('click', run);
             li.addEventListener('keydown', (ev) => {

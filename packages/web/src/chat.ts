@@ -141,7 +141,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     // очереди (тогда он сначала открывается), и нести вариант с той же подписью.
     onAnswer: async (_question, label) => {
       const handle = liveHandle;
-      if (!handle || (!!transport.clientScope && !transport.clientScope.write)) return;
+      if (!handle || (!!transport.clientScope && !transport.clientScope.write)) return false;
       const same = (a: string, b: string): boolean => a.replace(/\s+/gu, ' ').trim() === b.replace(/\s+/gu, ' ').trim();
       const shown = (screen: ScreenState | undefined): { stamp: string; key: string } | undefined => {
         const q = screen?.kind === 'question' ? screen.question : undefined;
@@ -155,12 +155,17 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
           const opened = await handle.act({ kind: 'show-question' });
           if (opened.ok) found = shown((screen = opened.screen));
         }
-        if (!found) return toast(t('chat.question.gone'), 'error');
+        if (!found) {
+          toast(t('chat.question.gone'), 'error');
+          return false;
+        }
         const res = await handle.act({ kind: 'answer', stamp: found.stamp, option: found.key });
         if (!res.ok) toast(t('chat.question.failed'), 'error');
         else feed.refresh();
+        return res.ok;
       } catch {
         toast(t('chat.live.actFailed'), 'error');
+        return false;
       }
     },
     onConnection: (ok) => {
