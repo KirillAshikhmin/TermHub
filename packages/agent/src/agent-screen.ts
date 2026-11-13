@@ -873,7 +873,9 @@ function readBox(
     queue = queueTexts(rows, top, under - 1, signs.queue);
   } else if (!signs.queue.under && queued > 0) {
     // Блок прямо над строкой ввода: строки с отступом вверх до заголовка без отступа.
-    const end = lastFilled(rows, box.top - 1);
+    // Предупреждение у правого края стоит под блоком вплотную, но в блок не входит.
+    let end = lastFilled(rows, box.top - 1);
+    while (end >= 0 && signs.sideNotice?.test(rows[end]!.text)) end = lastFilled(rows, end - 1);
     let top = end + 1;
     const inBlock = (at: number): boolean => at >= 0 && /^\s{2}\S|^\s{4}/u.test(rows[at]!.text);
     // Пустая строка внутри блока — абзац в сообщении: над ней обязана стоять строка блока.
@@ -921,7 +923,7 @@ function readBox(
   const notices: string[] = [];
   if (signs.notice) {
     for (let i = box.top - 1; i >= 0 && notices.length < 3; i--) {
-      const found = signs.notice.exec(rows[i]!.text);
+      const found = signs.notice.exec(rows[i]!.text) ?? signs.sideNotice?.exec(rows[i]!.text);
       const text = found?.[1]?.trim();
       if (text && !notices.includes(text)) notices.unshift(text);
     }

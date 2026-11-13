@@ -155,6 +155,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'queue-cut': 'working',
     // Сообщение очереди с абзацем: пустая строка внутри (снимок владельца 13.11.2026, обезличен).
     'queued-paragraph': 'working',
+    'queued-side-notice': 'working',
     'queue-returned-long': 'working',
     'queue-slash-namesake': 'working',
     compacting: 'working',
@@ -1905,6 +1906,15 @@ describe('очередь агента: тексты сообщений и воз
       notices: ['Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.'],
     });
     expect(read('codex', 'idle')).not.toHaveProperty('notices');
+  });
+
+  it('Codex: предупреждение у правого края под блоком очереди — не часть сообщения, а предупреждение', () => {
+    expect(read('codex', 'queued-side-notice')).toMatchObject({
+      kind: 'working',
+      queued: 1,
+      queue: [{ text: 'queued message two' }],
+      notices: ['weekly limit: 23% left · resets at 04:22 on 16 Nov · /status'],
+    });
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {
