@@ -5,6 +5,7 @@
 
 import { pickStrategy } from './sw-strategy';
 import { fetchChunked } from './sw-chunks';
+import { notificationText, parsePush, type PushBody } from './push-text';
 
 const CACHE = 'termhub-shell-v1';
 const SHELL = ['./', './index.html'];
@@ -35,6 +36,7 @@ interface SwScope {
   addEventListener(type: 'notificationclick', listener: (e: NotificationEventLike) => void): void;
   addEventListener(type: 'fetch', listener: (e: FetchEventLike) => void): void;
   location: { origin: string };
+  navigator: { language: string };
   registration: {
     scope: string;
     showNotification(title: string, options: Record<string, unknown>): Promise<void>;
@@ -118,12 +120,15 @@ sw.addEventListener('fetch', (event) => {
   event.respondWith(strategy === 'network-first' ? networkFirst(request) : cacheFirst(request));
 });
 
+// Разбор тела и текст уведомления — в `push-text.ts`: чистые функции, проверяются тестом.
 sw.addEventListener('push', (event) => {
-  const { session, task } = readPush(event.data);
+  const push = readPush(event.data);
+  const { session } = push;
+  const { title, body } = notificationText(push, sw.navigator.language);
   event.waitUntil(
     (async () => {
-      await sw.registration.showNotification('TermHub', {
-        body: task ? `${session}: ${task}` : session,
+      await sw.registration.showNotification(title, {
+        body,
         // icon — цветная иконка в теле уведомления; badge — МОНОХРОМНЫЙ силуэт в
         // статус-баре (Android рисует его по альфа-каналу, цвет игнорирует).
         // Только растр: SVG в уведомлениях Chrome не поддерживает.
@@ -189,14 +194,10 @@ async function cacheFirst(request: Request): Promise<Response> {
 }
 
 /** Достаёт имя сессии из JSON-пейлоада `{session}`. */
-function readPush(data: { text(): string } | null): { session: string; task: string } {
+function readPush(data: { text(): string } | null): PushBody {
   if (!data) return { session: 'TermHub', task: '' };
   try {
-    const parsed = JSON.parse(data.text()) as { session?: unknown; task?: unknown };
-    const session =
-      typeof parsed.session === 'string' && parsed.session.length > 0 ? parsed.session : 'TermHub';
-    const task = typeof parsed.task === 'string' ? parsed.task : '';
-    return { session, task };
+    return parsePush(JSON.parse(data.text()));
   } catch {
     return { session: 'TermHub', task: '' };
   }

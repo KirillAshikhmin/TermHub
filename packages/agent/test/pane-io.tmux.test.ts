@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { capturePane, PASTE_LIMIT, pasteText, sendKeys } from '../src/pane-io.js';
+import { capturePane, PASTE_LIMIT, pasteText, sendKeys, clearBell } from '../src/pane-io.js';
 import { runTmux } from '../src/tmux-run.js';
 import { killTmuxServer } from './tmux-socket.js';
 
@@ -226,5 +226,19 @@ describe.skipIf(!tmuxAvailable)('pane-io — экран и ввод на нас�
     await capturePane(session, socketName);
     expect(windowSize(session)).toBe(size);
     expect(tmux(['list-clients', '-t', `=${session}:`]).trim()).toBe('');
+  });
+
+  // Флаг звонка гасит клиент, показавший окно; чат клиентом не бывает — гасит агент.
+  it('clearBell гасит флаг звонка окна, не оставляет клиента и не трогает размер окна', async () => {
+    tmux(['new-session', '-d', '-s', 'bell', '-x', '90', '-y', '30', "sh -c 'sleep 0.3; printf \"\\a\"; sleep 60'"]);
+    const flag = (): string => tmux(['list-windows', '-t', '=bell', '-F', '#{window_bell_flag} #{window_width}x#{window_height}']).trim();
+    for (let i = 0; i < 40 && !flag().startsWith('1'); i += 1) await new Promise((r) => setTimeout(r, 100));
+    expect(flag()).toBe('1 90x30');
+    await clearBell('bell', socketName);
+    expect(flag()).toBe('0 90x30');
+    expect(tmux(['list-clients']).trim()).toBe('');
+    // Нет такой сессии — молча, без исключения.
+    await expect(clearBell('no-such-session', socketName)).resolves.toBeUndefined();
+    tmux(['kill-session', '-t', '=bell']);
   });
 });

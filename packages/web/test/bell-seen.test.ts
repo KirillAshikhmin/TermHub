@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { bellUnseen, markBellSeen, observeBells, recordBell, unseenBellCount } from '../src/bell-seen';
 
 describe('bell-seen', () => {
@@ -121,31 +121,5 @@ describe('completion signal reconciliation', () => {
     markBellSeen('live');
     recordBell('live');
     expect(bellUnseen('live')).toBe(true);
-  });
-
-  // Флаг звонка tmux гаснет только у окна, которое показал клиент tmux; чат им не бывает.
-  it('просмотренный звонок помнится после перезагрузки страницы, пока флаг tmux стоит', () => {
-    const store = new Map<string, string>();
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-    });
-    try {
-      observeBells([{ name: 'p', bell: true }]);
-      markBellSeen('p');
-      const kept = store.get('termhub.bellAck')!;
-      expect(JSON.parse(kept)).toEqual(['p']);
-      observeBells([]); // страница перезагружена: память модуля пуста…
-      store.set('termhub.bellAck', kept); // …а отметка просмотра осталась
-      observeBells([{ name: 'p', bell: true }]);
-      expect(bellUnseen('p')).toBe(false);
-      // Флаг погас и встал снова — это новый звонок.
-      observeBells([{ name: 'p', bell: false }]);
-      observeBells([{ name: 'p', bell: true }]);
-      expect(bellUnseen('p')).toBe(true);
-      expect(JSON.parse(store.get('termhub.bellAck')!)).toEqual([]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 });

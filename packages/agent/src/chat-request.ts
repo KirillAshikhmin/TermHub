@@ -101,6 +101,7 @@ export function parseAction(value: unknown): ChatAction | null {
     case 'compact':
     case 'take-input':
     case 'show-question':
+    case 'seen':
       return { kind: raw.kind };
     default:
       return null;

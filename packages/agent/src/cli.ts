@@ -11,6 +11,7 @@ import { SessionService } from './sessions.js';
 import { FileService } from './files.js';
 import { VcsService } from './vcs.js';
 import { AgentServer } from './server.js';
+import { bellSummary } from './bell-summary.js';
 import { PushService } from './push.js';
 import { Caffeinate } from './caffeinate.js';
 import { LidAwake, sudoersInstallCommand } from './lid-awake.js';
@@ -113,7 +114,10 @@ async function runStart(): Promise<number> {
         : undefined,
   });
   server.attachTerminalWs(wireTerminalWs({ socketName: TMUX_SOCKET, configMode: terminalMode }));
-  sessions.onBell((name, task) => void push.notifyBell(name, task));
+  // Уведомление несёт сводку: спросил ли агент что-то и чем закончил ход.
+  sessions.onBell(
+    (name, task) => void bellSummary(name, { socketName: TMUX_SOCKET }).then((summary) => push.notifyBell(name, task, summary)),
+  );
   const port = await server.listen();
   sessions.startPolling();
   localRelay?.start();

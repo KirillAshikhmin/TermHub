@@ -468,6 +468,8 @@ function withDefaults(over?: Partial<CommandsSources>): CommandsSources {
     socketName,
     stateDir: over?.stateDir ?? (over?.home !== undefined ? path.join(over.home, '.termhub') : configDir()),
     capture: over?.capture ?? ((session) => capturePane(session, socketName)),
+    // Сверка списка команд звонков не гасит.
+    seen: over?.seen ?? (async () => {}),
     send: over?.send ?? ((session, bytes, pane) => sendKeys(session, socketName, bytes, pane)),
     paste: over?.paste ?? ((session, text, pane) => pasteText(session, socketName, text, pane)),
     resolve: over?.resolve ?? ((pane) => resolvePane(pane, { home, socketName })),

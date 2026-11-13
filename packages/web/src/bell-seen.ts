@@ -11,31 +11,6 @@ interface Entry {
   pendingTmux: boolean;
 }
 const state = new Map<string, Entry>();
-
-// Просмотренный звонок помнится и после перезагрузки страницы: флаг звонка в tmux гаснет
-// только у окна, которое показал клиент tmux, а чат таким клиентом не бывает — без памяти
-// каждая перезагрузка поднимала бы давно прочитанные звонки заново. Имя сессии лежит здесь,
-// пока флаг tmux стоит и новых звонков не было.
-const ACK_KEY = 'termhub.bellAck';
-const readAck = (): Set<string> => {
-  try {
-    const raw: unknown = JSON.parse(localStorage.getItem(ACK_KEY) ?? '[]');
-    return new Set(Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []);
-  } catch {
-    return new Set();
-  }
-};
-const setAck = (name: string, on: boolean): void => {
-  try {
-    const ack = readAck();
-    if (ack.has(name) === on) return;
-    if (on) ack.add(name);
-    else ack.delete(name);
-    localStorage.setItem(ACK_KEY, JSON.stringify([...ack]));
-  } catch {
-    // Хранилище недоступно — звонок просто поднимется после перезагрузки, как раньше.
-  }
-};
 const listeners = new Set<() => void>();
 const changed = (): void => { for (const listener of listeners) listener(); };
 
@@ -49,7 +24,6 @@ export function onBellChange(listener: () => void): () => void {
 export function recordBell(name: string): void {
   const entry = state.get(name) ?? { bell: false, seen: true, working: false, pendingTitle: false, pendingTmux: false };
   entry.seen = false;
-  setAck(name, false);
   entry.pendingTitle = entry.working;
   entry.pendingTmux = !entry.bell;
   state.set(name, entry);
@@ -63,10 +37,8 @@ export function observeBells(sessions: { name: string; bell: boolean; title?: st
     names.add(s.name);
     const working = sessionWorking(s.title ?? '');
     const e = state.get(s.name);
-    if (!s.bell) setAck(s.name, false);
     if (!e) {
-      const seen = !s.bell || readAck().has(s.name);
-      state.set(s.name, { bell: s.bell, seen, working, pendingTitle: s.bell && working, pendingTmux: false });
+      state.set(s.name, { bell: s.bell, seen: !s.bell, working, pendingTitle: s.bell && working, pendingTmux: false });
       continue;
     }
     // A new observed work cycle rearms both fallback sources. Repeated working
@@ -78,7 +50,6 @@ export function observeBells(sessions: { name: string; bell: boolean; title?: st
     if (s.bell && !e.bell) {
       if (!e.pendingTmux) {
         e.seen = false;
-        setAck(s.name, false);
         e.pendingTitle = e.working || working;
       }
       e.pendingTmux = false;
@@ -86,7 +57,6 @@ export function observeBells(sessions: { name: string; bell: boolean; title?: st
     if (e.working && sessionWaiting(s.title ?? '')) {
       if (!e.pendingTitle) {
         e.seen = false;
-        setAck(s.name, false);
         e.pendingTmux = !s.bell;
       }
       e.pendingTitle = false;
@@ -94,11 +64,7 @@ export function observeBells(sessions: { name: string; bell: boolean; title?: st
     e.bell = s.bell;
     e.working = working;
   }
-  for (const n of [...state.keys()]) {
-    if (names.has(n)) continue;
-    state.delete(n);
-    setAck(n, false);
-  }
+  for (const n of [...state.keys()]) if (!names.has(n)) state.delete(n);
 }
 
 /** Пользователь открыл сессию или взаимодействует с терминалом. */
@@ -106,7 +72,6 @@ export function markBellSeen(name: string): void {
   const e = state.get(name);
   if (e && !e.seen) {
     e.seen = true;
-    if (e.bell) setAck(name, true);
     changed();
   }
 }
@@ -120,4 +85,10 @@ export function unseenBellCount(): number {
   let n = 0;
   for (const e of state.values()) if (!e.seen) n += 1;
   return n;
+}
+
+/** Флаг звонка окна в tmux сейчас стоит (последний опрос сессий). Гасит его клиент tmux,
+ *  показавший окно; чат клиентом не бывает и просит агента погасить флаг сам (`seen`). */
+export function bellRaised(name: string): boolean {
+  return state.get(name)?.bell === true;
 }

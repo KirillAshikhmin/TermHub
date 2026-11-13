@@ -1633,3 +1633,14 @@ describe('sessionAct — вопрос Codex без вариантов: отве�
     expect(f.sent).toEqual([]);
   });
 });
+
+describe('sessionAct — сессию смотрят в чате (seen)', () => {
+  it('гасит флаг звонка окна и клавиш в панель не шлёт', async () => {
+    const f = fake('claude', 'idle', () => undefined);
+    const cleared: string[] = [];
+    const result = await sessionAct('work', { kind: 'seen' }, { ...f.src, seen: async (session) => void cleared.push(session) });
+    expect(result).toMatchObject({ ok: true, screen: { kind: 'idle' } });
+    expect(cleared).toEqual(['work']);
+    expect(f.sent).toEqual([]);
+  });
+});

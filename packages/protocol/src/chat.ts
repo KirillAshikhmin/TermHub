@@ -164,7 +164,10 @@ export type ChatAction =
   | { kind: 'unqueue'; queued?: number }
   /** Отправить очередь агента сейчас, не дожидаясь конца хода: клавиша самого агента
    *  (`ScreenState.queueSend`). `queued` — сколько сообщений в очереди видел клиент. */
-  | { kind: 'send-now'; queued?: number };
+  | { kind: 'send-now'; queued?: number }
+  /** Сессию смотрят в чате: погасить флаг звонка её окна в tmux (в терминале его гасит само
+   *  подключение клиента). Клавиш в панель не шлёт. */
+  | { kind: 'seen' };
 
 export interface ChatFailure {
   ok: false;

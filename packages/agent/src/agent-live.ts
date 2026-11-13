@@ -41,7 +41,7 @@ import {
   type TranscriptResult,
   type TranscriptSources,
 } from './agent-transcript.js';
-import { capturePane, pasteText, sendKeys, type PaneShot } from './pane-io.js';
+import { capturePane, clearBell, pasteText, sendKeys, type PaneShot } from './pane-io.js';
 import { isExistingSessionName } from './tmux-session.js';
 import { failureReason } from './tmux-run.js';
 
@@ -75,6 +75,8 @@ export interface LiveSources {
   /** `pane` — адрес из снимка: клавиши идут в панель, чей экран сверяли. */
   send(session: string, bytes: Uint8Array, pane?: string): Promise<void>;
   paste(session: string, text: string, pane?: string): Promise<void>;
+  /** Погасить флаг звонка окна сессии (`clearBell`). */
+  seen(session: string): Promise<void>;
   resolve(pane: string): Promise<TranscriptResult>;
   /** Версия и модель: `file` — текущий файл беседы (его может ещё не быть),
    *  `command` — команда панели, `where` — панель, в которой ищется запущенная программа. */
@@ -394,6 +396,9 @@ async function run(ctx: Ctx, action: ChatAction): Promise<ActResult> {
       return unqueue(ctx, action);
     case 'send-now':
       return sendNow(ctx, action);
+    case 'seen':
+      await ctx.src.seen(ctx.session);
+      return done(ctx.screen);
     default:
       return fail('unsupported', 'unknown action');
   }
@@ -985,6 +990,7 @@ function withDefaults(over?: Partial<LiveSources>): LiveSources {
     capture: over?.capture ?? ((session) => capturePane(session, socketName)),
     send: over?.send ?? ((session, bytes, pane) => sendKeys(session, socketName, bytes, pane)),
     paste: over?.paste ?? ((session, text, pane) => pasteText(session, socketName, text, pane)),
+    seen: over?.seen ?? ((session) => clearBell(session, socketName)),
     resolve: over?.resolve ?? ((pane) => resolvePane(pane, { home, socketName })),
     version: over?.version ?? agentInfo,
     sleep: over?.sleep ?? ((ms) => new Promise((wake) => setTimeout(wake, ms))),

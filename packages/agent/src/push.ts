@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import webpush from 'web-push';
 import type { PushSubscription } from 'web-push';
+import type { BellSummary } from './bell-summary.js';
 import type { TermhubConfig } from './config.js';
 import { pushPath, writeSecretFile } from './paths.js';
 
@@ -40,15 +41,17 @@ export class PushService {
     this.save(list);
   }
 
-  /** Рассылает всем подпискам уведомление о звонке сессии (с троттлингом). */
-  async notifyBell(session: string, task = ''): Promise<void> {
+  /** Рассылает всем подпискам уведомление о звонке сессии (с троттлингом). `task` —
+   *  название беседы из заголовка панели; `summary` — что случилось (`bell-summary.ts`):
+   *  спросил ли агент и чем закончил. Клиент, который подробностей не знает, их пропустит. */
+  async notifyBell(session: string, task = '', summary: BellSummary | null = null): Promise<void> {
     const now = Date.now();
     if (now - (this.lastSent.get(session) ?? 0) < THROTTLE_MS) return;
     this.lastSent.set(session, now);
 
     const list = this.load();
     if (list.length === 0) return;
-    const payload = JSON.stringify({ session, task });
+    const payload = JSON.stringify({ session, task, ...(summary ?? {}) });
     const dead: string[] = [];
     await Promise.all(
       list.map(async (entry) => {

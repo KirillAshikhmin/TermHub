@@ -11,7 +11,7 @@
 
 import { onOverlayClosed } from './overlay-events';
 import { updateAppBadge } from './app-badge';
-import { markBellSeen, unseenBellCount } from './bell-seen';
+import { bellRaised, markBellSeen, unseenBellCount } from './bell-seen';
 import { mountComposer, type ComposerHandle } from './chat-composer';
 import { createChatImages } from './chat-images';
 import { mountLive, type LiveHandle } from './chat-live';
@@ -73,6 +73,10 @@ const OPEN_LAYERS =
   '.th-overlay:not([data-closing]), .th-palette, .th-spanel.is-open, .th-imgview, .th-menu.is-open, .th-live__sheet:not([hidden])';
 
 /** Монтирует чат сессии в host. */
+/** Не чаще чем раз в столько просят агента погасить флаг звонка tmux: опрос сессий, который
+ *  покажет, что флаг погас, идёт раз в три секунды. */
+const BELL_ACK_GAP_MS = 5000;
+
 export function mountChat(host: HTMLElement, session: string, transport: Transport): ChatHandle {
   host.replaceChildren();
 
@@ -139,6 +143,20 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   const seen = (): void => {
     markBellSeen(session);
     updateAppBadge(unseenBellCount());
+    ackBell();
+  };
+  // Флаг звонка в tmux гасит клиент, показавший окно, а чат клиентом tmux не бывает:
+  // пока чат на виду и флаг стоит, агента просят погасить его (действие `seen`). Иначе
+  // давно прочитанный звонок поднимался бы заново после каждой перезагрузки страницы.
+  let liveHandle: LiveHandle | null = null;
+  let ackAt = 0;
+  const ackBell = (): void => {
+    const handle = liveHandle;
+    if (!handle || !handle.state() || !bellRaised(session)) return;
+    if (transport.clientScope && !transport.clientScope.write) return;
+    if (document.visibilityState !== 'visible' || Date.now() - ackAt < BELL_ACK_GAP_MS) return;
+    ackAt = Date.now();
+    void handle.act({ kind: 'seen' }).catch(() => {});
   };
   seen();
   for (const type of ['pointerdown', 'keydown', 'focusin'] as const) root.addEventListener(type, seen, true);
@@ -282,9 +300,9 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     if (wasGone && !gone) claimFocus('returned');
     wasGone = gone;
   };
-  let liveHandle: LiveHandle | null = null;
   const live = (liveHandle = mountLive({ ...slots, head: stateRow, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
     syncGone();
+    ackBell();
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.
     feed.setBusy(state?.screen.kind === 'working');

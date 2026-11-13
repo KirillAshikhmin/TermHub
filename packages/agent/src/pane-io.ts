@@ -4,6 +4,8 @@
 // от клавиш не меняется. Каждый вызов — отдельный запуск tmux через общий `runTmux`.
 
 import { findSessionId, SESSION_ID_FORMAT } from './tmux-session.js';
+import { spawn } from 'node:child_process';
+
 import { runTmux } from './tmux-run.js';
 
 /** Снимок видимого экрана активной панели. */
@@ -144,4 +146,30 @@ export async function pasteText(
     if (opened) await sendChunk(target, socketName, encoder.encode(PASTE_CLOSE), run).catch(() => undefined);
     throw err;
   }
+}
+
+/** Погасить флаг звонка окна сессии. Флаг tmux гасит только клиент, показавший окно, а чат
+ *  клиентом не бывает (экран он читает разовым `capture-pane`). Поэтому — клиент на миг:
+ *  control mode с закрытым вводом выходит сразу, `ignore-size` не даёт ему тронуть размер
+ *  окна, `read-only` — ввод (замер на tmux 3.7c: флаг гаснет, клиентов не остаётся;
+ *  `select-window` и переключение `monitor-bell` флаг не гасят). Не бросает. */
+export async function clearBell(session: string, socketName: string | undefined): Promise<void> {
+  let target: string;
+  try {
+    // Цель подключения — сессия, а не окно: без двоеточия.
+    target = (await sessionTarget(session, socketName)).replace(/:$/, '');
+  } catch {
+    return;
+  }
+  const args = [...(socketName ? ['-L', socketName] : []), '-C', 'attach-session', '-f', 'ignore-size,read-only', '-t', target];
+  await new Promise<void>((done) => {
+    const child = spawn('tmux', args, { stdio: 'ignore' });
+    const timer = setTimeout(() => child.kill(), TMUX_TIMEOUT_MS);
+    const end = (): void => {
+      clearTimeout(timer);
+      done();
+    };
+    child.once('error', end);
+    child.once('exit', end);
+  });
 }

@@ -6,7 +6,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionInfo } from '@termhub/protocol';
-import { sessionWorking, sessionTitleText } from '@termhub/protocol';
+import { sessionManaged, sessionWorking, sessionTitleText } from '@termhub/protocol';
 import { findSessionId, isExistingSessionName, literalTmuxName, SESSION_ID_FORMAT } from './tmux-session.js';
 export { isExistingSessionName } from './tmux-session.js';
 import { runTmux, isNoServerError, type TmuxError } from './tmux-run.js';
@@ -358,7 +358,12 @@ export class SessionService {
       }
       const prev = this.prevBell.get(s.name) ?? false;
       if (s.bell && !prev) {
-        const task = this.lastTask.get(s.name) ?? '';
+        // Название беседы: запомненное за работой, а нет его — то, что стоит за индикатором
+        // сейчас. Claude Code 2.1.322+ держит «✳» и во время работы, «работающим» заголовок
+        // его не называет никогда, и запомненного у него не бывает. Заголовок без
+        // индикатора (имя хоста у оболочки) названием беседы не считается.
+        const task =
+          this.lastTask.get(s.name) ?? (sessionManaged(s.title) ? sessionTitleText(s.title) : '');
         for (const cb of this.bellCallbacks) cb(s.name, task);
       }
       this.prevBell.set(s.name, s.bell);
