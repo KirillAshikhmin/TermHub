@@ -22,7 +22,7 @@ import { t } from './i18n';
 import { termHash } from './routes';
 import { mountSessionBar } from './tabs';
 import type { Transport } from './transport';
-import type { ScreenState } from '@termhub/protocol/chat';
+import type { ChatAction, ScreenState } from '@termhub/protocol/chat';
 import { renderHoloBar, toast, wireToolbar } from './ui';
 import { setSessionViewPref } from './view-pref';
 
@@ -139,14 +139,18 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     images,
     // Ответ из записи вопроса: вопрос обязан ждать на экране агента — показанным либо в
     // очереди (тогда он сначала открывается), и нести вариант с той же подписью.
-    onAnswer: async (_question, label) => {
+    onAnswer: async (_question, pick) => {
       const handle = liveHandle;
       if (!handle || (!!transport.clientScope && !transport.clientScope.write)) return false;
       const same = (a: string, b: string): boolean => a.replace(/\s+/gu, ' ').trim() === b.replace(/\s+/gu, ' ').trim();
-      const shown = (screen: ScreenState | undefined): { stamp: string; key: string } | undefined => {
+      type Answer = Extract<ChatAction, { kind: 'answer' }>;
+      const shown = (screen: ScreenState | undefined): Answer | undefined => {
         const q = screen?.kind === 'question' ? screen.question : undefined;
-        const option = q && !q.multi ? q.options.find((o) => !o.free && same(o.label, label)) : undefined;
-        return q && option ? { stamp: q.stamp, key: option.key } : undefined;
+        if (!q || q.multi) return undefined;
+        // Свой текст — только вопросу без вариантов, с одним полем ответа.
+        if ('text' in pick) return q.field === undefined ? undefined : { kind: 'answer', stamp: q.stamp, text: pick.text };
+        const option = q.options.find((o) => !o.free && same(o.label, pick.label));
+        return option ? { kind: 'answer', stamp: q.stamp, option: option.key } : undefined;
       };
       try {
         let screen = handle.state()?.screen;
@@ -159,7 +163,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
           toast(t('chat.question.gone'), 'error');
           return false;
         }
-        const res = await handle.act({ kind: 'answer', stamp: found.stamp, option: found.key });
+        const res = await handle.act(found);
         if (!res.ok) toast(t('chat.question.failed'), 'error');
         else feed.refresh();
         return res.ok;

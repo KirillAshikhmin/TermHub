@@ -1,0 +1,10 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 181,
+  "rows": 49,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "Composite of pending-queued-opened after the owner's screenshot of 13.11.2026: a question without options, an answer field with the placeholder «Type your answer». Texts are made up."
+}

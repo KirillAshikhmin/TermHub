@@ -188,7 +188,7 @@ export interface FeedChatOptions {
   /** Ответить на вопрос из его записи в переписке: вариант неотвеченного вопроса становится
    *  кнопкой. Ждёт ли вопрос ответа на экране агента, решает получатель; `true` — ответ
    *  ушёл агенту. Нет — запись вопроса только читается. */
-  onAnswer?: (question: FeedQuestion, label: string) => Promise<boolean>;
+  onAnswer?: (question: FeedQuestion, pick: { label: string } | { text: string }) => Promise<boolean>;
 }
 
 /** Монтирует ленту сессии в host. */
@@ -667,7 +667,7 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
             const run = (): void => {
               if (list.classList.contains('is-busy') || li.dataset.answered) return;
               list.classList.add('is-busy');
-              void pick(q, o.label)
+              void pick(q, { label: o.label })
                 .then((sent) => {
                   if (!sent) return;
                   // Запись уже загружена и заново с агента не придёт (лента дочитывает только
@@ -694,6 +694,45 @@ export function mountFeed(host: HTMLElement, session: string, transport: Transpo
           list.append(li);
         }
         body.append(list);
+      }
+      // Вопрос без вариантов и без ответа: поле своего ответа прямо в записи.
+      if (pick && !q.options?.length) {
+        const row = document.createElement('div');
+        row.className = 'th-q__own';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'th-q__input';
+        input.placeholder = t('feed.question.own');
+        input.setAttribute('aria-label', t('feed.question.own'));
+        const send = document.createElement('button');
+        send.type = 'button';
+        send.className = 'th-q__send';
+        send.textContent = t('feed.question.send');
+        const run = (): void => {
+          const text = input.value.trim();
+          if (!text || send.disabled) return;
+          send.disabled = true;
+          void pick(q, { text })
+            .then((sent) => {
+              if (!sent) return;
+              q.answer = [text];
+              const line = document.createElement('div');
+              line.className = 'th-q__answer';
+              line.textContent = t('feed.question.answer', { text });
+              row.replaceWith(line);
+            })
+            .finally(() => {
+              send.disabled = false;
+            });
+        };
+        send.addEventListener('click', run);
+        input.addEventListener('keydown', (ev) => {
+          if (ev.key !== 'Enter') return;
+          ev.preventDefault();
+          run();
+        });
+        row.append(input, send);
+        body.append(row);
       }
       for (const own of given.filter((a) => !labels.has(a))) {
         const line = document.createElement('div');

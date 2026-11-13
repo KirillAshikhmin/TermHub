@@ -789,6 +789,26 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
     return after.met ? done(after.screen) : stopped();
   };
 
+  if (question.field !== undefined) {
+    // Вопрос без вариантов: текст набирается прямо в поле ответа, клавиша отправки отвечает.
+    const text =
+      typeof action.text === 'string'
+        ? action.text
+            .replace(/\s*[\r\n]+\s*/g, ' ')
+            // eslint-disable-next-line no-control-regex
+            .replace(/[\u0000-\u001f\u007f]/g, '')
+            .trim()
+        : '';
+    if (text === '') return fail('unsupported', 'this question takes a text answer');
+    // Набранное в поле до нас не дополняем.
+    if (question.field !== '') return fail('stale', 'the answer field already has text');
+    await press(ctx, text);
+    const typed = await until(ctx, (s) => same(s) && !!s.question!.field);
+    if (!typed.met) return stopped();
+    await press(ctx, profile.keys.submit);
+    return gone();
+  }
+
   if (action.text !== undefined) {
     // Свой ответ: клавиша свободного варианта ставит на него указатель, текст набирается
     // в его строке, клавиша отправки отвечает.

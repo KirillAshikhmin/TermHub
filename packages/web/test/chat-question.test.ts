@@ -216,4 +216,21 @@ describe('ответ из записи вопроса в переписке', ()
     expect(blocks()[0]!.querySelectorAll('.is-pickable')).toHaveLength(0);
     chat.teardown();
   });
+
+  it('вопрос без вариантов: поле в записи открывает ожидающий вопрос и отвечает текстом', async () => {
+    const TEXT_Q: FeedEntry = { ...ASKED, questions: [{ text: 'Назови устройство' }] };
+    const FIELD = { kind: 'question', question: { stamp: 'st-2', title: 'Назови устройство', options: [], freeText: true, field: '' } };
+    answer = () => page([structuredClone(TEXT_Q)]);
+    const acts: unknown[] = [];
+    const chat = mountChat(host, 'work', withLive(IDLE, acts, (a) => ({ ok: true, screen: a.kind === 'show-question' ? FIELD : IDLE })));
+    await flush();
+    const input = blocks()[0]!.querySelector<HTMLInputElement>('.th-q__input')!;
+    input.value = 'не могу назвать';
+    blocks()[0]!.querySelector<HTMLButtonElement>('.th-q__send')!.click();
+    await flush();
+    expect(acts).toEqual([{ kind: 'show-question' }, { kind: 'answer', stamp: 'st-2', text: 'не могу назвать' }]);
+    expect(blocks()[0]!.querySelector('.th-q__input')).toBeNull();
+    expect(blocks()[0]!.querySelector('.th-q__answer')!.textContent).toBe(t('feed.question.answer', { text: 'не могу назвать' }));
+    chat.teardown();
+  });
 });

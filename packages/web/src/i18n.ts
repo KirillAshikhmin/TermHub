@@ -497,6 +497,8 @@ const ru: Dict = {
     question: {
       label: 'Вопрос агента',
       answer: 'ответ: {text}',
+      own: 'Ваш ответ',
+      send: 'Ответить',
       chosen: 'выбрано: {text}',
     },
     note: {
@@ -1210,6 +1212,8 @@ const en: Dict = {
     question: {
       label: 'Agent’s question',
       answer: 'answer: {text}',
+      own: 'Your answer',
+      send: 'Answer',
       chosen: 'chosen: {text}',
     },
     note: {

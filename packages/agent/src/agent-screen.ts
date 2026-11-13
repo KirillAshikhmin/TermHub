@@ -468,6 +468,27 @@ function readDialog(
     notes = rows[at]!.dim.has(start) ? '' : found[1]!;
     bottom = at - 1;
   }
+  // Вопрос без вариантов: над подсказкой — поле ответа, блок строк с отступом без единого
+  // варианта; над ним, через пустую строку, шапка вопроса.
+  if (dialog.field) {
+    const at = lastFilled(rows, bottom);
+    let first = at;
+    while (first - 1 >= 0 && !blank(rows[first - 1])) first--;
+    const lines = at < 0 ? [] : rows.slice(first, at + 1);
+    if (lines.length > 0 && lines.every((row) => row.text.startsWith('  ') && !optionOf(row.text, profile))) {
+      const typed = lines.map((row) => row.text.trim()).join('\n');
+      const head = readHead(rows, first - 1, dialog, profile);
+      if (!head) return null;
+      return {
+        stamp: questionStamp(head.title, [], head.place ? `${head.body}\u0005${head.place}` : head.body),
+        title: head.title,
+        ...(head.body ? { body: head.body } : {}),
+        options: [],
+        freeText: true,
+        field: dialog.field.test(typed) ? '' : typed,
+      };
+    }
+  }
   const options: ScreenOption[] = [];
   let extra: Row[] = [];
   let ruleBelow = false;

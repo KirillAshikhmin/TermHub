@@ -118,6 +118,8 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'pending-queued-two': 'working',
     'pending-queued-opened': 'question',
     'pending-queued-opened-body': 'question',
+    'pending-opened-text': 'question',
+    'pending-opened-text-typed': 'question',
     'pending-queued-first-of-two': 'question',
     'pending-queued-last-of-two': 'question',
     'pending-queued-other': 'question',
@@ -1915,6 +1917,21 @@ describe('очередь агента: тексты сообщений и воз
       queue: [{ text: 'queued message two' }],
       notices: ['weekly limit: 23% left · resets at 04:22 on 16 Nov · /status'],
     });
+  });
+
+  it('Codex: вопрос без вариантов — поле ответа; набранное в поле отпечаток не меняет', () => {
+    const empty = read('codex', 'pending-opened-text');
+    expect(empty).toMatchObject({
+      kind: 'question',
+      question: {
+        title: 'Name one device that left «Connected» and showed up in «Discovered»: a model or a topic. It helps to tell a recreated device from a second find.',
+        options: [],
+        freeText: true,
+        field: '',
+      },
+    });
+    const typed = read('codex', 'pending-opened-text-typed');
+    expect(typed.question).toMatchObject({ field: 'cannot name one, it was long ago', stamp: empty.question!.stamp });
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {

@@ -1613,3 +1613,23 @@ describe('запрос нумерованным списком доходит д
     expect(busy.sent).toEqual([`paste:${LIST}`, '\r']);
   });
 });
+
+describe('sessionAct — вопрос Codex без вариантов: ответ текстом в поле', () => {
+  it('текст набирается в поле, Enter отвечает; вариантом на такой вопрос не ответить', async () => {
+    const f = fake('codex', 'pending-opened-text', (sent) =>
+      sent === 'cannot name one, it was long ago' ? 'pending-opened-text-typed' : sent === '\r' ? 'working' : undefined,
+    );
+    const stamp = stampOf('codex', 'pending-opened-text');
+    expect(await act(f, { kind: 'answer', stamp, option: '1' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(f.sent).toEqual([]);
+    expect(await act(f, { kind: 'answer', stamp, text: 'cannot name one,\nit was long ago' })).toMatchObject({ ok: true });
+    expect(f.sent).toEqual(['cannot name one, it was long ago', '\r']);
+  });
+
+  it('в поле уже набрано — клавиш нет', async () => {
+    const f = fake('codex', 'pending-opened-text-typed', () => undefined);
+    const stamp = stampOf('codex', 'pending-opened-text-typed');
+    expect(await act(f, { kind: 'answer', stamp, text: 'hello' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([]);
+  });
+});

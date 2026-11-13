@@ -5897,6 +5897,41 @@ main.th-feed--chat {
   font-size: 0.85em;
   color: var(--text-dim);
 }
+.th-q__own {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.th-q__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm, 6px);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.th-q__input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.th-q__send {
+  flex: none;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm, 6px);
+  background: var(--accent-tint);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.th-q__send:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
 .th-q__answer {
   margin-top: 8px;
   color: var(--accent);
