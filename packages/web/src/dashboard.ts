@@ -15,7 +15,7 @@ import { activity } from './activity';
 import { termHash } from './routes';
 import { previewOf, refreshPreviews } from './session-preview';
 import { AGENT_MARK, clearGroupHeaders, groupSessions, syncGroupHeaders, syncSessionHead } from './session-view';
-import { sessionAgent, sessionManaged, sessionTitleText, sessionWorking } from './session-status';
+import { sessionAgent, sessionByOutput, sessionTitleText, sessionWorking } from './session-status';
 import { bellUnseen, observeBells, unseenBellCount } from './bell-seen';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { updateAppBadge } from './app-badge';
@@ -492,7 +492,7 @@ export function mountDashboard(
     for (const session of sessions) {
       const existing = cards.get(session.name);
       // Работает: Claude-спиннер в заголовке; не-Claude сессии — fallback по опросу.
-      const hot = sessionWorking(session.title) || (!sessionManaged(session.title) && activity.isHot(session.name));
+      const hot = sessionWorking(session.title) || (sessionByOutput(session.title) && activity.isHot(session.name));
       // 🔔 — только пока звонок «не прочитан» (не открывали сессию).
       const s = { ...session, bell: bellUnseen(session.name) };
       if (!existing) {

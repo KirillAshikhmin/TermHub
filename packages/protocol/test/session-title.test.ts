@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  sessionByOutput,
   sessionManaged,
   sessionTitleText,
   sessionWaiting,
@@ -96,5 +97,17 @@ describe('session-title — что индикатором НЕ считаетс�
     expect(sessionWorking('')).toBe(false);
     expect(sessionManaged('')).toBe(false);
     expect(sessionTitleText('')).toBe('');
+  });
+});
+
+// Claude Code 2.1.322+ держит «✳» в заголовке и во время работы: о работе такой сессии
+// судят по выводу панели, как у сессии без индикатора вовсе.
+describe('sessionByOutput', () => {
+  it('без индикатора и с неподвижным «✳» Claude — по выводу; спиннер и ожидание Codex — нет', () => {
+    expect(sessionByOutput('zsh')).toBe(true);
+    expect(sessionByOutput('')).toBe(true);
+    expect(sessionByOutput('✳ Refactor the parser')).toBe(true);
+    expect(sessionByOutput('⠹ MQTT')).toBe(false);
+    expect(sessionByOutput('[ ! ] Action Required | Router')).toBe(false);
   });
 });

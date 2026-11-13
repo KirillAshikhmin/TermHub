@@ -49,6 +49,15 @@ export function sessionManaged(title: string): boolean {
   return titleIndicator(title) !== '';
 }
 
+/** Работу сессии заголовок не называет — о ней судят по выводу панели (`session_activity`):
+ *  индикатора нет вовсе либо это неподвижный знак Claude «✳». Claude Code 2.1.322+ держит
+ *  его в заголовке и во время работы (замер 14.11.2026: работающая сессия, шесть чтений
+ *  заголовка подряд — всегда «✳»), так что «ждёт» он больше не означает. */
+export function sessionByOutput(title: string): boolean {
+  const ind = titleIndicator(title);
+  return ind === '' || (ind === WAITING && !CODEX_WAITING_RE.test(title));
+}
+
 /** Управляемая сессия сейчас работает: индикатор есть, но это не статус ожидания. */
 export function sessionWorking(title: string): boolean {
   const ind = titleIndicator(title);

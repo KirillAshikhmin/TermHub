@@ -6,6 +6,7 @@
 // которому нельзя попадать в LAN-бандл.
 
 export {
+  sessionByOutput,
   sessionManaged,
   sessionTitleText,
   sessionWaiting,

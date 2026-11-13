@@ -51,11 +51,11 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('чат: живая часть в оболочке', () => {
-  it('состояние — в строке шапки переписки (слот status пуст), ряд управления — перед полем ввода; смена состояния просит приращение', async () => {
+  it('состояние — строкой под перепиской (слот status пуст), ряд управления — перед полем ввода; смена состояния просит приращение', async () => {
     current = state('idle');
     const chat = mountChat(host, 'work', transport);
     await vi.advanceTimersByTimeAsync(10);
-    expect(chat.el.querySelector('.th-feed__head .th-live__state')).not.toBeNull();
+    expect(chat.el.querySelector('.th-chat__state .th-live__state')).not.toBeNull();
     expect(chat.slots.status.childElementCount).toBe(0);
     expect(chat.slots.composer.querySelector('.th-composer')).not.toBeNull();
     // над полем ввода — место карточки вопроса, над ним — ряд управления

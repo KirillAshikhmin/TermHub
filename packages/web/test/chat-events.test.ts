@@ -256,14 +256,18 @@ describe('события фоновых агентов', () => {
   });
 });
 
-describe('состояние агента в строке шапки переписки', () => {
-  it('слово состояния, время и токены стоят в шапке рядом с агентом; слот status пуст', async () => {
+describe('состояние агента — строкой между перепиской и нижней панелью', () => {
+  it('слово состояния, время и токены стоят под перепиской; в шапке — только название агента; слот status пуст', async () => {
     screen = liveOf({ kind: 'working', status: 'Transmuting…', elapsed: 75, tokens: 2100 });
     const c = await open();
-    const head = q('.th-feed__head')!;
-    const state = head.querySelector('.th-live__state')!;
+    const row = q('.th-chat__state')!;
+    const state = row.querySelector('.th-live__state')!;
     expect(state.textContent).toBe(`Transmuting… · 1m 15s · ${t('chat.live.tokens', { n: '2.1k' })}`);
-    expect(head.querySelector('.th-feed__agent')!.nextElementSibling!.contains(state)).toBe(true);
+    // Строка стоит сразу за перепиской, до карточки вопроса и поля ввода.
+    expect(row.previousElementSibling).toBe(q('.th-chat__thread'));
+    expect(row.compareDocumentPosition(c.slots.composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(q('.th-feed__head .th-live__state')).toBeNull();
+    expect(q('.th-feed__head .th-feed__agent')).not.toBeNull();
     expect(c.slots.status.childElementCount).toBe(0);
     expect(host.querySelectorAll('.th-live__bar').length).toBe(1);
   });
@@ -277,14 +281,14 @@ describe('состояние агента в строке шапки переп�
     screen = { ok: false, reason: 'lookup-failed', detail: '' };
     await open();
     expect(q('.th-feed__live')!.hidden).toBe(false);
-    expect(q('.th-feed__head .th-live__bar')!.hidden).toBe(true);
+    expect(q('.th-chat__state .th-live__bar')!.hidden).toBe(true);
     chat!.teardown();
     // Опрос состояния говорит, что агента в панели нет, — работающим шапка его не называет,
     // что бы ни отвечала лента.
     screen = { ok: false, reason: 'no-agent', detail: '' };
     await open();
     expect(q('.th-feed__live')!.hidden).toBe(true);
-    expect(q('.th-feed__head .th-live__bar')!.hidden).toBe(true);
+    expect(q('.th-chat__state .th-live__bar')!.hidden).toBe(true);
   });
 
   it('ожидание фоновых агентов названо числом; чего экран не дал — того нет', async () => {
@@ -322,15 +326,15 @@ describe('состояние агента в строке шапки переп�
     expect(q('.th-live__state')!.textContent).toContain('Transmuting…');
   });
 
-  it('нет связи — видно в шапке', async () => {
+  it('нет связи — видно в строке состояния', async () => {
     vi.useFakeTimers();
     try {
       chat = mountChat(host, 'work', transport());
       await vi.advanceTimersByTimeAsync(10);
       screen = new Error('network');
       await vi.advanceTimersByTimeAsync(1100);
-      expect(q('.th-feed__head .th-live__state')!.textContent).toBe(t('chat.live.offline'));
-      expect(q('.th-feed__head .th-live__bar')!.hidden).toBe(false);
+      expect(q('.th-chat__state .th-live__state')!.textContent).toBe(t('chat.live.offline'));
+      expect(q('.th-chat__state .th-live__bar')!.hidden).toBe(false);
     } finally {
       chat?.teardown();
       chat = undefined;

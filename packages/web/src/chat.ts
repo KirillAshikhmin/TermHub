@@ -10,6 +10,8 @@
 // по высоте содержимого, поле ввода всегда у нижнего края, карточка вопроса — сразу над ним.
 
 import { onOverlayClosed } from './overlay-events';
+import { updateAppBadge } from './app-badge';
+import { markBellSeen, unseenBellCount } from './bell-seen';
 import { mountComposer, type ComposerHandle } from './chat-composer';
 import { createChatImages } from './chat-images';
 import { mountLive, type LiveHandle } from './chat-live';
@@ -127,7 +129,19 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
   const thread = document.createElement('div');
   thread.className = 'th-chat__thread';
   thread.setAttribute('aria-label', t('chat.thread'));
-  root.append(offlineEl, slots.status, thread, goneEl, slots.terminal, slots.question, slots.composer);
+  // Состояние агента («Работает… · время · токены») — между перепиской и нижней панелью,
+  // как строка работы в терминале; название агента остаётся в шапке переписки.
+  const stateRow = document.createElement('div');
+  stateRow.className = 'th-chat__state';
+  root.append(offlineEl, slots.status, thread, stateRow, goneEl, slots.terminal, slots.question, slots.composer);
+  // Открытый чат и любое действие в нём — просмотр сессии: её звонок прочитан (как ввод
+  // в терминале).
+  const seen = (): void => {
+    markBellSeen(session);
+    updateAppBadge(unseenBellCount());
+  };
+  seen();
+  for (const type of ['pointerdown', 'keydown', 'focusin'] as const) root.addEventListener(type, seen, true);
   host.append(sbar.el, toolbar, root);
   hideBar = wireToolbar({ toolbars: [toolbar], floatMount: root, toggleMount: sbar.toggleSlot }).hide;
 
@@ -269,7 +283,7 @@ export function mountChat(host: HTMLElement, session: string, transport: Transpo
     wasGone = gone;
   };
   let liveHandle: LiveHandle | null = null;
-  const live = (liveHandle = mountLive({ ...slots, head: feed.stateSlot, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
+  const live = (liveHandle = mountLive({ ...slots, head: stateRow, stop: feed.stopSlot, onTerminalClosed }, session, transport, (state, changed) => {
     syncGone();
     feed.setStateShown(state !== null);
     // Пока агент работает, переписка дочитывается раз в секунду.

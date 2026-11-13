@@ -4370,7 +4370,20 @@ main.th-feed {
 .th-feed__state:has(> .th-live__bar[hidden]) {
   display: none;
 }
-.th-feed__state .th-live__bar {
+.th-chat__state {
+  flex: none;
+  padding: 2px 12px;
+  min-width: 0;
+}
+.th-chat__state:empty,
+.th-chat__state:has(> .th-live__bar[hidden]) {
+  display: none;
+}
+.th-chat__state .th-live__state {
+  flex: 0 1 auto;
+}
+.th-feed__state .th-live__bar,
+.th-chat__state .th-live__bar {
   display: inline-flex;
   min-width: 0;
   gap: 6px;

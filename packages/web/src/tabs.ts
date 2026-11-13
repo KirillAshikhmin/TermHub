@@ -13,7 +13,7 @@ import { hasServerPicker, iconButton, openServerPicker, renderMenu, sortSelect, 
 import { openRenameModal, renderSessionCard } from './dashboard';
 import { moveInOrder, readManualOrder, readSortMode, sortSessions, writeManualOrder } from './session-sort';
 import { activity } from './activity';
-import { sessionManaged, sessionTitleText, sessionWorking } from './session-status';
+import { sessionByOutput, sessionTitleText, sessionWorking } from './session-status';
 import {
   AGENT_MARK,
   clearGroupHeaders,
@@ -434,7 +434,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       render(latest); // полоса вкладок идёт в том же порядке
     };
     for (const s of shown) {
-      const hot = sessionWorking(s.title) || (!sessionManaged(s.title) && activity.isHot(s.name));
+      const hot = sessionWorking(s.title) || (sessionByOutput(s.title) && activity.isHot(s.name));
       // 🔔 — только пока звонок «не прочитан»; у текущей сессии он всегда прочитан.
       const info = { ...s, bell: bellUnseen(s.name) };
       const card = renderSessionCard(info, t, {
@@ -583,7 +583,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
       const isCurrent = s.name === opts.current;
       // Работает: Claude-спиннер в заголовке; не-Claude сессии — fallback по
       // session_activity (потока к ним нет, судим по опросу).
-      const show = sessionWorking(s.title) || (!sessionManaged(s.title) && activity.isHot(s.name));
+      const show = sessionWorking(s.title) || (sessionByOutput(s.title) && activity.isHot(s.name));
       // 🔔 — только пока звонок «не прочитан» (не открывали сессию).
       const info = { ...s, bell: bellUnseen(s.name) };
       if (existing) updateSessionTab(existing, info, isCurrent, t, show);
@@ -605,7 +605,7 @@ export function mountSessionTabs(opts: SessionTabsOpts): {
     syncSideHeader(
       side,
       { ...cur, bell: false },
-      sessionWorking(cur.title) || (!sessionManaged(cur.title) && activity.isHot(cur.name)),
+      sessionWorking(cur.title) || (sessionByOutput(cur.title) && activity.isHot(cur.name)),
     );
     const focusInside = document.activeElement instanceof Node && strip.contains(document.activeElement);
     if (!focusInside) {
