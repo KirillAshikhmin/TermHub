@@ -120,6 +120,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'pending-queued-opened-body': 'question',
     'pending-opened-text': 'question',
     'pending-opened-text-typed': 'question',
+    'pending-opened-wrapped': 'question',
     'pending-queued-first-of-two': 'question',
     'pending-queued-last-of-two': 'question',
     'pending-queued-other': 'question',
@@ -1924,14 +1925,24 @@ describe('очередь агента: тексты сообщений и воз
     expect(empty).toMatchObject({
       kind: 'question',
       question: {
-        title: 'Name one device that left «Connected» and showed up in «Discovered»: a model or a topic. It helps to tell a recreated device from a second find.',
+        title: 'Name an animal',
         options: [],
         freeText: true,
         field: '',
       },
     });
     const typed = read('codex', 'pending-opened-text-typed');
-    expect(typed.question).toMatchObject({ field: 'cannot name one, it was long ago', stamp: empty.question!.stamp });
+    expect(typed.question).toMatchObject({ field: 'a grey heron, seen long ago', stamp: empty.question!.stamp });
+    // Первый из двух вопросов очереди: «1 of 2», текст в две строки, две пустые строки под заголовком блока.
+    expect(read('codex', 'pending-opened-wrapped').question).toMatchObject({
+      title:
+        'Bring the request to merge? I am asking separately because the skill requires asking right after creating the request, and I want to be sure.',
+      options: [
+        { key: '1', label: 'Yes, bring it to merge', selected: true },
+        { key: '2', label: 'No, leave it as is' },
+        { key: '3', label: 'Other', free: true },
+      ],
+    });
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {

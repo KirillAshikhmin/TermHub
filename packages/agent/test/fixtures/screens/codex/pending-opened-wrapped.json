@@ -1,0 +1,10 @@
+{
+  "agent": "codex",
+  "version": "0.167.2",
+  "cols": 140,
+  "rows": 45,
+  "alt": false,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "The first of two queued questions opened: «1 of 2», a question wrapped over two lines, two blank lines under the block title. Measured 13.11.2026."
+}

@@ -1,49 +1,45 @@
-
-  [38;2;99;168;248m>_ [1m[39mOpenAI Codex[0;2m (v0.167.2)[0m
      [2m~/probe/work[0m
 
-  [1m[38;2;243;139;168mTip:[0m Use [38;2;166;227;161m⌃x p[39m, then 0–9 to run a preset; Enter browses, s saves, and d deletes.
+[2m  To get started, describe a task or try one of these commands:[0m
+
+  /init[2m - create an AGENTS.md file with instructions for Codex[0m
+  /status[2m - show current session configuration[0m
+  /permissions[2m - choose what Codex is allowed to do[0m
+  /model[2m - choose what model and reasoning effort to use[0m
+  /review[2m - review any changes and find issues[0m
+
+[1m⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.[0m
 
 [48;5;8m
-[1;2m› [0m[48;5;8mFirst run the shell command `sleep 5`. Then ask me one question "Cats or dogs?" with the options Cats and Dogs using your question tool that does not stop the turn
-  (request_user_input_async if you have it), and without waiting for my answer immediately run `sleep 90`. Then say done.
+[1;2m› [0m[48;5;8mFirst run the shell command: sleep 120 (in the background if you can). While it runs, call request_user_input_async with exactly one
+  free-text question without any options: "Name a color". Do not wait for my answer before starting the sleep.
 
+[49m
+[2m• [0mI’ll start the sleep in the background, then ask the question.
 
-[2m[49m• [0mI’ll run the sleeps and ask the question in the order you specified.
+[38;2;99;168;248m? Name a color[39m
 
-[1m[38;5;2m•[0m [1mRan[0m [38;2;137;180;250msleep[38;2;205;214;244m 5[39m
-[2m  └ (no output)[0m
+[2m• [0mStarted [38;2;166;227;161msleep 120[39m in the background and asked “Name a color”.
 
-[38;2;99;168;248m? Cats or dogs?[39m
+[2m  Worked for 18s • 22:18
+[0m
+[48;5;8m
+[1;2m› [0m[48;5;8mNow: call request_user_input_async with one free-text question without options: "Name an animal". Immediately after that, in the same
+  turn, run the foreground shell command sleep 100 and wait for it to finish before replying.
 
-  [38;2;148;226;213m• [39mCats
-  [38;2;148;226;213m• [39mDogs
+[49m
+[2m• [0mI’ll ask the question, then run [38;2;166;227;161msleep 100[39m and wait for it to finish.
 
-Working [2m(31s • [0;1mesc[0;2m to interrupt) · 1 background terminal running · /ps to view · /stop to close[0m
+[38;2;99;168;248m? Name an animal[39m
+
+Working [2m(30s • [0;1mesc[0;2m to interrupt) · 2 background terminals running · /ps to view · /stop to close[0m
 
 [2m• [0mQueued follow-up inputs
 
 
-[48;2;53;58;66m  [38;2;99;168;248mName one device that left «Connected» and showed up in «Discovered»: a model or a topic. It helps[39m
-  [38;2;99;168;248mto tell a recreated device from a second find.[39m
+  [38;2;99;168;248mName an animal[39m
 
-  [2mType your answer[0m[48;2;53;58;66m
+  [2mType your answer[0m
 
-  [1menter[0m[48;2;53;58;66m submit   [1m⌃][0m[48;2;53;58;66m skip   [1m⇧→[0m[48;2;53;58;66m main prompt
-[48;2;53;58;66m[49m
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  [1menter[0m submit   [1m⌃][0m skip   [1m⇧→[0m main prompt
 

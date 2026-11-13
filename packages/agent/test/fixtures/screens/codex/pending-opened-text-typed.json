@@ -1,10 +1,10 @@
 {
   "agent": "codex",
   "version": "0.167.2",
-  "cols": 181,
-  "rows": 49,
+  "cols": 140,
+  "rows": 45,
   "alt": false,
   "capture": "tmux capture-pane -p -e",
   "tmux": "3.7c",
-  "note": "Composite of pending-queued-opened after the owner's screenshot of 13.11.2026: a question without options, an answer field with the placeholder «Type your answer». Texts are made up. The typed state is assumed (text in place of the placeholder), not measured."
+  "note": "The same question with text typed into the answer field. Measured 13.11.2026."
 }
