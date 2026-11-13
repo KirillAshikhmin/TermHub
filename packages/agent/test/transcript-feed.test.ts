@@ -1017,3 +1017,21 @@ describe('лента: показывать нечего — остаётся о�
     expect(p.entries.map((e) => e.kind)).toEqual(['tool', 'tool', 'tool', 'tool']);
   });
 });
+
+describe('ошибка хода Codex в записи завершения хода', () => {
+  it('task_complete с ошибкой — веха error с её текстом; без ошибки — ничего', () => {
+    const line = (payload: unknown): string =>
+      JSON.stringify({ timestamp: '2026-11-13T07:00:00.000Z', type: 'event_msg', payload });
+    const failed = parseLine(
+      line({
+        type: 'task_complete',
+        turn_id: 't1',
+        last_agent_message: null,
+        error: { message: 'Selected model is at capacity. Please try a different model.', codex_error_info: 'server_overloaded' },
+      }),
+      'codex',
+    );
+    expect(failed).toMatchObject({ kind: 'note', note: 'error', text: 'Selected model is at capacity. Please try a different model.' });
+    expect(parseLine(line({ type: 'task_complete', turn_id: 't2', last_agent_message: 'done' }), 'codex')).toBeNull();
+  });
+});

@@ -140,6 +140,16 @@ describe('опрос экрана', () => {
 });
 
 describe('полоса состояния', () => {
+  it('предупреждение агента с экрана стоит строкой, пока агент его показывает', async () => {
+    const fx = fixture(live({ kind: 'idle', notices: ['Heads up, less than 25% of your weekly limit left.'] }));
+    await mount(fx);
+    const warn = q('.th-live__warn')!;
+    expect(warn.textContent).toBe('⚠ Heads up, less than 25% of your weekly limit left.');
+    fx.next(live({ kind: 'idle' }));
+    await run(1000);
+    expect(q('.th-live__warn')).toBeNull();
+  });
+
   it('называет состояние, время работы и очередь; «Стоп» — только при работе и шлёт interrupt', async () => {
     const fx = fixture(live({ kind: 'idle', mode: 'manual' }));
     await mount(fx);

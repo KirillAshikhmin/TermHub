@@ -94,6 +94,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
   },
   codex: {
     idle: 'idle',
+    'idle-notices': 'idle',
     'idle-plan': 'idle',
     working: 'working',
     'working-typing': 'working',
@@ -1896,6 +1897,14 @@ describe('очередь агента: тексты сообщений и воз
         ],
       },
     });
+  });
+
+  it('Codex: предупреждение в переписке над строкой ввода читается; строка ошибки — нет (она в транскрипте)', () => {
+    expect(read('codex', 'idle-notices')).toMatchObject({
+      kind: 'idle',
+      notices: ['Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.'],
+    });
+    expect(read('codex', 'idle')).not.toHaveProperty('notices');
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {

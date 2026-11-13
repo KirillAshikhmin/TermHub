@@ -93,6 +93,9 @@ export interface ScreenState {
   agents?: BackgroundAgent[];
   /** Число фоновых агентов из подвала («← 2 agents») — только когда списка на экране нет. */
   agentCount?: number;
+  /** Предупреждения агента, видимые сейчас в переписке на экране (Codex: «⚠ Heads up, you
+   *  have less than 25% of your weekly limit left…»): в транскрипт они не пишутся. */
+  notices?: string[];
   /** Для `question` и `permission`. */
   question?: ScreenQuestion;
   /** Вопрос ждёт, но на экране его нет: агент говорит о нём и показывает по клавише

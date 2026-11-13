@@ -4622,6 +4622,17 @@ main.th-feed {
   opacity: 0.5;
   cursor: default;
 }
+.th-live__warn {
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  color: var(--warn, #e0af68);
+}
+.th-live__warn[hidden] {
+  display: none;
+}
+.th-live__warn-line {
+  overflow-wrap: anywhere;
+}
 .th-live__notice {
   display: flex;
   align-items: center;

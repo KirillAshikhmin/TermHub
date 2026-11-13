@@ -300,6 +300,21 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     },
   });
 
+  // Предупреждения самого агента с экрана: стоят, пока агент их показывает.
+  const warnEl = el('div', 'th-live__warn');
+  warnEl.setAttribute('role', 'status');
+  let warnShown = '';
+  const syncWarn = (): void => {
+    const list = offline ? [] : (state?.screen.notices ?? []);
+    const key = list.join('\n');
+    if (key === warnShown) return;
+    warnShown = key;
+    // В разметке строка стоит, только пока есть что показать.
+    if (list.length === 0) warnEl.remove();
+    else if (!warnEl.isConnected) host.status.append(warnEl);
+    warnEl.replaceChildren(...list.map((text) => el('div', 'th-live__warn-line', `⚠ ${text}`)));
+  };
+
   let notice: HTMLElement | null = null;
   const showNotice = (s: LiveState): void => {
     notice = el('div', 'th-live__notice');
@@ -620,6 +635,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       if (prev?.screen.kind === 'working' && next.screen.kind !== 'working') void loadUsage();
     }
     render();
+    syncWarn();
     emit(prev?.screen.kind !== next?.screen.kind || (prev === null) !== (next === null));
   };
 

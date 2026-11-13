@@ -945,8 +945,16 @@ function fromCodex(rec: Record<string, unknown>, offset: number): FeedEntry[] {
     if (kept.length > 0) entry.retained = { human, agent: kept.length - human };
     return [entry];
   }
-  if (rec.type === 'event_msg')
-    return payload?.type === 'error' ? [note(base, 'error', str(payload.message))] : [];
+  if (rec.type === 'event_msg') {
+    if (payload?.type === 'error') return [note(base, 'error', str(payload.message))];
+    // Ход, оборванный ошибкой («Selected model is at capacity…»): Codex 0.167 пишет её в
+    // запись завершения хода, отдельного события ошибки нет (замер 13.11.2026).
+    if (payload?.type === 'task_complete') {
+      const error = errorText(payload.error);
+      return error ? [note(base, 'error', error)] : [];
+    }
+    return [];
+  }
   if (rec.type !== 'response_item' || !payload) return [];
   if (payload.type === 'message') {
     // `developer` — это инструкции окружения, а не реплика человека.

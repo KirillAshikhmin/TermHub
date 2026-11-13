@@ -917,6 +917,15 @@ function readBox(
   // «Отправить сейчас» называет подпись, под которой стоит очередь; строка ввода пуста.
   const queueSend =
     profile.keys.sendNow !== undefined && under >= 0 && !!queue && queue.length > 0 && input === '' && !invite;
+  // Предупреждения агента в переписке над строкой ввода: до трёх последних, без повторов.
+  const notices: string[] = [];
+  if (signs.notice) {
+    for (let i = box.top - 1; i >= 0 && notices.length < 3; i--) {
+      const found = signs.notice.exec(rows[i]!.text);
+      const text = found?.[1]?.trim();
+      if (text && !notices.includes(text)) notices.unshift(text);
+    }
+  }
   return {
     kind: working ? 'working' : 'idle',
     ...(status === undefined ? {} : { status }),
@@ -929,6 +938,7 @@ function readBox(
     ...(queue && queue.length > 0 ? { queue } : {}),
     ...(queueEdit === undefined ? {} : { queueEdit }),
     ...(queueSend ? { queueSend: true } : {}),
+    ...(notices.length > 0 ? { notices } : {}),
     ...(model === undefined ? {} : { model }),
     ...backgroundOf(box, profile),
     ...(invite ? { pending: true } : {}),
