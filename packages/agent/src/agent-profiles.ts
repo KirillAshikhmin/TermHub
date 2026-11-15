@@ -262,6 +262,8 @@ export interface AgentProfile {
     answerPending?: string;
     /** Указатель диалога на вариант ниже — для своего ответа заметкой (`DialogSign.notes`). */
     optionDown?: string;
+    /** Указатель на вариант выше — пара к `optionDown`. */
+    optionUp?: string;
     /** Открыть поле заметки в диалоге. */
     notes?: string;
     /** Следующий и предыдущий шаг полосы над вопросом (`screen.steps`). */
@@ -306,6 +308,9 @@ const CLAUDE: AgentProfile = {
     clearBusy: '\x15',
     // Ctrl+X, Ctrl+S — так их называет подпись под очередью: «ctrl+x ctrl+s to send now».
     sendNow: ['\x18', '\x13'],
+    // Стрелки в вопросе с окном предпросмотра: «↑/↓ to navigate» в его подсказке.
+    optionDown: '\x1b[B',
+    optionUp: '\x1b[A',
     // Стрелка вверх — так её называет заглушка строки ввода: «Press up to edit queued
     // messages». Возвращает в строку всю очередь разом, по сообщению на строку.
     unqueue: '\x1b[A',
@@ -497,6 +502,7 @@ const CODEX: AgentProfile = {
     // Shift+← (CSI 1;2 D) — так его называет блок очереди: «⇧← to answer».
     answerPending: '\x1b[1;2D',
     optionDown: '\x1b[B',
+    optionUp: '\x1b[A',
     notes: '\t',
   },
   modes: [

@@ -1965,6 +1965,9 @@ describe('очередь агента: тексты сообщений и воз
     );
     expect(screen.question!.options.some((o) => o.free)).toBe(false);
     expect(screen.question).not.toHaveProperty('freeText');
+    // Цифра на таком вопросе не отвечает — вариант выбирают указателем и Enter.
+    expect(screen.question!.byPointer).toBe(true);
+    expect(read('claude', 'question').question).not.toHaveProperty('byPointer');
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {

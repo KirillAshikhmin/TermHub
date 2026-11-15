@@ -1644,3 +1644,21 @@ describe('sessionAct — сессию смотрят в чате (seen)', () => 
     expect(f.sent).toEqual([]);
   });
 });
+
+describe('sessionAct — вопрос Claude с окном предпросмотра: ответ указателем и Enter (замер 16.11.2026)', () => {
+  const DOWN = '\x1b[B';
+
+  it('указатель уже на варианте — только Enter; цифра не шлётся', async () => {
+    const f = fake('claude', 'question-preview', (sent) => (sent === '\r' ? 'question-series-first' : undefined));
+    const stamp = stampOf('claude', 'question-preview');
+    expect(await act(f, { kind: 'answer', stamp, option: '1' })).toMatchObject({ ok: true, screen: { kind: 'question' } });
+    expect(f.sent).toEqual(['\r']);
+  });
+
+  it('другой вариант: стрелка вниз, и без подтверждения экраном Enter не идёт', async () => {
+    const f = fake('claude', 'question-preview', () => undefined);
+    const stamp = stampOf('claude', 'question-preview');
+    expect(await act(f, { kind: 'answer', stamp, option: '2' })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(f.sent).toEqual([DOWN]);
+  });
+});

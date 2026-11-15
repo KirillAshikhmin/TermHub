@@ -932,6 +932,26 @@ async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>)
   if (!option) return fail('unsupported', 'no such option in the question');
   if (option.free) return fail('unsupported', 'the free-text option needs a text');
   if (question.multi) return fail('unsupported', 'this question takes several marks');
+  if (question.byPointer) {
+    // Цифра здесь не отвечает: указатель ведут стрелками до варианта — каждый шаг
+    // подтверждает экран, — затем клавиша отправки.
+    const { optionDown, optionUp } = profile.keys;
+    const keys = question.options.map((o) => o.key);
+    const want = keys.indexOf(option.key);
+    let now = keys.indexOf(selectedKey(screen) ?? '');
+    if (now < 0) return fail('stale', 'no pointer in the question');
+    while (now !== want) {
+      const key = now < want ? optionDown : optionUp;
+      if (key === undefined) return fail('unsupported', 'agent has no key to move the pointer in a question');
+      const next = now < want ? now + 1 : now - 1;
+      await press(ctx, key);
+      const moved = await until(ctx, (s) => same(s) && keys.indexOf(selectedKey(s) ?? '') === next);
+      if (!moved.met) return stopped();
+      now = next;
+    }
+    await press(ctx, profile.keys.submit);
+    return gone();
+  }
   // Цифра варианта отвечает сразу, без клавиши отправки.
   await press(ctx, option.key);
   return gone();

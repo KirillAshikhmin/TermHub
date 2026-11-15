@@ -588,6 +588,7 @@ function readDialog(
     ...(notes === undefined ? {} : { notes }),
     ...(head.steps ? { steps: head.steps } : {}),
     ...(step > 0 ? { step } : {}),
+    ...(preview === undefined ? {} : { byPointer: true }),
     ...(preview ? { preview } : {}),
   };
 }
@@ -622,11 +623,6 @@ function cutSide(rows: Row[], bottom: number, tail: RegExp): { rows: Row[]; bott
     out[i] = { ...rows[i]!, text: text.slice(0, column).trimEnd() };
     end = i;
     if (mark === '└') break;
-  }
-  // Текст такого вопроса агент рисует с чертой цитаты слева — в заголовок она не идёт.
-  for (let i = top - 1; i >= 0 && top - i <= 8; i--) {
-    const text = rows[i]!.text;
-    if (text.startsWith('│ ')) out[i] = { ...rows[i]!, text: text.slice(2) };
   }
   // Под рамкой: служебные строки и линейка над пунктом без номера — к вариантам не относятся.
   let last = bottom;
@@ -721,7 +717,8 @@ function readHead(
       close();
       continue;
     }
-    current.unshift(text.trim());
+    // Claude Code 2.1.325 рисует текст вопроса с чертой цитаты слева — в заголовок она не идёт.
+    current.unshift(text.replace(/^│\s/u, '').trim());
   }
   close();
   if (!under || paragraphs.length === 0) return null;
