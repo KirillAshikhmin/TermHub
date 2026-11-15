@@ -139,6 +139,25 @@ describe('опрос экрана', () => {
   });
 });
 
+describe('карточка вопроса с предпросмотром', () => {
+  it('текст рамки агента стоит в карточке под вариантами', async () => {
+    const fx = fixture(
+      live({
+        kind: 'question',
+        question: {
+          stamp: 's1',
+          title: 'Approve the changelog?',
+          options: [{ key: '1', label: 'Approve', selected: true }, { key: '2', label: 'Needs changes' }],
+          preview: '[0.3.0]\n\nAdded',
+        },
+      }),
+    );
+    await mount(fx);
+    expect(q('.th-live-q__preview')!.textContent).toBe('[0.3.0]\n\nAdded');
+    expect(document.body.querySelectorAll('.th-live-q__opt')).toHaveLength(2);
+  });
+});
+
 describe('полоса состояния', () => {
   it('предупреждение агента с экрана стоит строкой, пока агент его показывает', async () => {
     const fx = fixture(live({ kind: 'idle', notices: ['Heads up, less than 25% of your weekly limit left.'] }));

@@ -1,0 +1,10 @@
+{
+  "agent": "claude",
+  "version": "2.1.325",
+  "cols": 207,
+  "rows": 60,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c",
+  "note": "AskUserQuestion with a preview pane: options on the left, a boxed preview of the pointed option on the right, «Notes: press n to add notes», an unnumbered «Chat about this» under the rule. Layout and styling are those of the owner's screen of 15.11.2026; all texts are made up."
+}

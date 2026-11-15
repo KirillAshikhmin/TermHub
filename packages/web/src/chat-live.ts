@@ -430,6 +430,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     // Свой ответ без отдельного варианта (заметка Codex) — пунктом после вариантов.
     if (q.freeText && !hasFree && !multi) list.append(freeItem(q, t('chat.live.ownAnswer')));
     box.append(list);
+    // Предпросмотр варианта под указателем агента: то, что вариант одобряет.
+    if (q.preview) box.append(el('pre', 'th-live-q__body th-live-q__preview', q.preview));
     if (multi) {
       const submit = button('th-live-q__submit', t('chat.live.answer'), () =>
         answer(q, { options: q.options.filter((o) => !o.free && picked.has(o.key)).map((o) => o.key) }),

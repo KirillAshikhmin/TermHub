@@ -468,6 +468,12 @@ function readDialog(
     notes = rows[at]!.dim.has(start) ? '' : found[1]!;
     bottom = at - 1;
   }
+  // Окно предпросмотра справа от вариантов: рамка снимается со строк, её текст — отдельно.
+  let preview: string | undefined;
+  if (dialog.side) {
+    const cut = cutSide(rows, bottom, dialog.side.tail);
+    if (cut) ({ rows, bottom, preview } = cut);
+  }
   // Вопрос без вариантов: над подсказкой — поле ответа, блок строк с отступом без единого
   // варианта; над ним, через пустую строку, шапка вопроса.
   if (dialog.field) {
@@ -582,7 +588,59 @@ function readDialog(
     ...(notes === undefined ? {} : { notes }),
     ...(head.steps ? { steps: head.steps } : {}),
     ...(step > 0 ? { step } : {}),
+    ...(preview ? { preview } : {}),
   };
+}
+
+/** Сколько строк вверх от подсказки ищется рамка предпросмотра. */
+const SIDE_REACH = 80;
+
+/** Диалог с окном предпросмотра: строки без рамки, новая нижняя строка вариантов и текст
+ *  рамки. Рамка — «┌─…─┐» правее вариантов, под ней строки с «│» в той же колонке до «└».
+ *  Под вариантами снимаются строки `tail` и линейка над ними. Рамки нет — `null`: это
+ *  обычный диалог, и его строки не трогаются. */
+function cutSide(rows: Row[], bottom: number, tail: RegExp): { rows: Row[]; bottom: number; preview: string } | null {
+  let top = -1;
+  let column = -1;
+  for (let i = bottom; i >= 0 && bottom - i < SIDE_REACH; i--) {
+    const found = /^(.*?\S.*?\s{2,}|\s{4,})┌─{4,}┐\s*$/u.exec(rows[i]!.text);
+    if (found) {
+      top = i;
+      column = found[1]!.length;
+      break;
+    }
+  }
+  if (top < 0) return null;
+  const out = rows.slice();
+  const inner: string[] = [];
+  let end = top;
+  for (let i = top; i <= bottom; i++) {
+    const text = rows[i]!.text;
+    const mark = text[column];
+    if (i > top && mark !== '│' && mark !== '└') break;
+    if (mark === '│') inner.push(text.slice(column + 1).replace(/│\s*$/u, '').replace(/^ /u, '').trimEnd());
+    out[i] = { ...rows[i]!, text: text.slice(0, column).trimEnd() };
+    end = i;
+    if (mark === '└') break;
+  }
+  // Текст такого вопроса агент рисует с чертой цитаты слева — в заголовок она не идёт.
+  for (let i = top - 1; i >= 0 && top - i <= 8; i--) {
+    const text = rows[i]!.text;
+    if (text.startsWith('│ ')) out[i] = { ...rows[i]!, text: text.slice(2) };
+  }
+  // Под рамкой: служебные строки и линейка над пунктом без номера — к вариантам не относятся.
+  let last = bottom;
+  let skipped = false;
+  for (;;) {
+    const at = lastFilled(out, last);
+    if (at <= end) break;
+    if (tail.test(out[at]!.text)) skipped = true;
+    else if (!(skipped && isSeparator(out[at]!.text))) break;
+    last = at - 1;
+  }
+  while (inner.length > 0 && inner[inner.length - 1] === '') inner.pop();
+  while (inner.length > 0 && inner[0] === '') inner.shift();
+  return { rows: out, bottom: last, preview: inner.join('\n') };
 }
 
 /** Шаги полосы над вопросом; текущий — тот, чей знак нарисован с фоном. */

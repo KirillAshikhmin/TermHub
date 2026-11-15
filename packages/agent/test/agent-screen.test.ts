@@ -50,6 +50,7 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     working: 'working',
     'working-start': 'working',
     question: 'question',
+    'question-preview': 'question',
     'question-narrow': 'question',
     'question-multi': 'question',
     'question-review': 'question',
@@ -1943,6 +1944,27 @@ describe('очередь агента: тексты сообщений и воз
         { key: '3', label: 'Other', free: true },
       ],
     });
+  });
+
+  it('Claude: вопрос с окном предпросмотра — варианты без рамки, её текст отдельно, своего ответа нет', () => {
+    const screen = read('claude', 'question-preview');
+    expect(screen).toMatchObject({
+      kind: 'question',
+      question: {
+        title: 'The task is ready in the working copy, tests are green, version 0.3.0. Do you approve the changelog text?',
+        options: [
+          { key: '1', label: 'Approve', selected: true },
+          { key: '2', label: 'Needs changes' },
+        ],
+        steps: [{ label: 'Changelog', current: true }, { label: 'Commit and PR' }, { label: 'Submit', submit: true }],
+        step: 1,
+      },
+    });
+    expect(screen.question!.preview).toBe(
+      ['[0.3.0]', '', 'On update: the former switches and sliders are replaced', ' with new services.', '', 'Added', '', '- TVs and audio systems show up as a TV.', '- Fans show up as a fan, lights as a lamp.'].join('\n'),
+    );
+    expect(screen.question!.options.some((o) => o.free)).toBe(false);
+    expect(screen.question).not.toHaveProperty('freeText');
   });
 
   it('Codex: пустая строка внутри сообщения очереди его не обрывает', () => {
