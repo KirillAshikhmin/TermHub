@@ -1,0 +1,9 @@
+{
+  "agent": "claude",
+  "version": "2.1.325",
+  "cols": 130,
+  "rows": 45,
+  "alt": true,
+  "capture": "tmux capture-pane -p -e",
+  "tmux": "3.7c"
+}

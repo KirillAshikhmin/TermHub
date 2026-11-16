@@ -539,6 +539,7 @@ function readDialog(
       ...(line.selected ? { selected: true } : {}),
       ...(line.checked === undefined ? {} : { checked: line.checked }),
       ...(free ? { free: true } : {}),
+      ...(free && !signs.free.test(label) ? { typed: true } : {}),
     });
     if (line.key === '1') {
       top = i;

@@ -794,6 +794,34 @@ describe('sessionAct — ответ на вопрос', () => {
     expect([...codex.sent, ...typed.sent]).toEqual([]);
   });
 
+  it('отметка при указателе на строке своего варианта: сначала стрелка вверх, цифра в текст не уходит', async () => {
+    const stamp = stampOf('claude', 'question-multi-free');
+    const f = fake('claude', 'question-multi-free', (sent) => (sent === '\x1b[A' ? 'question-multi-marked' : undefined));
+    const result = await act(f, { kind: 'mark', stamp, option: '3', on: false });
+    expect(result).toMatchObject({ ok: true });
+    expect(f.sent).toEqual(['\x1b[A']);
+    const stuck = fake('claude', 'question-multi-free');
+    expect(await act(stuck, { kind: 'mark', stamp, option: '3', on: false })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(stuck.sent).toEqual(['\x1b[A']);
+  });
+
+  it('свой вариант вопроса с отметками: указатель на его строку, текст набирается, вопрос остаётся', async () => {
+    const stamp = stampOf('claude', 'question-multi-marked');
+    const typed = fake('claude', 'question-multi-free', (sent) => (sent === 'kiwi and plum' ? 'question-multi-own' : undefined));
+    const result = await act(typed, { kind: 'mark', stamp, option: '4', on: true, text: ' kiwi and\nplum ' });
+    expect(result).toMatchObject({ ok: true, screen: { kind: 'question' } });
+    expect(typed.sent).toEqual(['kiwi and plum']);
+    // Прежний текст стирается с конца, по знаку, пока строка не опустеет; пустой текст — только очистка.
+    const erased = fake('claude', 'question-multi-own', (sent) => (sent === '\x7f' ? 'question-multi-free' : undefined));
+    expect(await act(erased, { kind: 'mark', stamp, option: '4', on: true, text: '' })).toMatchObject({ ok: true });
+    expect(erased.sent).toEqual(['\x1b[F', '\x7f']);
+    // Текст — только строке своего варианта, отметка без текста — только обычному варианту.
+    const wrong = fake('claude', 'question-multi-marked');
+    expect(await act(wrong, { kind: 'mark', stamp, option: '1', on: true, text: 'x' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await act(wrong, { kind: 'mark', stamp, option: '4', on: true })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(wrong.sent).toEqual([]);
+  });
+
   it('отметка вопроса с отметками: цифра уходит, только если отметка другая, и ждёт экран', async () => {
     const stamp = stampOf('claude', 'question-multi');
     const same = fake('claude', 'question-multi');

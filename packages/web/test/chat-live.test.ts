@@ -385,6 +385,33 @@ describe('все виды вопросов', () => {
     expect(qa('.th-live-q__opt').map((o) => o.querySelector('.th-live-q__opt-label')!.textContent)).toEqual(['Да', 'Chat about this']);
   });
 
+  it('свой вариант вопроса с отметками: поле с галочкой, текст уходит действием mark и приходит с экрана', async () => {
+    const multi = (label: string, typed: boolean): ScreenState => ({
+      kind: 'question',
+      question: {
+        stamp: 'M3', title: 'Что включить?', multi: true, freeText: true,
+        options: [
+          { key: '1', label: 'A', checked: false },
+          { key: '2', label, checked: typed, free: true, ...(typed ? { typed: true } : {}) },
+        ],
+      },
+    });
+    const fx = fixture(live(multi('Type something', false)));
+    await mount(fx);
+    const own = q('.th-live-q__opt.is-own')!;
+    const input = own.querySelector<HTMLInputElement>('.th-live-q__input')!;
+    expect(q('.th-live-q__free')).toBeNull();
+    expect(own.getAttribute('aria-checked')).toBe('false');
+    expect(input.value).toBe('');
+    input.value = ' своё ';
+    fx.actNext({ ok: true, screen: multi('своё', true) });
+    own.querySelector<HTMLButtonElement>('.th-live-q__send')!.click();
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'mark', stamp: 'M3', option: '2', on: true, text: 'своё' }]);
+    expect(own.getAttribute('aria-checked')).toBe('true');
+    expect(input.value).toBe('своё');
+  });
+
   it('несколько отметок с пояснениями: кнопка «Ответить» на месте', async () => {
     const multi: ScreenState = {
       kind: 'question',

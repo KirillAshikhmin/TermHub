@@ -442,7 +442,7 @@ const CLAUDE: AgentProfile = {
         below: 'description',
         freeBeforeRule: true,
         strip: true,
-        submitRow: /^\s+Submit$/,
+        submitRow: /^\s+(?:Submit|Next)$/,
         answered: /\s✔$/,
         // Вопрос с предпросмотром (снимок владельца 15.11.2026, Claude Code 2.1.325): рамка
         // справа от вариантов, под ней «Notes: press n to add notes», под линейкой — пункт

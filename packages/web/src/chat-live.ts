@@ -335,6 +335,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   let cardInputs: Array<HTMLInputElement | HTMLButtonElement> = [];
   const picked = new Set<string>();
   const checks = new Map<string, HTMLButtonElement>();
+  let own: { key: string; item: HTMLElement; input: HTMLInputElement } | null = null;
 
   /** Отметки карточки — те, что на экране агента: их меняют и отсюда, и из терминала. */
   const syncChecks = (q: ScreenQuestion): void => {
@@ -342,6 +343,11 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     for (const o of q.options) {
       if (o.checked) picked.add(o.key);
       checks.get(o.key)?.setAttribute('aria-checked', String(o.checked === true));
+      if (own && own.key === o.key) {
+        own.item.setAttribute('aria-checked', String(o.checked === true));
+        // Набираемое человеком не трогаем: текст агента ложится в поле, только пока оно не в работе.
+        if (document.activeElement !== own.input) own.input.value = o.typed ? o.label : '';
+      }
     }
   };
 
@@ -370,6 +376,31 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     cardInputs.push(input, send);
     row.append(input, send);
     item.append(row);
+    return item;
+  };
+
+  /** Свой вариант вопроса с отметками: галочка и поле; текст вписывается в строку агента
+   *  сразу (Enter или кнопка), отметку строка получает сама. Пустой текст строку очищает. */
+  const ownCheck = (q: ScreenQuestion, o: ScreenQuestion['options'][number]): HTMLElement => {
+    const item = el('div', 'th-live-q__opt is-check is-own');
+    item.setAttribute('aria-checked', String(o.checked === true));
+    const input = el('input', 'th-live-q__input');
+    input.type = 'text';
+    input.placeholder = t('chat.live.multiOwn');
+    input.setAttribute('aria-label', t('chat.live.multiOwn'));
+    input.value = o.typed ? o.label : '';
+    const send = button('th-live-q__send', t('chat.live.multiOwnSet'), () =>
+      void ui({ kind: 'mark', stamp: q.stamp, option: o.key, on: true, text: input.value.trim() }),
+    );
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        send.click();
+      }
+    });
+    cardInputs.push(input, send);
+    item.append(el('span', 'th-live-q__box'), input, send);
+    own = { key: o.key, item, input };
     return item;
   };
 
@@ -403,6 +434,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     cardInputs = [];
     picked.clear();
     checks.clear();
+    own = null;
     const box = el('div', 'th-live-q');
     const bar = stepsBar(q);
     if (bar) box.append(bar);
@@ -416,8 +448,7 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       if (o.free) {
         // Свободный вариант — пункт с полем на своём месте, а не кнопка.
         hasFree = true;
-        if (multi) list.append(el('div', 'th-live-q__free-label', t('chat.live.multiOwn')));
-        else list.append(freeItem(q, o.label));
+        list.append(multi ? ownCheck(q, o) : freeItem(q, o.label));
         continue;
       }
       const b = el('button', 'th-live-q__opt');

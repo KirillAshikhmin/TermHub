@@ -777,28 +777,87 @@ async function step(ctx: Ctx, action: Extract<ChatAction, { kind: 'step' }>): Pr
   return done(last);
 }
 
-/** Одна отметка вопроса с несколькими отметками: цифра варианта ставит и снимает её.
- *  Вопрос остаётся на экране — отправляет его отдельное действие `answer`. */
+/** Одна отметка вопроса с несколькими отметками. Замер 16.11.2026 (Claude 2.1.325): цифра
+ *  ставит и снимает отметку, не сдвигая указатель, но только пока указатель стоит на
+ *  обычном варианте — на строке своего варианта цифра становится его текстом, на строках
+ *  ниже вариантов не делает ничего. Поэтому указатель сначала уводится стрелкой вверх.
+ *  Свой вариант (`text`): указатель ведётся на его строку, прежний текст стирается,
+ *  новый набирается — отметку строка получает сама. Вопрос остаётся на экране. */
 async function mark(ctx: Ctx, action: Extract<ChatAction, { kind: 'mark' }>): Promise<ActResult> {
-  const { screen } = ctx;
+  const { screen, profile } = ctx;
   const question = screen.question;
   if (screen.kind !== 'question' || !question) return fail('stale', 'no question on the agent screen');
   if (typeof action.stamp !== 'string' || action.stamp !== question.stamp) {
     return fail('stale', 'the question on the agent screen is a different one');
   }
-  if (!question.multi || !MULTI_FLOW[ctx.agent]) return fail('unsupported', 'this question takes a single answer');
-  const option = question.options.find((o) => o.key === action.option && o.checked !== undefined && !o.free);
-  if (!option) return fail('unsupported', 'no such option in the question');
-  if (option.checked === action.on) return done(screen);
-  await press(ctx, option.key);
-  const marked = await until(
-    ctx,
-    (s) =>
-      s.kind === 'question' &&
-      s.question?.stamp === question.stamp &&
-      s.question.options.find((o) => o.key === option.key)?.checked === action.on,
-  );
-  return marked.met ? done(marked.screen) : fail('stale', 'the agent screen did not follow the mark');
+  const { optionUp, optionDown } = profile.keys;
+  if (!question.multi || !MULTI_FLOW[ctx.agent] || optionUp === undefined || optionDown === undefined) {
+    return fail('unsupported', 'this question takes a single answer');
+  }
+  const option = question.options.find((o) => o.key === action.option && o.checked !== undefined);
+  if (!option || (action.text === undefined) === (option.free === true)) {
+    return fail('unsupported', 'no such option in the question');
+  }
+  const same = (s: ScreenState): boolean => s.kind === 'question' && s.question?.stamp === question.stamp;
+  const stopped = (): ActResult => fail('stale', 'the agent screen did not follow the mark');
+  const plain = (s: ScreenState): boolean => {
+    const at = s.question?.options.find((o) => o.selected);
+    return !!at && !at.free && at.checked !== undefined;
+  };
+  // Указатель — на обычный вариант: с него работают и цифра, и стрелка вниз.
+  let now = screen;
+  // Своему варианту годится и его собственная строка.
+  const there = (s: ScreenState): boolean => plain(s) || (action.text !== undefined && freeOf(s)?.selected === true);
+  for (let left = question.options.length + 2; !there(now); left--) {
+    if (left === 0) return stopped();
+    const was = selectedKey(now);
+    await press(ctx, optionUp);
+    const moved = await until(ctx, (s) => same(s) && selectedKey(s) !== was);
+    if (!moved.met) return stopped();
+    now = moved.screen;
+  }
+
+  if (action.text === undefined) {
+    // Отметку сверяем со свежим экраном: пока вели указатель, её могли сменить в терминале.
+    if (now.question!.options.find((o) => o.key === option.key)?.checked === action.on) return done(now);
+    await press(ctx, option.key);
+    const marked = await until(
+      ctx,
+      (s) => same(s) && s.question!.options.find((o) => o.key === option.key)?.checked === action.on,
+    );
+    return marked.met ? done(marked.screen) : stopped();
+  }
+
+  const text = action.text
+    .replace(/\s*[\r\n]+\s*/g, ' ')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim();
+  const blank = (s: ScreenState): boolean => profile.screen.free.test(freeOf(s)?.label ?? '');
+  for (let left = question.options.length; freeOf(now)?.selected !== true; left--) {
+    if (left === 0) return stopped();
+    const was = selectedKey(now);
+    await press(ctx, optionDown);
+    const moved = await until(ctx, (s) => same(s) && selectedKey(s) !== was);
+    if (!moved.met) return stopped();
+    now = moved.screen;
+  }
+  // Прежний текст стирается по знаку, каждый знак ждёт экрана. Курсор в строке, на которую
+  // пришли стрелкой, стоит в начале текста (замер): Backspace там пуст, сначала — End.
+  if (!blank(now)) await press(ctx, '\x1b[F');
+  let misses = 0;
+  for (let left = [...(freeOf(now)?.label ?? '')].length * 2 + 6; !blank(now); left--) {
+    if (left === 0 || misses === 3) return stopped();
+    const was = freeOf(now)!.label;
+    await press(ctx, '\x7f');
+    const cut = await until(ctx, (s) => same(s) && freeOf(s)?.selected === true && freeOf(s)!.label !== was, 600);
+    misses = cut.met ? 0 : misses + 1;
+    if (cut.met) now = cut.screen;
+  }
+  if (text === '') return done(now);
+  await press(ctx, text);
+  const typed = await until(ctx, (s) => same(s) && freeOf(s)?.selected === true && !blank(s));
+  return typed.met ? done(typed.screen) : stopped();
 }
 
 async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>): Promise<ActResult> {

@@ -81,6 +81,9 @@ const KINDS: Record<AgentId, Record<string, ScreenKind>> = {
     'menu-help': 'menu',
     'menu-trust-live': 'menu',
     'question-multi-submit': 'question',
+    'question-multi-free': 'question',
+    'question-multi-own': 'question',
+    'question-multi-marked': 'question',
     'question-series-first': 'question',
     'question-series-answered': 'question',
     shell: 'unknown',
@@ -409,11 +412,20 @@ describe('Claude Code', () => {
     ]);
   });
 
+  it('свой вариант вопроса с отметками: пустая строка и набранный текст (живые снимки)', () => {
+    const blank = read('claude', 'question-multi-free').question!;
+    const own = read('claude', 'question-multi-own').question!;
+    expect(blank.options[3]).toEqual({ key: '4', label: 'Type something', selected: true, checked: false, free: true });
+    expect(own.options[3]).toEqual({ key: '4', label: 'kiwi and plum', selected: true, checked: true, free: true, typed: true });
+    expect(own.stamp).toBe(blank.stamp);
+    expect(own.multi).toBe(true);
+  });
+
   it('набор своего ответа отпечаток вопроса не меняет', () => {
     const before = read('claude', 'question-free').question!;
     const typed = read('claude', 'question-free-typed').question!;
     expect(before.options[2]).toEqual({ key: '3', label: 'Type something.', selected: true, free: true });
-    expect(typed.options[2]).toEqual({ key: '3', label: 'parrot', selected: true, free: true });
+    expect(typed.options[2]).toEqual({ key: '3', label: 'parrot', selected: true, free: true, typed: true });
     expect(typed.stamp).toBe(before.stamp);
   });
 

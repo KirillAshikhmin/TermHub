@@ -4922,6 +4922,17 @@ main.th-feed {
   background: var(--accent-tint);
   border-color: var(--accent);
 }
+.th-live-q__opt.is-check.is-own {
+  align-items: center;
+  cursor: default;
+}
+.th-live-q__opt.is-check.is-own .th-live-q__box {
+  margin-top: 0;
+}
+.th-live-q__opt.is-check.is-own .th-live-q__input {
+  flex: 1;
+  min-width: 0;
+}
 /* Вопрос с несколькими отметками: галочка слева, без отметки — без рамки. */
 .th-live-q__multi {
   color: var(--text-dim);

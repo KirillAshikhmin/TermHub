@@ -83,7 +83,14 @@ export function parseAction(value: unknown): ChatAction | null {
     }
     case 'mark':
       if (typeof raw.stamp !== 'string' || typeof raw.option !== 'string' || typeof raw.on !== 'boolean') return null;
-      return { kind: 'mark', stamp: raw.stamp, option: raw.option, on: raw.on };
+      if (raw.text !== undefined && typeof raw.text !== 'string') return null;
+      return {
+        kind: 'mark',
+        stamp: raw.stamp,
+        option: raw.option,
+        on: raw.on,
+        ...(raw.text === undefined ? {} : { text: raw.text }),
+      };
     case 'step':
       if (typeof raw.stamp !== 'string' || typeof raw.to !== 'number' || !Number.isInteger(raw.to)) return null;
       return { kind: 'step', stamp: raw.stamp, to: raw.to };
