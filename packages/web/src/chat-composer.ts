@@ -203,6 +203,8 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
     sendBtn.disabled = blocked || sending || uploading > 0 || field.value.trim() === '';
   };
   const fit = (): void => {
+    // Скрытое поле (вкладка не показана) высоты не имеет: мерить его — значит сжать в строку.
+    if (field.clientWidth === 0) return;
     field.style.height = 'auto';
     // Предел высоты держит CSS (max-height); дальше поле прокручивается.
     field.style.height = `${field.scrollHeight}px`;
@@ -948,6 +950,18 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
 
   syncSend();
   fit();
+  // Поле показали (вкладка стала активной) или сменилась его ширина — высота меряется заново:
+  // у скрытого поля её нет, и многострочный черновик иначе стоял бы в одну строку до правки.
+  let fitWidth = field.clientWidth;
+  const fitWatch =
+    typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => {
+          if (field.clientWidth === fitWidth) return;
+          fitWidth = field.clientWidth;
+          fit();
+        });
+  fitWatch?.observe(field);
   void loadCommands();
 
   return {
@@ -974,6 +988,7 @@ export function mountComposer(host: HTMLElement, session: string, deps: Composer
       return () => textListeners.delete(fn);
     },
     teardown: () => {
+      fitWatch?.disconnect();
       disposed = true;
       offQueue();
       vv?.removeEventListener('resize', onViewport);
