@@ -794,6 +794,22 @@ describe('sessionAct — ответ на вопрос', () => {
     expect([...codex.sent, ...typed.sent]).toEqual([]);
   });
 
+  it('отметка вопроса с отметками: цифра уходит, только если отметка другая, и ждёт экран', async () => {
+    const stamp = stampOf('claude', 'question-multi');
+    const same = fake('claude', 'question-multi');
+    expect(await act(same, { kind: 'mark', stamp, option: '1', on: true })).toMatchObject({ ok: true });
+    expect(same.sent).toEqual([]);
+    const stuck = fake('claude', 'question-multi');
+    expect(await act(stuck, { kind: 'mark', stamp, option: '2', on: true })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(stuck.sent).toEqual(['2']);
+    const wrong = fake('claude', 'question-multi');
+    expect(await act(wrong, { kind: 'mark', stamp, option: '9', on: true })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(await act(wrong, { kind: 'mark', stamp: 'x', option: '1', on: false })).toMatchObject({ ok: false, reason: 'stale' });
+    const single = fake('claude', 'question');
+    expect(await act(single, { kind: 'mark', stamp: stampOf('claude', 'question'), option: '1', on: true })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect([...wrong.sent, ...single.sent]).toEqual([]);
+  });
+
   it('несколько отметок: переход к подтверждению и отправка, каждый шаг сверен с экраном', async () => {
     // На снимке отмечены 1 и 3 — их и просят: отметки не трогаются.
     const f = fake('claude', 'question-multi', (sent) => (sent === '\x1b[C' ? 'question-review' : sent === '1' ? 'idle' : undefined));

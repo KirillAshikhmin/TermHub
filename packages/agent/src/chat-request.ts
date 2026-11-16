@@ -81,6 +81,9 @@ export function parseAction(value: unknown): ChatAction | null {
         ...(raw.text === undefined ? {} : { text: raw.text }),
       };
     }
+    case 'mark':
+      if (typeof raw.stamp !== 'string' || typeof raw.option !== 'string' || typeof raw.on !== 'boolean') return null;
+      return { kind: 'mark', stamp: raw.stamp, option: raw.option, on: raw.on };
     case 'step':
       if (typeof raw.stamp !== 'string' || typeof raw.to !== 'number' || !Number.isInteger(raw.to)) return null;
       return { kind: 'step', stamp: raw.stamp, to: raw.to };

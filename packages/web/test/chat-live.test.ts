@@ -260,28 +260,32 @@ describe('карточка вопроса', () => {
     expect(q('.th-live-q__free')).toBeNull();
   });
 
-  it('несколько отметок: отмечаю, жму «Ответить» — options полным набором клавиш', async () => {
-    const multi: ScreenState = {
+  it('несколько отметок: щелчок сразу ставит отметку у агента, «Ответить» шлёт отмеченное на экране', async () => {
+    const multi = (c: boolean): ScreenState => ({
       kind: 'question',
       question: {
         stamp: 'M', title: 'Что включить?', multi: true,
-        options: [{ key: '1', label: 'A', checked: true }, { key: '2', label: 'B' }, { key: '3', label: 'C' }],
+        options: [{ key: '1', label: 'A', checked: true, selected: true }, { key: '2', label: 'B', checked: false }, { key: '3', label: 'C', checked: c }],
       },
-    };
-    const fx = fixture(live(multi));
+    });
+    const fx = fixture(live(multi(false)));
     await mount(fx);
     const opts = qa('.th-live-q__opt');
-    expect(opts[0]!.getAttribute('aria-pressed')).toBe('true');
+    // Галочки, а не выбор: указатель агента не подсвечен, без отметки рамки нет.
+    expect(q('.th-live-q__multi')).not.toBeNull();
+    expect(opts.every((o) => o.classList.contains('is-check') && !o.classList.contains('is-pointer'))).toBe(true);
+    expect(opts.map((o) => o.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false']);
+    fx.actNext({ ok: true, screen: multi(true) });
     opts[2]!.click();
-    opts[0]!.click(); // снял A
-    expect(opts[2]!.getAttribute('aria-pressed')).toBe('true');
-    await run(1000); // опрос не сбрасывает отметки человека
-    expect(qa('.th-live-q__opt')[2]!.getAttribute('aria-pressed')).toBe('true');
-    expect(fx.acts).toEqual([]);
+    await run(0);
+    expect(fx.acts).toEqual([{ kind: 'mark', stamp: 'M', option: '3', on: true }]);
+    // Та же карточка, отметка — с экрана агента.
+    expect(qa('.th-live-q__opt')[2]).toBe(opts[2]);
+    expect(opts[2]!.getAttribute('aria-checked')).toBe('true');
     fx.actNext({ ok: true, screen: IDLE });
     q<HTMLButtonElement>('.th-live-q__submit')!.click();
     await run(0);
-    expect(fx.acts).toEqual([{ kind: 'answer', stamp: 'M', options: ['3'] }]);
+    expect(fx.acts[1]).toEqual({ kind: 'answer', stamp: 'M', options: ['1', '3'] });
   });
 
   it('stale: «вопрос уже не актуален» и немедленное перечитывание экрана', async () => {
@@ -389,10 +393,9 @@ describe('все виды вопросов', () => {
     const fx = fixture(live(multi));
     await mount(fx);
     expect(q('.th-live-q__submit')!.textContent).toBe(t('chat.live.answer'));
-    qa('.th-live-q__opt')[0]!.click();
     q<HTMLButtonElement>('.th-live-q__submit')!.click();
     await run(0);
-    expect(fx.acts).toEqual([{ kind: 'answer', stamp: 'M2', options: ['1'] }]);
+    expect(fx.acts).toEqual([{ kind: 'answer', stamp: 'M2', options: [] }]);
   });
 
   it('гость: поле своего ответа и кнопки неактивны', async () => {

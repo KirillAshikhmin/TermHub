@@ -154,6 +154,9 @@ export type ChatAction =
    *  знает, поле отбрасывает. */
   | { kind: 'prompt'; text: string; over?: boolean; key?: string }
   | { kind: 'answer'; stamp: string; option?: string; options?: string[]; text?: string }
+  /** Поставить (`on`) или снять одну отметку вопроса с несколькими отметками; вопрос
+   *  остаётся на экране, ответ несёт его с новыми отметками. */
+  | { kind: 'mark'; stamp: string; option: string; on: boolean }
   /** Показать ожидающий вопрос (`ScreenState.pending`): клавиша открытия из профиля. */
   | { kind: 'show-question' }
   /** Перейти к шагу `to` (с единицы) полосы над вопросом `stamp`. */

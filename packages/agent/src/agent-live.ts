@@ -380,6 +380,8 @@ async function run(ctx: Ctx, action: ChatAction): Promise<ActResult> {
       return prompt(ctx, action);
     case 'answer':
       return answer(ctx, action);
+    case 'mark':
+      return mark(ctx, action);
     case 'show-question':
       return showQuestion(ctx);
     case 'step':
@@ -773,6 +775,30 @@ async function step(ctx: Ctx, action: Extract<ChatAction, { kind: 'step' }>): Pr
     last = moved.screen;
   }
   return done(last);
+}
+
+/** Одна отметка вопроса с несколькими отметками: цифра варианта ставит и снимает её.
+ *  Вопрос остаётся на экране — отправляет его отдельное действие `answer`. */
+async function mark(ctx: Ctx, action: Extract<ChatAction, { kind: 'mark' }>): Promise<ActResult> {
+  const { screen } = ctx;
+  const question = screen.question;
+  if (screen.kind !== 'question' || !question) return fail('stale', 'no question on the agent screen');
+  if (typeof action.stamp !== 'string' || action.stamp !== question.stamp) {
+    return fail('stale', 'the question on the agent screen is a different one');
+  }
+  if (!question.multi || !MULTI_FLOW[ctx.agent]) return fail('unsupported', 'this question takes a single answer');
+  const option = question.options.find((o) => o.key === action.option && o.checked !== undefined && !o.free);
+  if (!option) return fail('unsupported', 'no such option in the question');
+  if (option.checked === action.on) return done(screen);
+  await press(ctx, option.key);
+  const marked = await until(
+    ctx,
+    (s) =>
+      s.kind === 'question' &&
+      s.question?.stamp === question.stamp &&
+      s.question.options.find((o) => o.key === option.key)?.checked === action.on,
+  );
+  return marked.met ? done(marked.screen) : fail('stale', 'the agent screen did not follow the mark');
 }
 
 async function answer(ctx: Ctx, action: Extract<ChatAction, { kind: 'answer' }>): Promise<ActResult> {

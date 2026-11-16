@@ -334,6 +334,16 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
   const cardButtons: HTMLButtonElement[] = [];
   let cardInputs: Array<HTMLInputElement | HTMLButtonElement> = [];
   const picked = new Set<string>();
+  const checks = new Map<string, HTMLButtonElement>();
+
+  /** Отметки карточки — те, что на экране агента: их меняют и отсюда, и из терминала. */
+  const syncChecks = (q: ScreenQuestion): void => {
+    picked.clear();
+    for (const o of q.options) {
+      if (o.checked) picked.add(o.key);
+      checks.get(o.key)?.setAttribute('aria-checked', String(o.checked === true));
+    }
+  };
 
   const answer = (q: ScreenQuestion, payload: { option?: string; options?: string[]; text?: string }): void =>
     void ui({ kind: 'answer', stamp: q.stamp, ...payload });
@@ -392,19 +402,22 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     cardButtons.length = 0;
     cardInputs = [];
     picked.clear();
+    checks.clear();
     const box = el('div', 'th-live-q');
     const bar = stepsBar(q);
     if (bar) box.append(bar);
     box.append(el('div', 'th-live-q__title', q.title));
     if (q.body) box.append(el('pre', 'th-live-q__body', q.body));
-    const list = el('div', 'th-live-q__opts');
     const multi = q.multi === true;
+    if (multi) box.append(el('div', 'th-live-q__multi', t('chat.live.multiHint')));
+    const list = el('div', 'th-live-q__opts');
     let hasFree = false;
     for (const o of q.options) {
       if (o.free) {
         // Свободный вариант — пункт с полем на своём месте, а не кнопка.
         hasFree = true;
-        list.append(freeItem(q, o.label));
+        if (multi) list.append(el('div', 'th-live-q__free-label', t('chat.live.multiOwn')));
+        else list.append(freeItem(q, o.label));
         continue;
       }
       const b = el('button', 'th-live-q__opt');
@@ -412,16 +425,24 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
       b.dataset.key = o.key;
       b.append(el('span', 'th-live-q__opt-label', o.label));
       if (o.hint) b.append(el('span', 'th-live-q__opt-hint', o.hint));
-      if (o.selected) b.classList.add('is-pointer');
       if (multi) {
+        // Отметка, а не выбор: галочка слева, указатель агента не показываем. Щелчок сразу
+        // ставит отметку у агента — карточка и экран агента не расходятся.
+        b.classList.add('is-check');
+        b.setAttribute('role', 'checkbox');
+        b.prepend(el('span', 'th-live-q__box'));
+        const wrap = el('span', 'th-live-q__opt-text');
+        wrap.append(...[...b.children].slice(1));
+        b.append(wrap);
         if (o.checked) picked.add(o.key);
-        b.setAttribute('aria-pressed', String(picked.has(o.key)));
+        b.setAttribute('aria-checked', String(picked.has(o.key)));
+        checks.set(o.key, b);
         b.addEventListener('click', () => {
-          if (picked.has(o.key)) picked.delete(o.key);
-          else picked.add(o.key);
-          b.setAttribute('aria-pressed', String(picked.has(o.key)));
+          const on = !picked.has(o.key);
+          void ui({ kind: 'mark', stamp: q.stamp, option: o.key, on });
         });
       } else {
+        if (o.selected) b.classList.add('is-pointer');
         b.addEventListener('click', () => answer(q, { option: o.key }));
       }
       cardButtons.push(b);
@@ -433,7 +454,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
     // Предпросмотр варианта под указателем агента: то, что вариант одобряет.
     if (q.preview) box.append(el('pre', 'th-live-q__body th-live-q__preview', q.preview));
     if (multi) {
-      const submit = button('th-live-q__submit', t('chat.live.answer'), () =>
+      const series = (q.steps?.filter((item) => !item.submit).length ?? 0) > 1;
+      const submit = button('th-live-q__submit', t(series ? 'chat.live.next' : 'chat.live.answer'), () =>
         answer(q, { options: q.options.filter((o) => !o.free && picked.has(o.key)).map((o) => o.key) }),
       );
       cardInputs.push(submit);
@@ -584,6 +606,8 @@ export function mountLive(host: LiveHost, session: string, transport: Transport,
         card = buildCard(q);
         cardKey = key;
         host.question.append(card);
+      } else if (q.multi) {
+        syncChecks(q);
       }
       const off = readOnly || offline || busy;
       for (const b of cardButtons) b.disabled = off;

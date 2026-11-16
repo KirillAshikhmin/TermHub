@@ -4918,9 +4918,47 @@ main.th-feed {
 .th-live-q__opt.is-pointer {
   border-color: var(--accent);
 }
-.th-live-q__opt[aria-pressed='true'] {
+.th-live-q__opt.is-check[aria-checked='true'] {
   background: var(--accent-tint);
   border-color: var(--accent);
+}
+/* Вопрос с несколькими отметками: галочка слева, без отметки — без рамки. */
+.th-live-q__multi {
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+.th-live-q__opt.is-check {
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 10px;
+  border-color: transparent;
+}
+.th-live-q__opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.th-live-q__box {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+}
+.th-live-q__opt[aria-checked='true'] .th-live-q__box {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.th-live-q__opt[aria-checked='true'] .th-live-q__box::before {
+  content: '✓';
 }
 .th-live-q__submit {
   background: var(--accent);
