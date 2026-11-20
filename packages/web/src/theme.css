@@ -2953,9 +2953,31 @@ main.th-gradle {
 }
 .th-fileview__img {
   max-width: 100%;
+  max-height: calc(80vh - 150px);
+  object-fit: contain;
   height: auto;
   display: block;
   margin: 0 auto;
+}
+/* Галерея: счётчик и стрелки в шапке окна; картинка целиком в окне, без прокрутки. */
+.th-fileview__nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: none;
+}
+.th-fileview__count {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.th-fileview .th-modal__head h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .th-fileview__media {
   max-width: 100%;

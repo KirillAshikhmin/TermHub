@@ -79,8 +79,31 @@ function parseFilesHash(): { root: string; path: string } {
 // filesHash — в ./routes (общий формат с termlinks.ts).
 // streamDownload — в ./file-ops (общий с пунктом «Скачать» в ⋮-меню строки).
 
-/** Модалка просмотра одного файла. */
-function openFileModal(transport: Transport, root: string, filePath: string, name: string): void {
+/** Картинки, которые просмотр листает галереей (по расширению: тип знает только агент). */
+const GALLERY_EXT = /\.(?:png|jpe?g|gif|webp|bmp|avif|heic|svg|ico)$/i;
+/** Сколько прочитанных картинок галереи помнится: листание назад не ходит в сеть заново. */
+const GALLERY_KEEP = 12;
+/** Сдвиг пальца, с которого жест считается листанием. */
+const SWIPE_PX = 50;
+
+/** Соседи файла для галереи: картинки той же папки в порядке списка. Пусто — листать нечего. */
+export function galleryOf(entries: readonly FileEntry[], name: string): string[] {
+  if (!GALLERY_EXT.test(name)) return [];
+  const names = entries.filter((e) => e.kind === 'file' && GALLERY_EXT.test(e.name)).map((e) => e.name);
+  return names.length > 1 && names.includes(name) ? names : [];
+}
+
+/** Модалка просмотра одного файла. `gallery` — имена картинок той же папки: просмотр
+ *  листает их стрелками, клавишами ←/→ и жестом, не закрывая окна. */
+function openFileModal(
+  transport: Transport,
+  root: string,
+  filePath: string,
+  name: string,
+  gallery: string[] = [],
+): void {
+  const dir = parentPath(filePath);
+  let shown = 0; // поколение показа: ответ на уже перелистнутый файл отбрасывается
   openModal((close) => {
     const box = document.createElement('div');
     box.className = 'th-fileview';
@@ -89,7 +112,15 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
     head.className = 'th-modal__head';
     const title = document.createElement('h2');
     title.textContent = name;
-    head.append(title, iconButton('close', t('common.close'), close));
+    const nav = document.createElement('div');
+    nav.className = 'th-fileview__nav';
+    const count = document.createElement('span');
+    count.className = 'th-fileview__count';
+    const prevBtn = iconButton('back', t('files.prev'), () => step(-1));
+    const nextBtn = iconButton('forward', t('files.next'), () => step(1));
+    nav.append(prevBtn, count, nextBtn);
+    nav.hidden = gallery.length === 0;
+    head.append(title, nav, iconButton('close', t('common.close'), close));
 
     const body = document.createElement('div');
     body.className = 'th-fileview__body';
@@ -175,9 +206,75 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
       ta.focus();
     };
 
+    const showImage = (src: string): void => {
+      body.replaceChildren();
+      const img = document.createElement('img');
+      img.className = 'th-fileview__img';
+      img.src = src;
+      img.alt = name;
+      body.append(img);
+      showPreviewActions();
+    };
+    const images = new Map<string, string>();
+    const remember = (path: string, src: string): void => {
+      images.set(path, src);
+      if (images.size > GALLERY_KEEP) images.delete(images.keys().next().value!);
+    };
+
+    /** Перелистнуть галерею: по кругу, в том же окне. */
+    const step = (by: number): void => {
+      const at = gallery.indexOf(name);
+      if (at < 0) return;
+      name = gallery[(at + by + gallery.length) % gallery.length]!;
+      filePath = joinPath(dir, name);
+      show();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      // Окно закрыто любым путём (Esc, фон, «Назад») — обработчик снимает себя сам.
+      if (!box.isConnected) {
+        document.removeEventListener('keydown', onKey);
+        return;
+      }
+      if (gallery.length === 0 || e.altKey || e.ctrlKey || e.metaKey) return;
+      const target = e.target;
+      if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) return;
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      step(e.key === 'ArrowLeft' ? -1 : 1);
+    };
+    if (gallery.length > 0) document.addEventListener('keydown', onKey);
+    // Жест: горизонтальный сдвиг одним пальцем по картинке; вертикальная прокрутка — не он.
+    let touch: { x: number; y: number } | null = null;
+    body.addEventListener('touchstart', (e) => {
+      touch = e.touches.length === 1 ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY } : null;
+    }, { passive: true });
+    body.addEventListener('touchend', (e) => {
+      const from = touch;
+      touch = null;
+      const to = e.changedTouches[0];
+      if (!from || !to || gallery.length === 0) return;
+      const dx = to.clientX - from.x;
+      if (Math.abs(dx) < SWIPE_PX || Math.abs(dx) < Math.abs(to.clientY - from.y) * 1.5) return;
+      step(dx > 0 ? -1 : 1);
+    }, { passive: true });
+
+    const show = (): void => {
+      const mine = ++shown;
+      const stale = (): boolean => mine !== shown || !box.isConnected;
+      title.textContent = name;
+      if (gallery.length > 0) count.textContent = `${gallery.indexOf(name) + 1} / ${gallery.length}`;
+      const kept = images.get(filePath);
+      if (kept) {
+        showImage(kept);
+        return;
+      }
+      body.replaceChildren(spinner());
+      foot.replaceChildren();
+      const path = filePath;
     void transport
       .fileStat(root, filePath)
       .then((stat) => {
+        if (stale()) return;
         // Видео/аудио — плеер (LAN — нативный range; relay — blob чанками).
         if (stat.kind === 'video' || stat.kind === 'audio') {
           body.replaceChildren();
@@ -192,10 +289,13 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
             showNote(t('files.loading'));
             void transport.fileBlob(root, filePath).then(
               (blob) => {
+                if (stale()) return;
                 media.src = URL.createObjectURL(blob);
                 body.replaceChildren(media);
               },
-              () => showNote(t('files.error')),
+              () => {
+                if (!stale()) showNote(t('files.error'));
+              },
             );
           }
           showPreviewActions();
@@ -204,19 +304,16 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
         // Прочее — инлайн-просмотр (image/text) или скачивание (большое/binary).
         void transport.fileRead(root, filePath).then(
           (c) => {
+            if (stale()) return;
             if (c.truncated) {
               showNote(t('files.tooLarge', { size: formatSize(c.size) }));
               showPreviewActions();
               return;
             }
             if (c.kind === 'image') {
-              body.replaceChildren();
-              const img = document.createElement('img');
-              img.className = 'th-fileview__img';
-              img.src = `data:${c.mime};base64,${c.data}`;
-              img.alt = name;
-              body.append(img);
-              showPreviewActions();
+              const src = `data:${c.mime};base64,${c.data}`;
+              if (gallery.length > 0) remember(path, src);
+              showImage(src);
             } else if (c.kind === 'text') {
               showText(c.data);
             } else {
@@ -224,10 +321,17 @@ function openFileModal(transport: Transport, root: string, filePath: string, nam
               showPreviewActions();
             }
           },
-          (err) => showNote(err instanceof Error ? err.message : t('files.error')),
+          (err) => {
+            if (!stale()) showNote(err instanceof Error ? err.message : t('files.error'));
+          },
         );
       })
-      .catch((err) => showNote(err instanceof Error ? err.message : t('files.error')));
+      .catch((err) => {
+        if (!stale()) showNote(err instanceof Error ? err.message : t('files.error'));
+      });
+    };
+    // Первый показ — когда окно уже в документе: устаревание меряется по нему.
+    queueMicrotask(show);
 
     return box;
   });
@@ -381,7 +485,7 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
       row.append(icon, nm, meta);
       row.addEventListener('click', () => {
         if (e.kind === 'dir') navigate(curRoot, joinPath(curPath, e.name));
-        else openFileModal(transport, curRoot, joinPath(curPath, e.name), e.name);
+        else openFileModal(transport, curRoot, joinPath(curPath, e.name), e.name, galleryOf(lastEntries, e.name));
       });
       // Кнопка «⋮» — контекстное меню (копировать/переместить/переименовать/удалить/свойства).
       const more = document.createElement('button');
@@ -428,7 +532,7 @@ export function mountFiles(root: HTMLElement, transport: Transport, session?: st
     await load();
     if (stopped) return;
     const entry = lastEntries.find((e) => e.name === name);
-    if (entry?.kind === 'file') openFileModal(transport, curRoot, targetRel, name);
+    if (entry?.kind === 'file') openFileModal(transport, curRoot, targetRel, name, galleryOf(lastEntries, name));
   };
 
   rootSelect.addEventListener('change', () => navigate(rootSelect.value, ''));
